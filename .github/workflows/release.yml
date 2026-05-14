@@ -1,6 +1,8 @@
 # Triggered on push to master; runs CI gates, then either opens a "Release
 # packages" PR (when there are pending changesets) or publishes to npm
-# (when the version PR was just merged). Requires secrets.NPM_TOKEN.
+# (when the version PR was just merged). Auth via npm Trusted Publishing
+# (OIDC) — `id-token: write` permission below + Trusted Publisher configured
+# on each package in the npmjs.com UI. No `NPM_TOKEN` secret required.
 name: Release
 
 on:
@@ -28,7 +30,11 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          registry-url: 'https://registry.npmjs.org'
+          # registry-url intentionally omitted: setup-node only uses it to
+          # write a placeholder .npmrc with `_authToken=${NODE_AUTH_TOKEN}`,
+          # which is the legacy NPM_TOKEN path. With Trusted Publishing the
+          # OIDC token is fetched directly by `npm publish` via the
+          # `id-token: write` permission — no .npmrc auth needed.
       - name: Install
         run: pnpm install --frozen-lockfile
       # CI gates split into separate turbo invocations (mirrors ci.yml).
@@ -48,18 +54,6 @@ jobs:
         run: pnpm turbo build --filter='./packages/*'
       - name: Package lint (gate 5)
         run: pnpm turbo package:lint --filter='./packages/*'
-      # TEMP DEBUG: verify GitHub secret NPM_TOKEN matches the local token
-      # that works (`npm whoami` → hacker-cb, `npm publish --dry-run` OK).
-      # GitHub masks the secret value in logs but not derived numbers or
-      # short fragments that don't match the full secret string. Expected
-      # local length: 41. Suffix check: last 4 chars of the working token.
-      - name: DEBUG NPM_TOKEN integrity
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          echo "len=${#NPM_TOKEN}"
-          echo "prefix4=${NPM_TOKEN:0:4}"
-          echo "suffix4=${NPM_TOKEN: -4}"
       - name: Create Release Pull Request or Publish to npm
         uses: changesets/action@v1
         with:
@@ -69,18 +63,4 @@ jobs:
           title: 'chore: release packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          # setup-node@v5 with `registry-url` writes `/home/runner/work/_temp/.npmrc`
-          # containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` and
-          # sets `NPM_CONFIG_USERCONFIG` to that path. Without `NODE_AUTH_TOKEN`
-          # in this step's env the placeholder stays empty when npm publishes,
-          # so the registry receives an unauthed request and answers 404 (not 401)
-          # for the scoped path. changesets/action's own .npmrc creation is
-          # silently overridden by NPM_CONFIG_USERCONFIG — populating the
-          # setup-node path is what actually works. See changesets/action#98.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          # TEMP: provenance disabled for first release diagnostic — `npm
-          # publish --provenance` against a fresh scope without a configured
-          # Trusted Publisher returns 404 on PUT. Re-enable after 0.1.0 lands
-          # and Trusted Publisher is wired up on both packages.
-          # NPM_CONFIG_PROVENANCE: true
+          NPM_CONFIG_PROVENANCE: true
