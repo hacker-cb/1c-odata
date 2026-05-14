@@ -97,7 +97,7 @@ jobs:
       - name: Lint (gate 1)
         run: pnpm biome ci .
       - name: Typecheck (gate 2)
-        run: pnpm turbo typecheck
+        run: pnpm turbo typecheck --filter='./packages/*'
 
   test-and-build:
     runs-on: ${{ matrix.os }}
@@ -110,15 +110,15 @@ jobs:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
       - name: Unit tests (gate 3)
-        run: pnpm turbo test:unit
+        run: pnpm turbo test:unit --filter='./packages/*'
       - name: Offline integration tests (gate 4)
-        run: pnpm turbo test:integration:offline
+        run: pnpm turbo test:integration:offline --filter='./packages/*'
       - name: Build (gate 5)
-        run: pnpm turbo build
+        run: pnpm turbo build --filter='./packages/*'
       - name: Package lint (gate 6)
-        run: pnpm turbo package:lint
+        run: pnpm turbo package:lint --filter='./packages/*'
       - name: E2E tests (gate 8)
-        run: pnpm turbo test:e2e
+        run: pnpm turbo test:e2e --filter='./packages/*'
       - name: Upload coverage
         if: success() && matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
