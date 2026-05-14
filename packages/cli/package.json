@@ -69,6 +69,7 @@
     "msw": "^2.14.3"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   }
 }

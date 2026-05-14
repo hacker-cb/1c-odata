@@ -24,7 +24,8 @@
     "url": "https://github.com/hacker-cb/1c-odata/issues"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "exports": {
     ".": {
