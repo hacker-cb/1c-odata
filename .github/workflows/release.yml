@@ -70,17 +70,42 @@ jobs:
           echo "$RUNNER_TEMP/npm-latest/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Verify npm version
         run: npm --version
-      - name: Create Release Pull Request or Publish to npm
+      # Action handles version-bump PR creation only. Publishing is done in
+      # a separate step below so npm CLI gets OIDC env vars directly from the
+      # GitHub Actions runner — `pnpm changeset publish` was reliably losing
+      # them on the way to `npm publish` (ENEEDAUTH despite npm 11+ and a
+      # configured Trusted Publisher).
+      - name: Create Release Pull Request
         id: changesets
         uses: changesets/action@v1
         with:
-          publish: pnpm changeset publish
           version: pnpm changeset version
           commit: 'chore: release packages'
           title: 'chore: release packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_CONFIG_PROVENANCE: true
+      - name: Publish unpublished packages to npm (OIDC Trusted Publishing)
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        env:
+          NPM_CONFIG_PROVENANCE: 'true'
+        run: |
+          set -euo pipefail
+          for dir in packages/*/; do
+            pkg=$(node -p "require('./${dir}package.json').name")
+            ver=$(node -p "require('./${dir}package.json').version")
+            priv=$(node -p "require('./${dir}package.json').private || false")
+            if [ "$priv" = "true" ]; then
+              echo "skip $pkg (private)"
+              continue
+            fi
+            published=$(npm view "$pkg@$ver" version 2>/dev/null || true)
+            if [ -n "$published" ]; then
+              echo "already on npm: $pkg@$ver"
+              continue
+            fi
+            echo "publishing $pkg@$ver"
+            ( cd "$dir" && npm publish --provenance --access public )
+          done
       # changesets/action's `title` input is a static string evaluated before
       # `changeset version` runs, so the new version isn't yet known there.
       # Read it from the just-pushed release branch and rewrite the PR title.
