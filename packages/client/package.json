@@ -1,6 +1,6 @@
 {
   "name": "@1c-odata/client",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Type-safe OData V3 client for 1С:Enterprise 8 — query builder, filter DSL, register helpers.",
   "keywords": [
