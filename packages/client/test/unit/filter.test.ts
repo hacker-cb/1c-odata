@@ -179,4 +179,28 @@ describe('FilterBuilder — numeric literal validation', () => {
       InvalidArgumentError,
     )
   })
+
+  it('throws InvalidArgumentError when NaN is passed to `substring(start)`', () => {
+    expect(() => compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.substring(Number.NaN).eq('x'))).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
+  it('throws InvalidArgumentError when Infinity is passed to `substring(start, length)`', () => {
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.substring(0, Number.POSITIVE_INFINITY).eq('x')),
+    ).toThrow(InvalidArgumentError)
+  })
+
+  it('throws InvalidArgumentError when NaN is passed to `dateadd(amount)`', () => {
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Date.dateadd('day', Number.NaN).gt(new Date(0))),
+    ).toThrow(InvalidArgumentError)
+  })
+
+  it('still emits a valid substring with finite args (regression guard)', () => {
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.substring(1, 3).eq('abc'))).toBe(
+      `substring(Code, 1, 3) eq 'abc'`,
+    )
+  })
 })

@@ -41,6 +41,7 @@ describe('serializeArgs', () => {
     expect(() => serializeArgs({ Delta: Number.NEGATIVE_INFINITY }, 'Europe/Moscow')).toThrow(InvalidArgumentError)
   })
   it('InvalidArgumentError carries the offending arg key as `argument`', () => {
+    expect.assertions(2)
     try {
       serializeArgs({ Сумма: Number.NaN }, 'Europe/Moscow')
     } catch (e) {

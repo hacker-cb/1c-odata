@@ -202,11 +202,14 @@ function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & Fiel
     substringof: (v: string) => makeFilter(`substringof(${formatLiteral(v, ctx, expr)}, ${expr})`),
     like: (pat: string) => makeFilter(`like(${expr}, ${formatLiteral(pat, ctx, expr)})`),
     concat: (other: unknown) => wrapField<string>(`concat(${expr}, ${formatLiteral(other, ctx, expr)})`, ctx),
-    substring: (start: number, length?: number) =>
-      wrapField<string>(
-        length !== undefined ? `substring(${expr}, ${start}, ${length})` : `substring(${expr}, ${start})`,
-        ctx,
-      ),
+    substring: (start: number, length?: number) => {
+      const s = formatNumberLiteral(start, `${expr}:substring.start`)
+      const inner =
+        length !== undefined
+          ? `substring(${expr}, ${s}, ${formatNumberLiteral(length, `${expr}:substring.length`)})`
+          : `substring(${expr}, ${s})`
+      return wrapField<string>(inner, ctx)
+    },
     add: (v: unknown) => wrapField<number>(`${expr} add ${formatLiteral(v, ctx, expr)}`, ctx),
     sub: (v: unknown) => wrapField<number>(`${expr} sub ${formatLiteral(v, ctx, expr)}`, ctx),
     mul: (v: unknown) => wrapField<number>(`${expr} mul ${formatLiteral(v, ctx, expr)}`, ctx),
@@ -221,7 +224,8 @@ function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & Fiel
     dayofweek: () => wrapField<number>(`dayofweek(${expr})`, ctx),
     dayofyear: () => wrapField<number>(`dayofyear(${expr})`, ctx),
     quarter: () => wrapField<number>(`quarter(${expr})`, ctx),
-    dateadd: (unit: string, amount: number) => wrapField<Date>(`dateadd(${expr}, '${unit}', ${amount})`, ctx),
+    dateadd: (unit: string, amount: number) =>
+      wrapField<Date>(`dateadd(${expr}, '${unit}', ${formatNumberLiteral(amount, `${expr}:dateadd.amount`)})`, ctx),
     datedifference: (other: unknown, unit: string) =>
       wrapField<number>(`datedifference(${expr}, ${formatLiteral(other, ctx, expr)}, '${unit}')`, ctx),
     isof: (typeName: string) => makeFilter(`isof(${expr}, ${formatLiteral(typeName, ctx, expr)})`),

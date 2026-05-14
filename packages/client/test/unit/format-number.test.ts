@@ -34,6 +34,7 @@ describe('formatNumberLiteral', () => {
   })
 
   it('attaches the received value for diagnosis', () => {
+    expect.assertions(1)
     try {
       formatNumberLiteral(Number.NaN, 'X')
     } catch (e) {
