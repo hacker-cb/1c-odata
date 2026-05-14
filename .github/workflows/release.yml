@@ -58,4 +58,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: true
+          # TEMP: provenance disabled for first release diagnostic — `npm
+          # publish --provenance` против нового scope без Trusted Publisher
+          # setup даёт `404 Not Found` на PUT, при том что без provenance
+          # тот же токен публикует успешно. Re-enable после первой
+          # публикации, когда Trusted Publisher настроен на @1c-odata.
+          # NPM_CONFIG_PROVENANCE: true
