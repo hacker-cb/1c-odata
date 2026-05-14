@@ -12,12 +12,19 @@
 
 ---
 
-### Task 1: Фильтровать turbo команды в `release.yml`
+### Task 1: Переписать CI gates в `release.yml` — фильтр + split на отдельные шаги
 
 **Files:**
-- Modify: [.github/workflows/release.yml:35](/.github/workflows/release.yml#L35)
+- Modify: `.github/workflows/release.yml`
 
-- [ ] **Step 1: Открыть `.github/workflows/release.yml` и заменить шаг `CI gates`**
+Две связанные правки, которые имеет смысл делать вместе:
+
+1. `--filter='./packages/*'` — исключает `examples/basic` (паттерн совпадает с `pnpm-workspace.yaml`, где `packages/*` и `examples/*` уже разделены; пример консьюмера проверяется в отдельном `test-example` job под live секретами).
+2. Combined `pnpm turbo typecheck test:unit test:integration:offline build package:lint …` разбить на отдельные `name:` шаги, по одному task'у на шаг (mirror `ci.yml`). Combined command пускает turbo планировать tasks параллельно под единым `^build` barrier, и параллельный запуск `@1c-odata/cli#test:unit` + `@1c-odata/cli#test:integration:offline` гонится за shared process state (msw `setupServer`, `process.env`, OS tmpdir).
+
+Почему `./packages/*` (а не `--filter=@1c-odata/client --filter=@1c-odata/cli`): glob по пути — стабилен при добавлении новых пакетов; не нужно обновлять filter при появлении нового `packages/<x>`.
+
+- [ ] **Step 1: Заменить шаг `CI gates` в `release.yml`**
 
 В файле сейчас:
 ```yaml
@@ -25,27 +32,30 @@
         run: pnpm turbo typecheck test:unit test:integration:offline build package:lint
 ```
 
-Заменить на:
+Заменить на (комментарий объясняет почему так структурировано):
 ```yaml
-      - name: CI gates
-        run: pnpm turbo typecheck test:unit test:integration:offline build package:lint --filter='./packages/*'
+      # CI gates split into separate turbo invocations (mirrors ci.yml).
+      # A combined `pnpm turbo typecheck test:unit ...` lets turbo run those
+      # tasks in parallel under one `^build` barrier; the parallel
+      # @1c-odata/cli vitest runs (test:unit + test:integration:offline)
+      # then race on shared global state — msw setupServer interception,
+      # process.env, OS tmpdir — producing flake that ci.yml's
+      # one-task-per-step structure avoids.
+      - name: Typecheck (gate 1)
+        run: pnpm turbo typecheck --filter='./packages/*'
+      - name: Unit tests (gate 2)
+        run: pnpm turbo test:unit --filter='./packages/*'
+      - name: Offline integration tests (gate 3)
+        run: pnpm turbo test:integration:offline --filter='./packages/*'
+      - name: Build (gate 4)
+        run: pnpm turbo build --filter='./packages/*'
+      - name: Package lint (gate 5)
+        run: pnpm turbo package:lint --filter='./packages/*'
 ```
-
-Почему `--filter='./packages/*'` (а не `--filter=@1c-odata/client --filter=@1c-odata/cli`): glob по пути — стабилен при добавлении новых пакетов в `packages/` (если когда-то появится `@1c-odata/codemod` — попадёт автоматически). Examples под `examples/*` остаются вне scope. Этот паттерн совпадает с `pnpm-workspace.yaml`, где `packages/*` и `examples/*` уже разделены.
 
 - [ ] **Step 2: Commit (на feature branch `chore/ci-fix-release-gates`)**
 
-```bash
-git add .github/workflows/release.yml
-git commit -m "ci(release): scope CI gates to packages/* via turbo filter
-
-Excludes examples/basic from the release path — that workspace is a
-consumer sample and was failing in fresh CI checkouts because turbo
-typecheck has no clean dependency on the upstream client/cli dist
-output beyond the prepare hook.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
-```
+Один или два коммита по вкусу — фильтр и split можно слить (минимальный diff), но в этом PR они исторически разнесены: сначала фильтр (`c504152`), затем split с подробным commit message (`448f160`).
 
 ---
 
@@ -163,7 +173,7 @@ gh run view --branch chore/ci-fix-release-gates --workflow ci.yml --log-failed >
 
 ### Task 4: Conditional — диагностика cli `test:unit` (`config.test.ts`)
 
-**Skip this task if** Task 3 показал зелёный CI (фильтр оказался достаточным фиксом).
+**Skip this task if** Task 3 показал зелёный CI. (В реальном исполнении этого PR — пропущено: split в Task 1 step 2 устранил гонку и тесты прошли без правки.)
 
 **Files:**
 - Maybe modify: `packages/cli/test/unit/config.test.ts`
@@ -176,10 +186,7 @@ gh run view --branch chore/ci-fix-release-gates --workflow ci.yml --log-failed >
 × .env.local overrides .env when both are present
 ```
 
-Локально (macOS, pnpm 10.27, node 22) — все 14 тестов в `test/unit/config.test.ts` зелёные. Это значит:
-
-- Тесты flake чувствительны к окружению (CI Linux, fresh cache),
-- ИЛИ — c12 версия в lockfile резолвится в CI к другой minor с поломанным `dotenv: { fileName: [...] }`.
+Локально (macOS, pnpm 10.27, node 22) — все 14 тестов в `test/unit/config.test.ts` зелёные. На `ci.yml` (тот же commit) — тоже зелёные. На `release.yml` — два падения, и `test/unit/fetch-command.test.ts (0 test)` (значит beforeAll бросил исключение). Версии deps детерминированы — обе сборки идут через `pnpm install --frozen-lockfile` с одним lockfile. Реальное отличие — release.yml шёл одной командой `pnpm turbo typecheck test:unit test:integration:offline …`, что позволило turbo пускать tasks параллельно (см. Task 1 step 2). Параллельный запуск `@1c-odata/cli#test:unit` и `@1c-odata/cli#test:integration:offline` гонится за общий process state (msw `setupServer` interception, `process.env`, OS tmpdir). На `ci.yml` те же tasks идут разными шагами → последовательно → green.
 
 - [ ] **Step 1: Получить точный stderr из failed job**
 

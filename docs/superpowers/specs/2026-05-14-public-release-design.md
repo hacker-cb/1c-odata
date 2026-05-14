@@ -10,13 +10,15 @@
 
 Из лога `25859723187`: упало 3 задачи из 11.
 
-1. **`basic-example#typecheck`** — `Cannot find module '@1c-odata/client'` в `src/demos/*.ts`. Главный блокер. `examples/basic` — пример консьюмера, не должен быть в release CI gates вообще. Уже исключён из changesets (`.changeset/config.json` → `ignore: ["basic-example"]`), но turbo ignore не уважает.
+1. **`basic-example#typecheck`** — `Cannot find module '@1c-odata/client'` в `src/demos/*.ts`. `examples/basic` — пример консьюмера, не должен быть в release CI gates вообще. Уже исключён из changesets (`.changeset/config.json` → `ignore: ["basic-example"]`), но turbo ignore не уважает.
 
-2. **`@1c-odata/cli#test:unit`** — 2 теста в `test/unit/config.test.ts` (`auto-sources .env.local from cwd before evaluating config`, `.env.local overrides .env when both are present`). Зависят от cwd / окружения. На CI runner без `.env.local` ожидание не сходится.
+2. **`@1c-odata/cli#test:unit`** — 2 теста в `test/unit/config.test.ts` (`auto-sources .env.local from cwd before evaluating config`, `.env.local overrides .env when both are present`). Тесты сами создают `.env`/`.env.local` в temp cwd и передают `loadConfig({ cwd: tmp })` — внешний `.env.local` им не нужен. Реальная причина (см. ниже) — гонка с `@1c-odata/cli#test:integration:offline` за общий процессный state (msw `setupServer` interception, `process.env`, OS tmpdir).
 
-3. **`@1c-odata/cli#test:integration:offline`** — vitest exit code ≠ 0 при PASS всех тестов. Похоже на handle leak в teardown / unresolved process exit.
+3. **`@1c-odata/cli#test:integration:offline`** — vitest exit code ≠ 0 при PASS всех тестов. Та же гонка с другой стороны.
 
-Пункты 2-3 могли быть pre-existing на dev (просто новый чистый репо без turbo cache их вскрыл) — нужно проверить, упал ли `ci.yml` на том же commit'е. Независимо от исхода — все три починить до релиза, иначе `changesets/action@v1` не дойдёт до publish step.
+**Корень пунктов 2-3.** На `release.yml` одна команда `pnpm turbo typecheck test:unit test:integration:offline build package:lint` запускала все 5 tasks параллельно под единым `^build` barrier — turbo планирует независимые tasks одного workspace в параллель. У `@1c-odata/cli` `test:unit` и `test:integration:offline` оба вызывают vitest на одном пакете, и параллельно дерутся за processшs-shared state. На `ci.yml` те же tasks идут отдельными шагами (`pnpm turbo test:unit` → `pnpm turbo test:integration:offline`) → последовательно, без гонки → зелёные на том же commit'е.
+
+Фикс — две правки в `release.yml`: (а) `--filter='./packages/*'` (исключает `basic-example`), (б) разбить combined `pnpm turbo …` на отдельные `name:` шаги (mirror `ci.yml`).
 
 ## Архитектура решения — 3 этапа
 
