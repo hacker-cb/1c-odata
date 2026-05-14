@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="3.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="StandardODATA" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <EntityType Name="AccumulationRegister_X">
+        <Key>
+          <PropertyRef Name="Recorder"/>
+          <PropertyRef Name="LineNumber"/>
+        </Key>
+        <Property Name="Recorder" Type="Edm.String" Nullable="false"/>
+        <Property Name="Recorder_Type" Type="Edm.String" Nullable="false"/>
+        <Property Name="LineNumber" Type="Edm.Int64" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="StandardODATA" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="AccumulationRegister_X" EntityType="StandardODATA.AccumulationRegister_X"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

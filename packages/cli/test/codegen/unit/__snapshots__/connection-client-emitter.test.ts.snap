@@ -1,0 +1,50 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`emitConnectionClientFile > with hasFunctionImports = false (default) > snapshot — without FunctionImports 1`] = `
+"import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { loadMetadataIndex, ODataV3Client, type ODataV3ClientOptions } from '@1c-odata/client'
+
+const __metadataPath = join(dirname(fileURLToPath(import.meta.url)), '__metadata.json')
+
+/**
+ * Create an ODataV3Client pre-typed with Functions for this connection.
+ * Auto-loads sibling __metadata.json.
+ *
+ * @public
+ */
+export async function createClient(
+  opts: Omit<ODataV3ClientOptions, 'metadataIndex'>,
+): Promise<ODataV3Client> {
+  return new ODataV3Client({
+    ...opts,
+    metadataIndex: await loadMetadataIndex(__metadataPath),
+  })
+}
+"
+`;
+
+exports[`emitConnectionClientFile > with hasFunctionImports = true > snapshot — with FunctionImports 1`] = `
+"import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { loadMetadataIndex, ODataV3Client, type ODataV3ClientOptions } from '@1c-odata/client'
+import type { Functions } from './function-imports.js'
+
+const __metadataPath = join(dirname(fileURLToPath(import.meta.url)), '__metadata.json')
+
+/**
+ * Create an ODataV3Client pre-typed with Functions for this connection.
+ * Auto-loads sibling __metadata.json.
+ *
+ * @public
+ */
+export async function createClient(
+  opts: Omit<ODataV3ClientOptions, 'metadataIndex'>,
+): Promise<ODataV3Client<Functions>> {
+  return new ODataV3Client<Functions>({
+    ...opts,
+    metadataIndex: await loadMetadataIndex(__metadataPath),
+  })
+}
+"
+`;

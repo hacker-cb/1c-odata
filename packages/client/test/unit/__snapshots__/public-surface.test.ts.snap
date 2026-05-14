@@ -1,0 +1,574 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`public surface — dist/index.d.ts snapshot > matches the committed snapshot 1`] = `
+"import { c as FieldExpr, l as FieldExprMap, s as toFilterString, u as FilterExpression } from "./filter-DqRK7ft-.js";
+import { A as NetworkError, B as BasicAuthOptions, C as BusinessError, D as HTTPErrorOptions, E as HTTPError, F as PermissionError, I as TimeoutError, L as TimeoutErrorOptions, M as ODataErrorBody, N as ODataErrorOptions, O as InvalidArgumentError, P as ParseError, R as AuthOptions, S as ResponseEvent, T as ErrorFormat, _ as MutationOptions, a as ValidationErrorOptions, b as RequestEvent, c as validateEntity, d as DataShape, f as connectionAuth, g as ClientOptions, h as validateConnection, i as ValidationError, j as ODataError, k as InvalidArgumentErrorOptions, l as CliConfig, m as parseConnectionUrl, n as MetadataIndex, o as ValidationIssue, p as defineConfig, r as PropertySchema, s as ValidationResult, t as EntitySchema, u as Connection, v as RequestOptions, w as ConcurrencyError, x as RequestHooks, y as RetryPolicy, z as BasicAuth } from "./validate-BaFhhR2p.js";
+
+//#region src/functions.d.ts
+/**
+ * Empty placeholder type — used as the default \`TFunctions\` for \`ODataV3Client\`
+ * when the user doesn't supply the codegen-emitted \`Functions\` interface.
+ *
+ * See spec §4.5: \`client.functions.<EntitySet>.<Func>(args)\`. With this default
+ * the runtime accepts any property access (untyped); with a real \`Functions\`
+ * type from \`@1c-odata/cli/codegen\`, the call sites become fully typed.
+ */
+interface ODataV3FunctionsBase {
+  [entitySet: string]: {
+    [method: string]: (args: Record<string, unknown>) => Promise<unknown>;
+  };
+}
+/**
+ * Wrap the codegen-emitted \`Functions\` interface to add \`ref: string\` to args
+ * of any method returning \`Promise<void>\` — the heuristic for instance-bound
+ * write FIs (Post / Unpost / Start / ExecuteTask). Read FIs (Balance /
+ * Turnovers / SliceLast / etc.) return \`Promise<T[]>\` and are left untouched.
+ */
+type WithInstanceRef<TFunctions> = { [TSet in keyof TFunctions]: { [TMethod in keyof TFunctions[TSet]]: TFunctions[TSet][TMethod] extends ((args: infer A) => Promise<void>) ? (args: A & {
+  ref: string;
+}) => Promise<void> : TFunctions[TSet][TMethod] } };
+//#endregion
+//#region src/query/builder.d.ts
+/**
+ * Internal accumulated state of a query. Public for inspection by V3 url-builder
+ * (which translates this into the wire URL).
+ * @public
+ */
+interface QueryState {
+  filter?: FilterExpression;
+  select?: string[];
+  expand?: string[];
+  orderBy?: {
+    field: string;
+    dir: 'asc' | 'desc';
+  }[];
+  top?: number;
+  skip?: number;
+  inlineCount?: boolean;
+}
+/**
+ * Fluent query builder. Generic \`T\` is the expected entity shape; field names
+ * in \`filter\` / \`select\` / \`orderBy\` autocomplete from \`T\`. Without \`T\`, falls
+ * back to \`Record<string, unknown>\` and accepts any string.
+ *
+ * Terminals (\`.get()\`, \`.raw()\`, \`.count()\`, \`.stream()\`) live on the V3
+ * subclass — this base only accumulates state.
+ *
+ * @public
+ */
+declare class QueryBuilder<T = Record<string, unknown>> {
+  readonly entitySet: string;
+  readonly state: QueryState;
+  protected readonly serverTimezone: string;
+  constructor(entitySet: string, serverTimezone: string);
+  /**
+   * Apply a \`$filter\` expression. Builder receives a typed field-proxy for
+   * \`T\`: write \`f.Code.eq('X')\` / \`f.Сумма.gt(100)\` etc. Combinators
+   * (\`and\`/\`or\`/\`not\`/\`any\`/\`all\`/\`raw\`) live in the \`@1c-odata/client/filter\`
+   * subpath. Date values are formatted in the server's IANA timezone so filter
+   * literals match the server's wall-clock interpretation.
+   *
+   * **Footgun: field names on the proxy are NOT validated against the entity
+   * schema.** A typo such as \`f.Кодё.eq('X')\` (when the field is actually
+   * \`Code\`) generates \`$filter=Кодё eq 'X'\` — 1С silently returns an empty
+   * result, no runtime error. Provide a precise \`<T>\` generic (e.g. an entity
+   * type emitted by codegen) to get IDE autocomplete and compile-time
+   * checks on field names.
+   */
+  filter(fn: (f: FieldExprMap<T>) => FilterExpression): this;
+  /**
+   * Comma-separated \`$select\`. \`'**'\` excludes tabular parts (1С extension).
+   * \`'*'\` is all properties (incl. tabular — large for documents).
+   */
+  select<K extends keyof T & string>(...fields: (K | '*' | '**')[]): this;
+  /**
+   * Sugar for \`.select('**')\` — exclude inline tabular parts. Critical for
+   * documents (without it, single doc may be 64+ KB; with it, ~5 KB).
+   */
+  headersOnly(): this;
+  /**
+   * \`$expand\` navigation properties (comma-separated server-side).
+   */
+  expand<K extends keyof T & string>(...props: K[]): this;
+  /**
+   * \`$orderby\` with optional direction. Stacks across calls.
+   */
+  orderBy<K extends keyof T & string>(field: K, dir?: 'asc' | 'desc'): this;
+  /** \`$top=N\`. Throws \`InvalidArgumentError\` if \`n\` is not a non-negative integer. */
+  top(n: number): this;
+  /** \`$skip=N\`. Throws \`InvalidArgumentError\` if \`n\` is not a non-negative integer. */
+  skip(n: number): this;
+  /**
+   * Add \`$inlinecount=allpages\` so response includes \`odata.count\` (string in
+   * 1С, library parses to \`number\`).
+   */
+  withCount(): this;
+}
+//#endregion
+//#region src/client/v3-query.d.ts
+/**
+ * V3-aware QueryBuilder subclass. Adds terminal methods (get/raw/count/stream).
+ */
+declare class V3QueryBuilder<T> extends QueryBuilder<T> {
+  private readonly client;
+  constructor(entitySet: string, client: ODataV3Client<unknown>);
+  /** Execute the query and return parsed \`{ value, count?, odataMetadata }\`. */
+  get(opts?: RequestOptions): Promise<{
+    odataMetadata: string;
+    value: T[];
+    count?: number;
+  }>;
+  /** Escape hatch — return native \`Response\` without parsing. */
+  raw(opts?: RequestOptions): Promise<Response>;
+  /** Standalone count via \`/$count\` endpoint. Preserves filter, ignores top/skip. */
+  count(opts?: RequestOptions): Promise<number>;
+  /**
+   * Async iterator paginating through the collection.
+   *
+   * Honours user-supplied \`.top(N)\` and \`.skip(K)\` from the builder state:
+   * \`.top(N)\` caps the total number of yielded items, \`.skip(K)\` is the starting
+   * offset. \`pageSize\` is the per-request transport detail and is independent.
+   *
+   * - \`.top(N)\` with N < pageSize: single request with \`$top=N\`.
+   * - \`.top(N)\` not multiple of pageSize: last request shrinks to the remaining count.
+   * - \`.skip(K)\`: first request issues \`$skip=K\`, subsequent requests advance from there.
+   * - No \`.top()\` set: continues until server returns a short or empty page.
+   *
+   * Per-page timeout via \`opts.timeout\`; total budget via \`opts.signal\`.
+   *
+   * @throws {InvalidArgumentError} on first \`.next()\` if \`opts.pageSize\` is not a positive integer.
+   */
+  stream(opts?: RequestOptions & {
+    pageSize?: number;
+  }): AsyncGenerator<T>;
+}
+//#endregion
+//#region src/register.d.ts
+/**
+ * Args for \`balance()\` — single point in time.
+ */
+interface BalanceArgs {
+  Period?: Date;
+  Condition?: string;
+  Dimensions?: string;
+}
+/**
+ * Args for \`turnovers()\` / \`balanceAndTurnovers()\`. \`Period\` may be either a
+ * single \`Date\` (point) or \`{from, to}\` (range). The latter flattens to two
+ * args (\`StartDate\`/\`EndDate\`) per spec §4.7.
+ */
+interface TurnoversArgs {
+  Period?: Date | {
+    from: Date;
+    to: Date;
+  };
+  Condition?: string;
+  Dimensions?: string;
+}
+/**
+ * Args for InformationRegister \`sliceFirst()\` / \`sliceLast()\` — single point
+ * in time.
+ */
+interface SliceArgs {
+  Period?: Date;
+  Condition?: string;
+}
+/**
+ * Args for AccountingRegister \`drCrTurnovers()\` — debit/credit turnovers in a
+ * date range, optionally filtered by Dr/Cr account refs (\`@odata.bind\`).
+ */
+interface DrCrTurnoversArgs {
+  StartDate?: Date;
+  EndDate?: Date;
+  AccountDr?: {
+    '@odata.bind': string;
+  };
+  AccountCr?: {
+    '@odata.bind': string;
+  };
+}
+/**
+ * Args for AccountingRegister \`extDimensions()\` — extra dimensions for a
+ * given account.
+ */
+interface ExtDimensionsArgs {
+  Account_Key?: string;
+}
+/**
+ * Args for AccountingRegister \`recordsWithExtDimensions()\` — records together
+ * with extra dimensions in a date range.
+ */
+interface RecordsWithExtDimensionsArgs {
+  StartDate?: Date;
+  EndDate?: Date;
+}
+/**
+ * Facade over the V3 client for register-style entity sets. Provides:
+ *   - \`recordsets()\` — query against the parent register EntitySet (RecordSet rows)
+ *   - \`records()\` — query against \`<set>_RecordType\` (flat per-record movements)
+ *   - \`balance()\` / \`turnovers()\` / \`balanceAndTurnovers()\` — virtual-table FI wrappers
+ *
+ * See spec §4.7.
+ */
+declare class RegisterHelper<T> {
+  private readonly client;
+  private readonly entitySet;
+  constructor(client: ODataV3Client<unknown>, entitySet: string);
+  /** Query the parent register EntitySet. Returns \`V3QueryBuilder<T>\` for chaining. */
+  recordsets(): V3QueryBuilder<T>;
+  /** Query \`<set>_RecordType\`. Used for flat per-record server-side filtering. */
+  records<R = Record<string, unknown>>(): V3QueryBuilder<R>;
+  /** Virtual-table FI: balance at \`Period\`. AccumulationRegister. */
+  balance<R = Record<string, unknown>>(args?: BalanceArgs): Promise<R[]>;
+  /** Virtual-table FI: turnovers in \`Period\` (point or range). AccumulationRegister. */
+  turnovers<R = Record<string, unknown>>(args?: TurnoversArgs): Promise<R[]>;
+  /** Virtual-table FI: balance + turnovers in \`Period\`. AccumulationRegister. */
+  balanceAndTurnovers<R = Record<string, unknown>>(args?: TurnoversArgs): Promise<R[]>;
+  /** Virtual-table FI: slice at the first row before/at \`Period\`. InformationRegister. */
+  sliceFirst<R = Record<string, unknown>>(args?: SliceArgs): Promise<R[]>;
+  /** Virtual-table FI: slice at the last row before/at \`Period\`. InformationRegister. */
+  sliceLast<R = Record<string, unknown>>(args?: SliceArgs): Promise<R[]>;
+  /** Virtual-table FI: Dr/Cr turnovers in \`[StartDate, EndDate]\`. AccountingRegister. */
+  drCrTurnovers<R = Record<string, unknown>>(args?: DrCrTurnoversArgs): Promise<R[]>;
+  /** Virtual-table FI: extra dimensions for a given account. AccountingRegister. */
+  extDimensions<R = Record<string, unknown>>(args?: ExtDimensionsArgs): Promise<R[]>;
+  /** Virtual-table FI: records with extra dimensions in \`[StartDate, EndDate]\`. AccountingRegister. */
+  recordsWithExtDimensions<R = Record<string, unknown>>(args?: RecordsWithExtDimensionsArgs): Promise<R[]>;
+  /**
+   * Shared dispatch for read-style virtual-table FIs. Builds the URL via
+   * \`buildFunctionUrl\` (no \`ref\` — set-bound), GETs through the transport,
+   * and parses through \`parseV3Collection\` so \`Edm.DateTime\` values become
+   * \`Date\` instances and the \`0001-01-01T00:00:00\` empty-date sentinel
+   * becomes \`null\` (consistent with \`client.functions.X.Y\` dispatch).
+   */
+  private callReadFi;
+}
+//#endregion
+//#region src/url-builder.d.ts
+/**
+ * Composite key for entities with multiple key fields (registers).
+ * @public
+ */
+type EntityKey = string | Record<string, string>;
+/**
+ * Normalize a baseUrl by trimming trailing slashes — needed for predictable
+ * URL composition downstream (\`<base>/<path>\` would otherwise produce
+ * \`<base>//<path>\`). Pure helper, no validation: malformed input passes
+ * through. Idempotent.
+ *
+ * @public
+ */
+declare function normalizeBaseUrl(url: string): string;
+//#endregion
+//#region src/value-storage.d.ts
+interface ReadStreamResult {
+  /** \`Content-Type\` header value, or \`null\` if the server omitted it. */
+  contentType: string | null;
+  /** Raw body stream (e.g. for piping into a file or further parsing). */
+  body: ReadableStream<Uint8Array>;
+}
+interface WriteStreamInput {
+  /** \`<prop>_Type\` value — typically a MIME type like 'image/jpeg' or 'application/xml+xdto'. */
+  contentType: string;
+  /** \`<prop>_Base64Data\` payload (base64-encoded bytes). */
+  base64Data: string;
+}
+//#endregion
+//#region src/client/v3-handles.d.ts
+/**
+ * V3 entity-set-level handle. Currently exposes only \`.create(body)\` (POST to set).
+ * Returned by \`client.entity(set)\` without a key.
+ */
+declare class V3EntitySetHandle<T> {
+  private readonly client;
+  private readonly entitySet;
+  private extraHeaders;
+  constructor(client: ODataV3Client<unknown>, entitySet: string);
+  /**
+   * Chainable: add a header to subsequent mutations on this handle.
+   *
+   * Headers merge case-insensitively against \`baseHeaders\` — for example,
+   * \`.withHeader('authorization', '...')\` overrides the library's \`Authorization\`
+   * basic-auth header regardless of casing. Later \`withHeader\` calls override
+   * earlier ones on the same case-insensitive name.
+   *
+   * Library-managed headers **cannot** be overridden on write operations:
+   * \`Content-Type\` (always \`application/json\` when there's a body) and
+   * \`Content-Length\` (computed from body byte length) win against any
+   * \`withHeader\` attempt.
+   */
+  withHeader(name: string, value: string): this;
+  /** POST a new entity. Returns the full entity (including auto-\`Ref_Key\` + \`DataVersion\`). */
+  create(body: Partial<T>, opts?: RequestOptions): Promise<T>;
+}
+/**
+ * V3-aware entity handle. Supports GET + the full mutation surface
+ * (patch / put / delete / markForDeletion / unmarkForDeletion / writeStream).
+ *
+ * Pass \`{ expectVersion: v }\` in \`MutationOptions\` to enable per-mutation
+ * optimistic-concurrency: the library issues a GET, compares \`DataVersion\`,
+ * and throws \`ConcurrencyError\` before the mutation if they differ.
+ */
+declare class V3EntityHandle<T> {
+  private readonly client;
+  private readonly entitySet;
+  private readonly key;
+  private extraHeaders;
+  constructor(client: ODataV3Client<unknown>, entitySet: string, key: EntityKey);
+  /**
+   * Chainable: add a header to subsequent mutations on this handle. Headers
+   * persist across mutations on the same handle.
+   *
+   * Merge semantics match \`V3EntitySetHandle.withHeader\`: case-insensitive
+   * override against \`baseHeaders\` (e.g. \`.withHeader('authorization', ...)\`
+   * overrides the basic-auth header), later \`withHeader\` calls win against
+   * earlier ones on the same case-insensitive name, and the library-managed
+   * \`Content-Type\` / \`Content-Length\` headers win against any \`withHeader\`
+   * attempt on write operations.
+   */
+  withHeader(name: string, value: string): this;
+  get(opts?: RequestOptions): Promise<T>;
+  /** Partial update via PATCH. Returns the full updated entity. */
+  patch(body: Partial<T>, opts?: MutationOptions): Promise<T>;
+  /** Full replacement via PUT. Returns the full updated entity. */
+  put(body: T, opts?: MutationOptions): Promise<T>;
+  /** Physical DELETE. Returns void on 204. */
+  delete(opts?: MutationOptions): Promise<void>;
+  /** PATCH \`DeletionMark: true\`. NOT cascading (one-record flag flip). */
+  markForDeletion(opts?: MutationOptions): Promise<T>;
+  /** PATCH \`DeletionMark: false\`. */
+  unmarkForDeletion(opts?: MutationOptions): Promise<T>;
+  /** Read \`ХранилищеЗначения\` content via GET \`<entity>/<prop>/$value\`. */
+  readStream(prop: string, opts?: RequestOptions): Promise<ReadStreamResult>;
+  /** Write \`ХранилищеЗначения\` content via PATCH (sets \`<prop>_Type\` and \`<prop>_Base64Data\`). */
+  writeStream(prop: string, input: WriteStreamInput, opts?: MutationOptions): Promise<void>;
+}
+/**
+ * Typed helper for document operations. Sugar over \`client.functions[set].Post\`
+ * and \`Unpost\`. Spec §4.5 — instance-bound write FIs that take \`ref\` as the
+ * primary identifier.
+ */
+declare class V3DocumentHandle {
+  private readonly client;
+  private readonly entitySet;
+  private readonly key;
+  constructor(client: ODataV3Client<unknown>, entitySet: string, key: string);
+  /** Post (provesti) the document. URL: \`<set>(<key>)/Post()?args\`. */
+  post(args?: Record<string, unknown>): Promise<void>;
+  /** Unpost (otmenit' provedenie) the document. URL: \`<set>(<key>)/Unpost()\`. */
+  unpost(): Promise<void>;
+}
+//#endregion
+//#region src/client/v3-client.d.ts
+/**
+ * V3-specific client options. Extends core's \`ClientOptions\` with optional
+ * runtime validation hooks driven by the codegen-emitted \`__metadata.json\`.
+ *
+ * @public
+ */
+interface ODataV3ClientOptions extends ClientOptions {
+  /**
+   * Schema index loaded from \`__metadata.json\` (per-connection codegen
+   * artifact). Required when \`validateOnWrite\` is \`true\`.
+   */
+  metadataIndex?: MetadataIndex;
+  /**
+   * Opt-in: when \`true\`, every \`.create()\` / \`.patch()\` / \`.put()\` runs
+   * \`validateEntity\` against the corresponding schema BEFORE issuing the
+   * HTTP request. Defaults to \`false\` (no behaviour change).
+   */
+  validateOnWrite?: boolean;
+  /**
+   * Override \`metadataIndex?.shape\` at runtime. Useful when running without
+   * codegen (no \`__metadata.json\`) but still want a non-default \`dateMode\`
+   * or \`int64Mode\` applied. Precedence: \`shape\` wins over \`metadataIndex.shape\`.
+   *
+   * @public
+   */
+  shape?: DataShape;
+}
+/**
+ * Concrete V3 OData client.
+ *
+ * Generic over \`TFunctions\` — the codegen-emitted \`Functions\` interface that
+ * shapes \`client.functions.<EntitySet>.<Func>(args)\` access. Defaults to
+ * \`ODataV3FunctionsBase\`, an open-ended index signature; with a real type from
+ * \`@1c-odata/cli/codegen\` the call sites become fully typed.
+ *
+ * @public
+ */
+declare class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
+  /**
+   * Two-level Proxy: \`client.functions.<EntitySet>.<Func>(args)\`.
+   *
+   * Heuristic: if \`args.ref\` is present → POST \`<set>(<ref>)/<func>()\` (write FI,
+   * returns void). Otherwise → GET \`<set>/<func>()\` (read FI, returns
+   * \`parsed.value\` array or the parsed body). This matches the 12 canonical FIs:
+   * Post / Unpost / Start / ExecuteTask are instance-bound writes (need \`ref\`),
+   * Balance / Turnovers / SliceLast / etc. are set-bound reads (no \`ref\`).
+   */
+  readonly functions: WithInstanceRef<TFunctions>;
+  /** Stored v3-specific options (superset of \`ClientOptions\`). */
+  private readonly v3Opts;
+  constructor(opts: ODataV3ClientOptions);
+  /** Service root, normalized (no trailing slash). */
+  get baseUrl(): string;
+  /** IANA timezone of the 1С server (used for date round-tripping). */
+  get serverTimezone(): string;
+  /** Runtime schema index (loaded from generated \`__metadata.json\`). */
+  get metadataIndex(): MetadataIndex | undefined;
+  query<T = Record<string, unknown>>(entitySet: string): V3QueryBuilder<T>;
+  entity<T = Record<string, unknown>>(entitySet: string): V3EntitySetHandle<T>;
+  entity<T = Record<string, unknown>>(entitySet: string, key: EntityKey): V3EntityHandle<T>;
+  /** Typed handle for document operations on a specific record. Spec §4.5. */
+  document(entitySet: string, key: string): V3DocumentHandle;
+  /**
+   * Typed handle for register-style entity sets (Accumulation / Information /
+   * Accounting / Calculation registers). Spec §4.7. Provides:
+   *   - \`recordsets()\` — query the parent register EntitySet
+   *   - \`records()\` — query \`<set>_RecordType\` (per-record movements)
+   *   - \`balance()\` / \`turnovers()\` / \`sliceLast()\` / etc. — virtual-table FI wrappers
+   */
+  register<T = Record<string, unknown>>(entitySet: string): RegisterHelper<T>;
+  /**
+   * Internal: serialize JSON body and run a write request through retry pipeline.
+   *
+   * \`extraHeaders\` (from \`.withHeader(...)\`) are merged case-insensitively;
+   * library-managed \`Content-Length\` / \`Content-Type\` go LAST in the merge
+   * so they win against any user override attempt.
+   */
+  private transportWrite;
+  protected baseHeaders(): Record<string, string>;
+  protected transportOpts(): {
+    hooks?: RequestHooks;
+    retry?: RetryPolicy;
+    timeout?: number;
+    signal?: AbortSignal;
+  };
+}
+//#endregion
+//#region src/hooks/console.d.ts
+interface ConsoleHookOptions {
+  /** Include body (truncated) in output. Default: false. */
+  logBodies?: boolean;
+  /** Truncate bodies to this many characters. Default: 2000. */
+  maxBodyChars?: number;
+  /** Custom write function (default: process.stderr.write). Useful for tests + redirecting to logger. */
+  writeFn?: (line: string) => void;
+}
+/**
+ * Built-in helper hooks that print formatted request/response/error lines to
+ * stderr. Useful for ad-hoc debugging — for production logging integrate with
+ * pino/sentry/OTel via custom RequestHooks.
+ *
+ * @example
+ * \`\`\`
+ * new ODataV3Client({ ..., hooks: consoleHook({ logBodies: true }) })
+ * // stderr:
+ * // [1c-odata] → GET /Catalog_X?$top=10
+ * // [1c-odata] ← 200 127ms 5.3KB
+ * \`\`\`
+ *
+ * @public
+ */
+declare function consoleHook(opts?: ConsoleHookOptions): RequestHooks;
+//#endregion
+//#region src/http/error-mapping.d.ts
+/**
+ * Map an HTTP error response to a typed \`ODataError\` subclass.
+ * Decision tree:
+ *   500 + body.code "-1"        → BusinessError
+ *   401                         → PermissionError (regardless of code; "20" is typical)
+ *   412                         → ConcurrencyError
+ *   400/404/405/406/411/501/etc → HTTPError (generic)
+ */
+declare function mapResponseToError(status: number, statusText: string, headers: Record<string, string>, body: string): Promise<ODataError>;
+//#endregion
+//#region src/load-metadata-index.d.ts
+/**
+ * Load and runtime-validate a codegen-emitted \`__metadata.json\` file.
+ *
+ * Validates structural shape: \`schemaNamespace\`, \`schemas\`, \`entitySetToType\`,
+ * optional \`shape\`, optional \`enums\`. Mismatches throw \`ParseError\` with a
+ * JSON-path breadcrumb pointing at the offending node (e.g.
+ * \`$.schemas.Catalog_X.properties.Y.type\`).
+ *
+ * @public
+ */
+declare function loadMetadataIndex(input: string | URL): Promise<MetadataIndex>;
+//#endregion
+//#region src/runtime.d.ts
+/**
+ * Convert a project-level \`Connection\` into runtime \`ODataV3ClientOptions\`.
+ * Pure pass-through — does not read env, does not parse URLs.
+ *
+ * \`serverTimezone\` is guaranteed by the \`Connection\` type contract (required).
+ *
+ * @public
+ */
+declare function clientOptionsFromConnection(conn: Connection): ODataV3ClientOptions;
+//#endregion
+//#region src/timezone.d.ts
+/**
+ * Parse a naive ISO-8601 datetime string (\`"2025-01-10T15:30:00"\`, no offset)
+ * as wall-clock in the given IANA timezone. Returns a JS \`Date\` representing
+ * the absolute UTC instant. DST-aware via \`Intl\`.
+ *
+ * @public
+ */
+declare function parseInZone(naive: string, zone: string): Date;
+/**
+ * Format a JS \`Date\` as a naive ISO-8601 wall-clock string in the given
+ * IANA timezone. Inverse of \`parseInZone\`. DST-aware via \`Intl\`.
+ *
+ * @public
+ */
+declare function formatInZone(date: Date, zone: string): string;
+//#endregion
+//#region src/types/core.d.ts
+/**
+ * Identifier type compatible with \`crypto.randomUUID()\` shape and 1C \`Edm.Guid\` strings.
+ * @public
+ */
+type Guid = \`\${string}-\${string}-\${string}-\${string}-\${string}\`;
+/**
+ * Empty reference value in 1C — what \`ПустаяСсылка()\` returns and what fills
+ * default reference fields. Used for explicit comparisons: \`if (key !== EMPTY_GUID) ...\`.
+ * @public
+ */
+declare const EMPTY_GUID: "00000000-0000-0000-0000-000000000000";
+/**
+ * Default value for 1C \`Edm.DateTime\` (the 1C platform "дата начала отсчёта").
+ * Used as the wire-level marker for "no date" in Nullable fields.
+ * Library auto-maps this to \`null\` for Nullable Edm.DateTime fields by default;
+ * see spec §2.4 «Значение по умолчанию \`Edm.DateTime\`».
+ * @public
+ */
+declare const ONEC_EMPTY_DATE: "0001-01-01T00:00:00";
+/**
+ * Base shape for all 1C entities (catalog elements, documents, register records).
+ * Spec §2.1 lists these as "системные поля единые для всех объектов".
+ * @public
+ */
+interface Entity {
+  Ref_Key: Guid;
+  DataVersion: string;
+  DeletionMark: boolean;
+  Predefined: boolean;
+  PredefinedDataName: string;
+}
+/**
+ * 1C \`ХранилищеЗначения\` reified as a typed object. Codegen groups the wire-level
+ * triple \`<X>: Edm.Stream\` + \`<X>_Base64Data: Edm.Binary\` + \`<X>_Type: Edm.String\`
+ * into this shape. Read via \`client.entity(...).readStream(...)\`;
+ * \`<X>\` itself never arrives inline in JSON. See spec §2.4 + §5.3.
+ * @public
+ */
+interface ValueStorage {
+  readonly contentType: string;
+  readonly base64Data: string;
+}
+//#endregion
+export { type AuthOptions, type BalanceArgs, BasicAuth, type BasicAuthOptions, BusinessError, type CliConfig, type ClientOptions, ConcurrencyError, type Connection, type ConsoleHookOptions, type DataShape, type DrCrTurnoversArgs, EMPTY_GUID, type Entity, type EntityKey, type EntitySchema, type ErrorFormat, type ExtDimensionsArgs, type FieldExpr, type FieldExprMap, type FilterExpression, type Guid, HTTPError, type HTTPErrorOptions, InvalidArgumentError, type InvalidArgumentErrorOptions, type MetadataIndex, type MutationOptions, NetworkError, ODataError, type ODataErrorBody, type ODataErrorOptions, ODataV3Client, type ODataV3ClientOptions, type ODataV3FunctionsBase, ONEC_EMPTY_DATE, ParseError, PermissionError, type PropertySchema, QueryBuilder, type QueryState, type ReadStreamResult, type RecordsWithExtDimensionsArgs, RegisterHelper, type RequestEvent, type RequestHooks, type RequestOptions, type ResponseEvent, type RetryPolicy, type SliceArgs, TimeoutError, type TimeoutErrorOptions, type TurnoversArgs, V3DocumentHandle, V3EntityHandle, V3EntitySetHandle, V3QueryBuilder, ValidationError, type ValidationErrorOptions, type ValidationIssue, type ValidationResult, type ValueStorage, type WithInstanceRef, type WriteStreamInput, clientOptionsFromConnection, connectionAuth, consoleHook, defineConfig, formatInZone, loadMetadataIndex, mapResponseToError, normalizeBaseUrl, parseConnectionUrl, parseInZone, toFilterString, validateConnection, validateEntity };
+//# sourceMappingURL=index.d.ts.map"
+`;

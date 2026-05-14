@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "//": "Type-level test files. Narrow scope — main tsconfig.json excludes test/ for build, so type-level regression guards in test files need this dedicated config. Wired into `pnpm typecheck` script. Expand `include` as more type-tests are added.",
+  "include": ["src/**/*", "test/unit/define-config.test.ts"]
+}

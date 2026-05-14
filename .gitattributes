@@ -1,0 +1,5 @@
+# Force LF line endings on checkout for all text files. The repo's biome
+# formatter is configured `lineEnding: "lf"` (see biome.json) — without this
+# normalisation, Windows checkouts get CRLF and `biome ci` reports every
+# source file as "differs from formatting output".
+* text=auto eol=lf

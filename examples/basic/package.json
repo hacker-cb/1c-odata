@@ -1,0 +1,22 @@
+{
+  "name": "basic-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo": "node --env-file-if-exists=.env.local --import tsx src/main.ts",
+    "fetch": "1c-odata fetch",
+    "generate": "1c-odata generate",
+    "predemo": "1c-odata generate",
+    "pretypecheck": "1c-odata generate",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@1c-odata/cli": "workspace:*",
+    "@1c-odata/client": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.0",
+    "typescript": "^6.0.3"
+  }
+}

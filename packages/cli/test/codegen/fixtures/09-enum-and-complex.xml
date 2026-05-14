@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="3.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="StandardODATA" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <ComplexType Name="TypeDescription">
+        <Property Name="Types" Type="Collection(Edm.String)" Nullable="false"/>
+      </ComplexType>
+      <ComplexType Name="NumberQualifiers">
+        <Property Name="Digits" Type="Edm.Int32" Nullable="false"/>
+        <Property Name="FractionDigits" Type="Edm.Int32" Nullable="false"/>
+      </ComplexType>
+      <EnumType Name="ВидНоменклатуры" UnderlyingType="Edm.Int32">
+        <Member Name="Товар" Value="0"/>
+        <Member Name="Услуга" Value="1"/>
+      </EnumType>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

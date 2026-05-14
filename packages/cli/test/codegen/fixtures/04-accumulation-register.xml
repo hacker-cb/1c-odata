@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="3.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="StandardODATA" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <EntityType Name="AccumulationRegister_ОстаткиТоваров">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+      </EntityType>
+      <ComplexType Name="AccumulationRegister_ОстаткиТоваров_Balance">
+        <Property Name="Номенклатура_Key" Type="Edm.Guid" Nullable="false"/>
+        <Property Name="Количество" Type="Edm.Double" Nullable="false"/>
+      </ComplexType>
+      <EntityContainer Name="StandardODATA" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="AccumulationRegister_ОстаткиТоваров" EntityType="StandardODATA.AccumulationRegister_ОстаткиТоваров"/>
+        <FunctionImport Name="Balance" ReturnType="Collection(StandardODATA.AccumulationRegister_ОстаткиТоваров_Balance)" m:HttpMethod="GET" IsBindable="true" EntitySetPath="AccumulationRegister_ОстаткиТоваров">
+          <Parameter Name="Period" Type="Edm.DateTime" Nullable="true" Mode="In"/>
+        </FunctionImport>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

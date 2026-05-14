@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="3.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="StandardODATA" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <EntityType Name="Catalog_Контрагенты">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+      </EntityType>
+      <EntityType Name="Document_РТУ">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+        <Property Name="DataVersion" Type="Edm.String" Nullable="false"/>
+        <Property Name="DeletionMark" Type="Edm.Boolean" Nullable="false"/>
+        <Property Name="Predefined" Type="Edm.Boolean" Nullable="false"/>
+        <Property Name="PredefinedDataName" Type="Edm.String" Nullable="false"/>
+        <Property Name="Number" Type="Edm.String" Nullable="false"/>
+        <Property Name="Date" Type="Edm.DateTime" Nullable="true"/>
+        <Property Name="Posted" Type="Edm.Boolean" Nullable="false"/>
+        <Property Name="Контрагент_Key" Type="Edm.Guid" Nullable="true"/>
+        <NavigationProperty Name="Контрагент" Relationship="StandardODATA.Doc_Контрагент" FromRole="Source" ToRole="Target"/>
+      </EntityType>
+      <Association Name="Doc_Контрагент">
+        <End Role="Source" Type="StandardODATA.Document_РТУ" Multiplicity="*"/>
+        <End Role="Target" Type="StandardODATA.Catalog_Контрагенты" Multiplicity="0..1"/>
+      </Association>
+      <EntityContainer Name="StandardODATA" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="Catalog_Контрагенты" EntityType="StandardODATA.Catalog_Контрагенты"/>
+        <EntitySet Name="Document_РТУ" EntityType="StandardODATA.Document_РТУ"/>
+        <FunctionImport Name="Post" m:HttpMethod="POST" IsBindable="true" EntitySetPath="Document_РТУ">
+          <Parameter Name="PostingModeOperational" Type="Edm.Boolean" Nullable="true" Mode="In"/>
+        </FunctionImport>
+        <FunctionImport Name="Unpost" m:HttpMethod="POST" IsBindable="true" EntitySetPath="Document_РТУ"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

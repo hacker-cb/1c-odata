@@ -1,0 +1,227 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, master]
+  push:
+    branches: [dev, master]
+
+# Per-ref concurrency: at most one run per branch ref at a time.
+#   - PR updates (new commits pushed to a PR's head branch, arriving as
+#     `pull_request: synchronize`) CANCEL the in-flight run for that PR.
+#   - Pushes to `dev`/`master` instead QUEUE (do not cancel) — those runs
+#     produce artifacts and trigger publish workflows and must run to
+#     completion.
+# Different refs (e.g. dev vs master, or different PR branches) are always
+# independent because `github.ref` is part of the group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/dev' && github.ref != 'refs/heads/master' }}
+
+# Workflow-default permissions — read-only. No job here writes via the
+# GITHUB_TOKEN (no PR comments, no releases, no push). Tighten the default
+# instead of leaving the per-repo dashboard default at read/write.
+permissions:
+  contents: read
+
+env:
+  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+  TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+
+jobs:
+  detect-secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    # Owner-only: forks (and any other-owner mirrors) skip this job and every
+    # downstream job that depends on it. Live/write tests run against private
+    # 1С bases — secrets must never be exposed off the canonical repo.
+    #
+    # Two-part gate:
+    #   1. `repository_owner == 'hacker-cb'` excludes runs in other-owner
+    #      mirrors entirely.
+    #   2. For `pull_request` events `repository_owner` reflects the BASE
+    #      repo (hacker-cb), not the fork — so part 1 alone would still
+    #      run on fork PRs. Comparing `head.repo.full_name` to
+    #      `github.repository` is the canonical pattern for skipping
+    #      fork PRs while keeping owner-internal PRs covered.
+    #   The second predicate short-circuits to TRUE on non-PR triggers
+    #   (push to dev/master), which have no `head.repo` to compare.
+    if: |
+      github.repository_owner == 'hacker-cb' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    outputs:
+      allow-writes: ${{ steps.check.outputs.allow-writes }}
+    steps:
+      - id: check
+        env:
+          ONEC_TRADE_V11_5_URL: ${{ secrets.ONEC_TRADE_V11_5_URL }}
+          ONEC_BP_V3_0_URL: ${{ secrets.ONEC_BP_V3_0_URL }}
+          ONEC_EXAMPLE_BASIC_URL: ${{ secrets.ONEC_EXAMPLE_BASIC_URL }}
+          HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+          ONEC_TESTS_ALLOW_WRITES: ${{ secrets.ONEC_TESTS_ALLOW_WRITES }}
+        run: |
+          # All 5 secrets must be configured on the canonical repo. If anything
+          # is missing the job fails loudly with the list of missing names —
+          # silent skip (the previous has-fixtures=no path) hides genuine
+          # mis-configuration as a green CI run.
+          missing=()
+          [ -z "$ONEC_TRADE_V11_5_URL" ]   && missing+=("ONEC_TRADE_V11_5_URL")
+          [ -z "$ONEC_BP_V3_0_URL" ]       && missing+=("ONEC_BP_V3_0_URL")
+          [ -z "$ONEC_EXAMPLE_BASIC_URL" ] && missing+=("ONEC_EXAMPLE_BASIC_URL")
+          [ -z "$HTTP_PROXY" ]             && missing+=("HTTP_PROXY")
+          [ -z "$ONEC_TESTS_ALLOW_WRITES" ] && missing+=("ONEC_TESTS_ALLOW_WRITES")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing required repository secrets: ${missing[*]}"
+            exit 1
+          fi
+          # Sentinel `yes`/`no` (not `true`/`false`) — GitHub masks any value
+          # equal to a registered secret, and `ONEC_TESTS_ALLOW_WRITES=true`
+          # would cause the literal string `true` to be redacted from step
+          # outputs, breaking downstream `if:` predicates.
+          if [ "$ONEC_TESTS_ALLOW_WRITES" = "true" ]; then
+            echo "allow-writes=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "allow-writes=no" >> "$GITHUB_OUTPUT"
+          fi
+
+  lint-and-typecheck:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Lint (gate 1)
+        run: pnpm biome ci .
+      - name: Typecheck (gate 2)
+        run: pnpm turbo typecheck
+
+  test-and-build:
+    runs-on: ${{ matrix.os }}
+    needs: lint-and-typecheck
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Unit tests (gate 3)
+        run: pnpm turbo test:unit
+      - name: Offline integration tests (gate 4)
+        run: pnpm turbo test:integration:offline
+      - name: Build (gate 5)
+        run: pnpm turbo build
+      - name: Package lint (gate 6)
+        run: pnpm turbo package:lint
+      - name: E2E tests (gate 8)
+        run: pnpm turbo test:e2e
+      - name: Upload coverage
+        if: success() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: packages/*/coverage/
+
+  test-example:
+    runs-on: ubuntu-latest
+    needs: [detect-secrets, test-and-build]
+    timeout-minutes: 10
+    # End-to-end smoke test of the example consumer flow against a live 1С
+    # base. Covers what `turbo typecheck` cannot from committed metadata:
+    #   - `1c-odata fetch` round-trip (CLI network path, auth, proxy).
+    #   - `pnpm demo` runtime (generated types compile AND work against a
+    #     real API: transport, filter API, streaming, etc).
+    # Owner-only gate inherited via `needs: detect-secrets` (ONEC_EXAMPLE_BASIC_URL
+    # carries embedded credentials).
+    #
+    # NODE_OPTIONS=--import=.ci/proxy-init.mjs is set per-step (not
+    # job-level) — job-level env applies to actions/checkout@v5 which runs
+    # Node before the workspace is checked out, so the preload file
+    # doesn't exist yet and Node fails with ERR_MODULE_NOT_FOUND.
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Fetch live metadata (gate 10a)
+        # Overwrites the committed metadata/default.xml snapshot (full ~15 MB,
+        # used for offline demos/typecheck) with fresh $metadata from the live
+        # base. Exercises the CLI network/auth path.
+        # `pnpm run fetch` (not bare `pnpm fetch`) — the latter invokes
+        # pnpm's built-in fetch command, not the package.json script.
+        run: pnpm --filter basic-example run fetch
+        env:
+          ONEC_EXAMPLE_BASIC_URL: ${{ secrets.ONEC_EXAMPLE_BASIC_URL }}
+          HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+          # Production runtime has no per-client proxy support — undici is
+          # configured process-wide. .ci/proxy-init.mjs sets up the global
+          # dispatcher when HTTP_PROXY is present, matching the test-only
+          # pattern in packages/client/test/setup.ts.
+          NODE_OPTIONS: --import=${{ github.workspace }}/.ci/proxy-init.mjs
+      - name: Typecheck example against fresh metadata (gate 10b)
+        # Re-runs codegen via `pretypecheck` against the just-fetched
+        # metadata, then `tsc --noEmit`. Offline, but uses the live shape.
+        run: pnpm --filter basic-example typecheck
+      - name: Run demo against live base (gate 10c)
+        run: pnpm --filter basic-example run demo
+        env:
+          ONEC_EXAMPLE_BASIC_URL: ${{ secrets.ONEC_EXAMPLE_BASIC_URL }}
+          HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+          NODE_OPTIONS: --import=${{ github.workspace }}/.ci/proxy-init.mjs
+
+  test-live:
+    runs-on: ubuntu-latest
+    needs: [detect-secrets, test-and-build]
+    timeout-minutes: 10
+    # detect-secrets runs only on the canonical repo and verifies all 5
+    # secrets are present, so the fact that this job has detect-secrets in
+    # its `needs` is sufficient gating — if detect-secrets skipped (fork)
+    # or failed (missing secret), this job is automatically skipped too.
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Generate example types (needed by enum-roundtrip live test)
+        # `packages/client/test/integration/live/enum-roundtrip.test.ts` loads
+        # `examples/basic/generated/default/__metadata.json` to source the
+        # canonical enum member list, then asserts live wire values fall
+        # inside it. `examples/basic/generated/` is gitignored, and `test-live`
+        # runs in its own fresh checkout (no shared workspace with
+        # `test-example`), so without this step the test silently skips via
+        # `it.skipIf(!existsSync(METADATA_PATH))` and the regression goes
+        # unexercised. `generate` is fully offline (reads committed
+        # `metadata/default.xml`), so it's safe to do before `test:integration:live`.
+        run: pnpm --filter basic-example run generate
+      - name: Live integration tests (gate 7)
+        run: pnpm turbo test:integration:live
+        env:
+          ONEC_TRADE_V11_5_URL: ${{ secrets.ONEC_TRADE_V11_5_URL }}
+          ONEC_BP_V3_0_URL: ${{ secrets.ONEC_BP_V3_0_URL }}
+          HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+
+  test-write:
+    runs-on: ubuntu-latest
+    needs: [detect-secrets, test-live]
+    timeout-minutes: 10
+    # `allow-writes` is the explicit feature flag (set ONEC_TESTS_ALLOW_WRITES=true
+    # in repo secrets to opt in). Owner-only restriction is inherited via the
+    # detect-secrets dependency.
+    #
+    # WARNING for future maintainers: do NOT add a new job that uses `secrets.*`
+    # in its `env:` block without putting `detect-secrets` (or another
+    # owner-gated job) in its `needs:`. The owner-only fork protection in this
+    # workflow lives ONLY in the `if:` on `detect-secrets` — every secret-bearing
+    # job inherits the gate via the needs-edge. A new job with `secrets.*` and
+    # no needs-edge to an owner-gated job would expose secrets to fork PRs.
+    if: needs.detect-secrets.outputs.allow-writes == 'yes'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Write integration tests (gate 9)
+        run: pnpm turbo test:integration:write
+        env:
+          ONEC_TESTS_ALLOW_WRITES: 'true'
+          ONEC_TRADE_V11_5_URL: ${{ secrets.ONEC_TRADE_V11_5_URL }}
+          ONEC_BP_V3_0_URL: ${{ secrets.ONEC_BP_V3_0_URL }}
+          HTTP_PROXY: ${{ secrets.HTTP_PROXY }}

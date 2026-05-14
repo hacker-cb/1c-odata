@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="3.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="StandardODATA" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <EntityType Name="Catalog_Номенклатура">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+        <Property Name="DataVersion" Type="Edm.String" Nullable="false" MaxLength="8"/>
+        <Property Name="DeletionMark" Type="Edm.Boolean" Nullable="false"/>
+        <Property Name="Predefined" Type="Edm.Boolean" Nullable="false"/>
+        <Property Name="PredefinedDataName" Type="Edm.String" Nullable="false"/>
+        <Property Name="Code" Type="Edm.String" Nullable="false" MaxLength="11"/>
+        <Property Name="Description" Type="Edm.String" Nullable="false" MaxLength="100"/>
+        <Property Name="Артикулы" Type="Collection(StandardODATA.Catalog_Номенклатура_Артикулы_RowType)" Nullable="false"/>
+      </EntityType>
+      <EntityType Name="Catalog_Номенклатура_Артикулы">
+        <Key>
+          <PropertyRef Name="Ref_Key"/>
+          <PropertyRef Name="LineNumber"/>
+        </Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+        <Property Name="LineNumber" Type="Edm.Int64" Nullable="false"/>
+        <Property Name="Артикул" Type="Edm.String" Nullable="false"/>
+      </EntityType>
+      <ComplexType Name="Catalog_Номенклатура_Артикулы_RowType">
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+        <Property Name="LineNumber" Type="Edm.Int64" Nullable="false"/>
+        <Property Name="Артикул" Type="Edm.String" Nullable="false"/>
+      </ComplexType>
+      <EntityContainer Name="StandardODATA" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="Catalog_Номенклатура" EntityType="StandardODATA.Catalog_Номенклатура"/>
+        <EntitySet Name="Catalog_Номенклатура_Артикулы" EntityType="StandardODATA.Catalog_Номенклатура_Артикулы"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

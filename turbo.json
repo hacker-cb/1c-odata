@@ -1,0 +1,60 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "tui",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "tsdown.config.ts", "tsconfig.json", "package.json"],
+      "outputs": ["dist/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "tsconfig.json", "../../tsconfig.base.json"],
+      "outputs": []
+    },
+    "test:unit": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "test/**", "vitest.config.ts"],
+      "outputs": []
+    },
+    "@1c-odata/cli#test:unit": {
+      "dependsOn": ["^build", "build"],
+      "inputs": ["src/**", "test/**", "vitest.config.ts"],
+      "outputs": []
+    },
+    "@1c-odata/client#test:unit": {
+      "dependsOn": ["^build", "build"],
+      "inputs": ["src/**", "test/**", "vitest.config.ts"],
+      "outputs": []
+    },
+    "test:integration:offline": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "test/**", "../../snapshots/**", "vitest.config.ts"],
+      "outputs": []
+    },
+    "test:integration:live": {
+      "dependsOn": ["^build"],
+      "inputs": ["src/**", "test/**", "vitest.config.ts"],
+      "outputs": [],
+      "cache": false,
+      "env": ["ONEC_TRADE_V11_5_URL", "ONEC_BP_V3_0_URL", "HTTP_PROXY"]
+    },
+    "test:integration:write": {
+      "dependsOn": ["^build", "test:integration:live"],
+      "inputs": ["src/**", "test/**", "vitest.config.ts"],
+      "outputs": [],
+      "cache": false,
+      "env": ["ONEC_TESTS_ALLOW_WRITES", "ONEC_TRADE_V11_5_URL", "ONEC_BP_V3_0_URL", "HTTP_PROXY"]
+    },
+    "test:e2e": {
+      "dependsOn": ["build"],
+      "inputs": ["src/**", "test/**", "vitest.config.ts"],
+      "outputs": []
+    },
+    "package:lint": {
+      "dependsOn": ["build"],
+      "inputs": ["dist/**", "package.json"],
+      "outputs": []
+    }
+  }
+}

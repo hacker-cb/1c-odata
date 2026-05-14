@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="3.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="StandardODATA" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <EntityType Name="Catalog_Валюты">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+      </EntityType>
+      <EntityType Name="Constant_ОсновнаяВалюта">
+        <Key><PropertyRef Name="SurrogateKey"/></Key>
+        <Property Name="SurrogateKey" Type="Edm.Int32" Nullable="false"/>
+        <Property Name="Value_Key" Type="Edm.Guid" Nullable="true"/>
+        <NavigationProperty Name="Value" Relationship="StandardODATA.Const_Value" FromRole="Source" ToRole="Target"/>
+      </EntityType>
+      <Association Name="Const_Value">
+        <End Role="Source" Type="StandardODATA.Constant_ОсновнаяВалюта" Multiplicity="*"/>
+        <End Role="Target" Type="StandardODATA.Catalog_Валюты" Multiplicity="0..1"/>
+      </Association>
+      <EntityContainer Name="StandardODATA" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="Catalog_Валюты" EntityType="StandardODATA.Catalog_Валюты"/>
+        <EntitySet Name="Constant_ОсновнаяВалюта" EntityType="StandardODATA.Constant_ОсновнаяВалюта"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

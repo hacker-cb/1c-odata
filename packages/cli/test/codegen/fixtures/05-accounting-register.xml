@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="3.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="StandardODATA" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <EntityType Name="AccountingRegister_Хозрасчетный">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="StandardODATA" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="AccountingRegister_Хозрасчетный" EntityType="StandardODATA.AccountingRegister_Хозрасчетный"/>
+        <FunctionImport Name="DrCrTurnovers" m:HttpMethod="GET" IsBindable="true" EntitySetPath="AccountingRegister_Хозрасчетный">
+          <Parameter Name="StartDate" Type="Edm.DateTime" Nullable="true" Mode="In"/>
+          <Parameter Name="EndDate" Type="Edm.DateTime" Nullable="true" Mode="In"/>
+        </FunctionImport>
+        <FunctionImport Name="ExtDimensions" m:HttpMethod="GET" IsBindable="true" EntitySetPath="AccountingRegister_Хозрасчетный">
+          <Parameter Name="Account_Key" Type="Edm.Guid" Nullable="true" Mode="In"/>
+        </FunctionImport>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>

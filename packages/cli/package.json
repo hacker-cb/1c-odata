@@ -1,0 +1,55 @@
+{
+  "name": "@1c-odata/cli",
+  "version": "0.0.0",
+  "description": "CLI for 1c-odata: fetch metadata + generate TypeScript types",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "1c-odata": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./codegen": {
+      "types": "./dist/codegen/index.d.ts",
+      "default": "./dist/codegen/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.21.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "prepare": "pnpm build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:unit": "vitest run --exclude \"test/integration/**\" --exclude \"test/e2e/**\"",
+    "test:integration:offline": "vitest run test/codegen/integration",
+    "test:integration:live": "echo no live integration in cli && exit 0",
+    "test:integration:write": "echo no write integration in cli && exit 0",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "package:lint": "publint && attw --pack . --ignore-rules no-resolution cjs-resolves-to-esm"
+  },
+  "dependencies": {
+    "@1c-odata/client": "workspace:*",
+    "c12": "^3.3.4",
+    "commander": "^14.0.3",
+    "fast-xml-parser": "^5.7.3",
+    "micromatch": "^4.0.8"
+  },
+  "devDependencies": {
+    "@types/micromatch": "^4.0.10",
+    "msw": "^2.14.3"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

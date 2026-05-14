@@ -1,0 +1,20 @@
+name: Setup
+description: Install pnpm, set up Node 22 with pnpm cache, and run `pnpm install --frozen-lockfile`.
+
+# Composite action — extracted from the 4-step boilerplate that was repeated in
+# every CI job. Centralises Node version, install flags, and the pnpm cache
+# config in one place. Callers still need `actions/checkout@v5` as their FIRST
+# step (the workflow checkout must produce this action's file on disk before
+# `uses: ./.github/actions/setup` can resolve).
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v5
+      with:
+        node-version: 22
+        cache: pnpm
+    - name: Install
+      shell: bash
+      run: pnpm install --frozen-lockfile
