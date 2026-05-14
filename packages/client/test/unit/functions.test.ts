@@ -1,4 +1,4 @@
-import { BasicAuth, ODataV3Client } from '@1c-odata/client'
+import { BasicAuth, InvalidArgumentError, ODataV3Client } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -30,6 +30,23 @@ describe('serializeArgs', () => {
   })
   it('returns empty string for {}', () => {
     expect(serializeArgs({}, 'Europe/Moscow')).toBe('')
+  })
+  it('throws InvalidArgumentError on NaN argument', () => {
+    expect(() => serializeArgs({ Сумма: Number.NaN }, 'Europe/Moscow')).toThrow(InvalidArgumentError)
+  })
+  it('throws InvalidArgumentError on +Infinity argument', () => {
+    expect(() => serializeArgs({ Top: Number.POSITIVE_INFINITY }, 'Europe/Moscow')).toThrow(InvalidArgumentError)
+  })
+  it('throws InvalidArgumentError on -Infinity argument', () => {
+    expect(() => serializeArgs({ Delta: Number.NEGATIVE_INFINITY }, 'Europe/Moscow')).toThrow(InvalidArgumentError)
+  })
+  it('InvalidArgumentError carries the offending arg key as `argument`', () => {
+    try {
+      serializeArgs({ Сумма: Number.NaN }, 'Europe/Moscow')
+    } catch (e) {
+      expect(e).toBeInstanceOf(InvalidArgumentError)
+      expect((e as InvalidArgumentError).argument).toBe('Сумма')
+    }
   })
 })
 
