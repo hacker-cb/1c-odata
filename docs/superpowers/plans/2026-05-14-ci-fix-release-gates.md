@@ -26,7 +26,7 @@
 
 - [ ] **Step 1: Заменить шаг `CI gates` в `release.yml`**
 
-В файле сейчас:
+Before (baseline — это состояние `release.yml` до начала работы по этому PR; в текущем `release.yml` уже **не такое**, см. итоговый блок ниже):
 ```yaml
       - name: CI gates
         run: pnpm turbo typecheck test:unit test:integration:offline build package:lint

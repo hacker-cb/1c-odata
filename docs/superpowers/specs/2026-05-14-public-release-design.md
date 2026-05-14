@@ -16,7 +16,7 @@
 
 3. **`@1c-odata/cli#test:integration:offline`** — vitest exit code ≠ 0 при PASS всех тестов. Та же гонка с другой стороны.
 
-**Корень пунктов 2-3.** На `release.yml` одна команда `pnpm turbo typecheck test:unit test:integration:offline build package:lint` запускала все 5 tasks параллельно под единым `^build` barrier — turbo планирует независимые tasks одного workspace в параллель. У `@1c-odata/cli` `test:unit` и `test:integration:offline` оба вызывают vitest на одном пакете, и параллельно дерутся за processшs-shared state. На `ci.yml` те же tasks идут отдельными шагами (`pnpm turbo test:unit` → `pnpm turbo test:integration:offline`) → последовательно, без гонки → зелёные на том же commit'е.
+**Корень пунктов 2-3.** На `release.yml` одна команда `pnpm turbo typecheck test:unit test:integration:offline build package:lint` запускала все 5 tasks параллельно под единым `^build` barrier — turbo планирует независимые tasks одного workspace в параллель. У `@1c-odata/cli` `test:unit` и `test:integration:offline` оба вызывают vitest на одном пакете, и параллельно дерутся за process-wide shared state. На `ci.yml` те же tasks идут отдельными шагами (`pnpm turbo test:unit` → `pnpm turbo test:integration:offline`) → последовательно, без гонки → зелёные на том же commit'е.
 
 Фикс — две правки в `release.yml`: (а) `--filter='./packages/*'` (исключает `basic-example`), (б) разбить combined `pnpm turbo …` на отдельные `name:` шаги (mirror `ci.yml`).
 
@@ -26,11 +26,9 @@
 
 ### Этап 1 — починка CI (блокер)
 
-**1.1. Исключить `examples/*` из release CI gates.**
+**1.1. Добавить `--filter='./packages/*'` ко всем turbo вызовам в `release.yml` и `ci.yml`.**
 
-В `.github/workflows/release.yml` и `.github/workflows/ci.yml` (job `lint-and-typecheck` + `test-and-build`) поменять команды turbo на форму с `--filter='./packages/*'`. Examples проверяются отдельно в `test-example` job (под live секретами) — он уже использует `pnpm --filter basic-example`, паттерн совпадает.
-
-Конкретно меняется:
+Включает (`ci.yml` jobs `lint-and-typecheck` + `test-and-build`, плюс `release.yml`):
 - `pnpm turbo typecheck` → `pnpm turbo typecheck --filter='./packages/*'`
 - `pnpm turbo test:unit` → `pnpm turbo test:unit --filter='./packages/*'`
 - `pnpm turbo test:integration:offline` → `pnpm turbo test:integration:offline --filter='./packages/*'`
@@ -38,15 +36,13 @@
 - `pnpm turbo package:lint` → `pnpm turbo package:lint --filter='./packages/*'`
 - `pnpm turbo test:e2e` → `pnpm turbo test:e2e --filter='./packages/*'`
 
+`examples/basic` исключён из release/PR gates (паттерн совпадает с `pnpm-workspace.yaml`, где `packages/*` и `examples/*` уже разделены). Сам пример продолжает проверяться в выделенном `test-example` job под live секретами, который использует `pnpm --filter basic-example` напрямую.
+
 Альтернативу с `turbo.json` `pipeline` исключением через workspace конфиг отбросил — менее explicit, сложнее найти при чтении workflow.
 
-**1.2. Починить `cli/test/unit/config.test.ts` (.env.local тесты).**
+**1.2. Разбить combined `pnpm turbo …` в `release.yml` на отдельные `name:` шаги (mirror `ci.yml`).**
 
-Подход: `systematic-debugging`. Сначала локально воспроизвести — `pnpm -F @1c-odata/cli vitest run test/unit/config.test.ts`. Если зелёный локально — значит зависимость от внешнего `.env.local` в repo root (он gitignored, но локально у Pavel'а присутствует — попадает в process.env через какую-то связку). Корректировка теста: явно изолировать cwd / `process.env` в `beforeEach/afterEach`, не полагаться на отсутствие `.env.local` сверху.
-
-**1.3. Починить exit-code-2 в `cli/test/integration:offline`.**
-
-Скорее всего unfulfilled promise / open handle. Вариант: запустить с `--reporter=verbose --no-file-parallelism` и `process._getActiveHandles()` в teardown. Если handle leak — закрыть. Если ошибка в process.exit hook — починить.
+Это устраняет parallel-race между `@1c-odata/cli#test:unit` и `@1c-odata/cli#test:integration:offline`, описанную в разделе «Корень пунктов 2-3» выше. Содержательной правки тестов не требуется — гонка возникала именно из-за того, как turbo планировал tasks под одной командой.
 
 ### Этап 2 — npm metadata + per-package README/LICENSE
 
