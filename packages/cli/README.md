@@ -7,7 +7,7 @@ Two binaries for [`@1c-odata/client`](https://www.npmjs.com/package/@1c-odata/cl
 
 Codegen library is also exposed at [`@1c-odata/cli/codegen`](https://github.com/hacker-cb/1c-odata/tree/master/packages/cli/src/codegen) for programmatic use.
 
-Pure ESM. Node ≥ 22.21.
+Pure ESM. Node ≥ 22.21.0.
 
 > ⚠️ **v0.x — pre-release.** API is unstable; see [STABILITY.md](https://github.com/hacker-cb/1c-odata/blob/master/STABILITY.md).
 

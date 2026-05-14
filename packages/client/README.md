@@ -2,7 +2,7 @@
 
 Typed runtime for the 1С:Enterprise OData V3 interface — `ODataV3Client`, query builder, filter DSL, value-storage helpers, and register helpers.
 
-Server-side only. Pure ESM. Node ≥ 22.21.
+Server-side only. Pure ESM. Node ≥ 22.21.0.
 
 > ⚠️ **v0.x — pre-release.** API is unstable; see [STABILITY.md](https://github.com/hacker-cb/1c-odata/blob/master/STABILITY.md).
 
