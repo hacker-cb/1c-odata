@@ -5,7 +5,7 @@
   "fixed": [],
   "linked": [["@1c-odata/client", "@1c-odata/cli"]],
   "access": "public",
-  "baseBranch": "dev",
+  "baseBranch": "master",
   "updateInternalDependencies": "patch",
   "ignore": ["basic-example"]
 }

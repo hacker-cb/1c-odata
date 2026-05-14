@@ -2,6 +2,31 @@
   "name": "@1c-odata/client",
   "version": "0.0.0",
   "type": "module",
+  "description": "Type-safe OData V3 client for 1С:Enterprise 8 — query builder, filter DSL, register helpers.",
+  "keywords": [
+    "1c",
+    "1c-enterprise",
+    "odata",
+    "odata-v3",
+    "typescript",
+    "client",
+    "query-builder"
+  ],
+  "author": "Pavel Sokolov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hacker-cb/1c-odata.git",
+    "directory": "packages/client"
+  },
+  "homepage": "https://github.com/hacker-cb/1c-odata#readme",
+  "bugs": {
+    "url": "https://github.com/hacker-cb/1c-odata/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -1,8 +1,27 @@
 {
   "name": "@1c-odata/cli",
   "version": "0.0.0",
-  "description": "CLI for 1c-odata: fetch metadata + generate TypeScript types",
+  "description": "CLI for @1c-odata/client: fetch 1С EDMX metadata and generate TypeScript types.",
+  "keywords": [
+    "1c",
+    "1c-enterprise",
+    "odata",
+    "odata-v3",
+    "typescript",
+    "codegen",
+    "cli"
+  ],
+  "author": "Pavel Sokolov",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hacker-cb/1c-odata.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/hacker-cb/1c-odata#readme",
+  "bugs": {
+    "url": "https://github.com/hacker-cb/1c-odata/issues"
+  },
   "type": "module",
   "bin": {
     "1c-odata": "./dist/cli.js"
@@ -50,6 +69,7 @@
     "msw": "^2.14.3"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   }
 }
