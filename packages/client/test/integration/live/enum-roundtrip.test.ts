@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadMetadataIndex } from '@1c-odata/client'
@@ -11,6 +10,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 // sources the canonical member list from
 // MetadataIndex.enums.СпособыУстановкиКурсаВалюты and asserts the live wire
 // value falls inside that set.
+//
+// Fail-loud (not skip) when the fixture is missing: a silent skip masks the
+// CI dependency on `pnpm -F basic-example generate`. If you hit this locally,
+// run that command first.
 const METADATA_PATH = join(__dirname, '../../../../../examples/basic/generated/default/__metadata.json')
 
 const ENUM_NAME = 'СпособыУстановкиКурсаВалюты'
@@ -22,13 +25,22 @@ for (const { fixture, profile } of activeFixtures()) {
   // for this regression test. Keep narrow.
   if (!profile.id.startsWith('trade')) continue
 
-  describe.skipIf(!existsSync(METADATA_PATH))(`live enum roundtrip: ${fixture.id}`, () => {
+  describe(`live enum roundtrip: ${fixture.id}`, () => {
     let client: ReturnType<typeof makeClient>
     let memberNames: Set<string>
 
     beforeAll(async () => {
       client = makeClient(fixture)
-      const idx = await loadMetadataIndex(METADATA_PATH)
+      // loadMetadataIndex throws ENOENT with the absolute path baked into the
+      // error message when the fixture is missing — we wrap to add the
+      // regeneration hint.
+      const idx = await loadMetadataIndex(METADATA_PATH).catch((cause: unknown) => {
+        throw new Error(
+          `Metadata fixture missing at ${METADATA_PATH}. ` +
+            `Run 'pnpm -F basic-example generate' first (offline; uses committed metadata/default.xml).`,
+          { cause },
+        )
+      })
       const enumDecl = idx.enums?.[ENUM_NAME]
       if (!enumDecl) {
         throw new Error(
