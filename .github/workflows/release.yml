@@ -55,6 +55,7 @@ jobs:
       - name: Package lint (gate 5)
         run: pnpm turbo package:lint --filter='./packages/*'
       - name: Create Release Pull Request or Publish to npm
+        id: changesets
         uses: changesets/action@v1
         with:
           publish: pnpm changeset publish
@@ -64,3 +65,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: true
+      # changesets/action's `title` input is a static string evaluated before
+      # `changeset version` runs, so the new version isn't yet known there.
+      # Read it from the just-pushed release branch and rewrite the PR title.
+      # Skipped on publish runs (no PR exists) and when there's nothing to release.
+      # @1c-odata/client and @1c-odata/cli are linked in .changeset/config.json,
+      # so reading the client version is sufficient.
+      - name: Rewrite Release PR title with version
+        if: steps.changesets.outputs.hasChangesets == 'true' && steps.changesets.outputs.published != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ steps.changesets.outputs.pullRequestNumber }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PR_NUM" ]; then exit 0; fi
+          VERSION=$(gh api "repos/${{ github.repository }}/contents/packages/client/package.json?ref=changeset-release/master" --jq '.content' | base64 -d | jq -r '.version')
+          gh pr edit "$PR_NUM" --title "chore(release): v${VERSION}"
