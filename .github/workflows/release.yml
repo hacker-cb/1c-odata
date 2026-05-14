@@ -70,9 +70,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # setup-node@v5 with `registry-url` writes `/home/runner/work/_temp/.npmrc`
+          # containing `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` and
+          # sets `NPM_CONFIG_USERCONFIG` to that path. Without `NODE_AUTH_TOKEN`
+          # in this step's env the placeholder stays empty when npm publishes,
+          # so the registry receives an unauthed request and answers 404 (not 401)
+          # for the scoped path. changesets/action's own .npmrc creation is
+          # silently overridden by NPM_CONFIG_USERCONFIG — populating the
+          # setup-node path is what actually works. See changesets/action#98.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           # TEMP: provenance disabled for first release diagnostic — `npm
-          # publish --provenance` против нового scope без Trusted Publisher
-          # setup даёт `404 Not Found` на PUT, при том что без provenance
-          # тот же токен публикует успешно. Re-enable после первой
-          # публикации, когда Trusted Publisher настроен на @1c-odata.
+          # publish --provenance` against a fresh scope without a configured
+          # Trusted Publisher returns 404 on PUT. Re-enable after 0.1.0 lands
+          # and Trusted Publisher is wired up on both packages.
           # NPM_CONFIG_PROVENANCE: true
