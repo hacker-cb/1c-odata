@@ -31,8 +31,23 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - name: Install
         run: pnpm install --frozen-lockfile
-      - name: CI gates
-        run: pnpm turbo typecheck test:unit test:integration:offline build package:lint --filter='./packages/*'
+      # CI gates split into separate turbo invocations (mirrors ci.yml).
+      # A combined `pnpm turbo typecheck test:unit ...` lets turbo run those
+      # tasks in parallel under one `^build` barrier; the parallel
+      # @1c-odata/cli vitest runs (test:unit + test:integration:offline)
+      # then race on shared global state — msw setupServer interception,
+      # process.env, OS tmpdir — producing flake that ci.yml's
+      # one-task-per-step structure avoids.
+      - name: Typecheck (gate 1)
+        run: pnpm turbo typecheck --filter='./packages/*'
+      - name: Unit tests (gate 2)
+        run: pnpm turbo test:unit --filter='./packages/*'
+      - name: Offline integration tests (gate 3)
+        run: pnpm turbo test:integration:offline --filter='./packages/*'
+      - name: Build (gate 4)
+        run: pnpm turbo build --filter='./packages/*'
+      - name: Package lint (gate 5)
+        run: pnpm turbo package:lint --filter='./packages/*'
       - name: Create Release Pull Request or Publish to npm
         uses: changesets/action@v1
         with:
