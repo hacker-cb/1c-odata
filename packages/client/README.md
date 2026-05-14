@@ -15,6 +15,8 @@ pnpm add -D @1c-odata/cli   # generates types from $metadata
 
 ## Quick start
 
+Assuming this file lives at `src/main.ts` (so `../generated/` and `../1c-odata.config.js` resolve to the sibling codegen output and project config):
+
 ```ts
 import { clientOptionsFromConnection, ODataV3Client } from '@1c-odata/client'
 import { and, any } from '@1c-odata/client/filter'
