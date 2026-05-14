@@ -48,6 +48,18 @@ jobs:
         run: pnpm turbo build --filter='./packages/*'
       - name: Package lint (gate 5)
         run: pnpm turbo package:lint --filter='./packages/*'
+      # TEMP DEBUG: verify GitHub secret NPM_TOKEN matches the local token
+      # that works (`npm whoami` → hacker-cb, `npm publish --dry-run` OK).
+      # GitHub masks the secret value in logs but not derived numbers or
+      # short fragments that don't match the full secret string. Expected
+      # local length: 41. Suffix check: last 4 chars of the working token.
+      - name: DEBUG NPM_TOKEN integrity
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "len=${#NPM_TOKEN}"
+          echo "prefix4=${NPM_TOKEN:0:4}"
+          echo "suffix4=${NPM_TOKEN: -4}"
       - name: Create Release Pull Request or Publish to npm
         uses: changesets/action@v1
         with:
