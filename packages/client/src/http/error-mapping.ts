@@ -16,7 +16,7 @@ import {
  *   412                         → ConcurrencyError
  *   400/404/405/406/411/501/etc → HTTPError (generic)
  *
- * @internal — wired into `transport.ts`; not part of the public surface.
+ * @internal — wired into `http/transport.ts`; not part of the public surface.
  * Consumers should catch the typed error thrown by `request()` / `requestStream()`
  * instead of calling this directly.
  */
