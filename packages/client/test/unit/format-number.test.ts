@@ -22,6 +22,7 @@ describe('formatNumberLiteral', () => {
       expect(e).toBeInstanceOf(InvalidArgumentError)
       expect((e as InvalidArgumentError).argument).toBe('Amount')
       expect((e as Error).message).toMatch(/finite/i)
+      expect((e as Error).message).toContain('Amount')
     }
   })
 
