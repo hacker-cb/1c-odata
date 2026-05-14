@@ -1,5 +1,6 @@
 // packages/client/src/functions.ts
 import { InvalidArgumentError } from './errors.js'
+import { formatNumberLiteral } from './format-number.js'
 import { formatInZone } from './timezone.js'
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -51,16 +52,16 @@ export function serializeArgs(args: Record<string, unknown>, serverTimezone: str
   const parts: string[] = []
   for (const [k, v] of Object.entries(args)) {
     if (v === undefined) continue
-    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(formatValue(v, serverTimezone))}`)
+    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(formatValue(v, serverTimezone, k))}`)
   }
   return parts.join('&')
 }
 
-function formatValue(v: unknown, serverTimezone: string): string {
+function formatValue(v: unknown, serverTimezone: string, argument: string): string {
   if (v === null) return 'null'
   if (typeof v === 'string') return `'${v.replace(/'/g, "''")}'`
   if (typeof v === 'boolean') return v ? 'true' : 'false'
-  if (typeof v === 'number') return String(v)
+  if (typeof v === 'number') return formatNumberLiteral(v, argument)
   if (typeof v === 'bigint') return String(v)
   if (v instanceof Date) {
     return `datetime'${formatInZone(v, serverTimezone)}'`

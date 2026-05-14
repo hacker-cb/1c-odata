@@ -473,17 +473,6 @@ interface ConsoleHookOptions {
  */
 declare function consoleHook(opts?: ConsoleHookOptions): RequestHooks;
 //#endregion
-//#region src/http/error-mapping.d.ts
-/**
- * Map an HTTP error response to a typed \`ODataError\` subclass.
- * Decision tree:
- *   500 + body.code "-1"        → BusinessError
- *   401                         → PermissionError (regardless of code; "20" is typical)
- *   412                         → ConcurrencyError
- *   400/404/405/406/411/501/etc → HTTPError (generic)
- */
-declare function mapResponseToError(status: number, statusText: string, headers: Record<string, string>, body: string): Promise<ODataError>;
-//#endregion
 //#region src/load-metadata-index.d.ts
 /**
  * Load and runtime-validate a codegen-emitted \`__metadata.json\` file.
@@ -569,6 +558,6 @@ interface ValueStorage {
   readonly base64Data: string;
 }
 //#endregion
-export { type AuthOptions, type BalanceArgs, BasicAuth, type BasicAuthOptions, BusinessError, type CliConfig, type ClientOptions, ConcurrencyError, type Connection, type ConsoleHookOptions, type DataShape, type DrCrTurnoversArgs, EMPTY_GUID, type Entity, type EntityKey, type EntitySchema, type ErrorFormat, type ExtDimensionsArgs, type FieldExpr, type FieldExprMap, type FilterExpression, type Guid, HTTPError, type HTTPErrorOptions, InvalidArgumentError, type InvalidArgumentErrorOptions, type MetadataIndex, type MutationOptions, NetworkError, ODataError, type ODataErrorBody, type ODataErrorOptions, ODataV3Client, type ODataV3ClientOptions, type ODataV3FunctionsBase, ONEC_EMPTY_DATE, ParseError, PermissionError, type PropertySchema, QueryBuilder, type QueryState, type ReadStreamResult, type RecordsWithExtDimensionsArgs, RegisterHelper, type RequestEvent, type RequestHooks, type RequestOptions, type ResponseEvent, type RetryPolicy, type SliceArgs, TimeoutError, type TimeoutErrorOptions, type TurnoversArgs, V3DocumentHandle, V3EntityHandle, V3EntitySetHandle, V3QueryBuilder, ValidationError, type ValidationErrorOptions, type ValidationIssue, type ValidationResult, type ValueStorage, type WithInstanceRef, type WriteStreamInput, clientOptionsFromConnection, connectionAuth, consoleHook, defineConfig, formatInZone, loadMetadataIndex, mapResponseToError, normalizeBaseUrl, parseConnectionUrl, parseInZone, toFilterString, validateConnection, validateEntity };
+export { type AuthOptions, type BalanceArgs, BasicAuth, type BasicAuthOptions, BusinessError, type CliConfig, type ClientOptions, ConcurrencyError, type Connection, type ConsoleHookOptions, type DataShape, type DrCrTurnoversArgs, EMPTY_GUID, type Entity, type EntityKey, type EntitySchema, type ErrorFormat, type ExtDimensionsArgs, type FieldExpr, type FieldExprMap, type FilterExpression, type Guid, HTTPError, type HTTPErrorOptions, InvalidArgumentError, type InvalidArgumentErrorOptions, type MetadataIndex, type MutationOptions, NetworkError, ODataError, type ODataErrorBody, type ODataErrorOptions, ODataV3Client, type ODataV3ClientOptions, type ODataV3FunctionsBase, ONEC_EMPTY_DATE, ParseError, PermissionError, type PropertySchema, QueryBuilder, type QueryState, type ReadStreamResult, type RecordsWithExtDimensionsArgs, RegisterHelper, type RequestEvent, type RequestHooks, type RequestOptions, type ResponseEvent, type RetryPolicy, type SliceArgs, TimeoutError, type TimeoutErrorOptions, type TurnoversArgs, V3DocumentHandle, V3EntityHandle, V3EntitySetHandle, V3QueryBuilder, ValidationError, type ValidationErrorOptions, type ValidationIssue, type ValidationResult, type ValueStorage, type WithInstanceRef, type WriteStreamInput, clientOptionsFromConnection, connectionAuth, consoleHook, defineConfig, formatInZone, loadMetadataIndex, normalizeBaseUrl, parseConnectionUrl, parseInZone, toFilterString, validateConnection, validateEntity };
 //# sourceMappingURL=index.d.ts.map"
 `;

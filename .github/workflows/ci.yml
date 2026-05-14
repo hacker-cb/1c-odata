@@ -218,6 +218,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
+      - name: Generate example types (needed by enum-roundtrip live test)
+        # `test:integration:write` turbo-depends on `test:integration:live`, which
+        # includes the enum-roundtrip live test that loads
+        # `examples/basic/generated/default/__metadata.json`. `examples/basic/generated/`
+        # is gitignored and `test-write` runs in its own fresh checkout (no
+        # shared workspace with `test-live`), so the fixture must be regenerated
+        # here too. Offline; reads committed `metadata/default.xml`.
+        run: pnpm --filter basic-example run generate
       - name: Write integration tests (gate 9)
         run: pnpm turbo test:integration:write --filter='./packages/*'
         env:

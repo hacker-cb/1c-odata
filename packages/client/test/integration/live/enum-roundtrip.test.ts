@@ -1,7 +1,6 @@
-import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadMetadataIndex } from '@1c-odata/client'
+import { loadMetadataIndex, ParseError } from '@1c-odata/client'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { activeFixtures, makeClient } from '../helpers.js'
 
@@ -11,6 +10,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 // sources the canonical member list from
 // MetadataIndex.enums.СпособыУстановкиКурсаВалюты and asserts the live wire
 // value falls inside that set.
+//
+// Fail-loud (not skip) when the fixture is missing: a silent skip masks the
+// CI dependency on `pnpm -F basic-example generate`. If you hit this locally,
+// run that command first.
 const METADATA_PATH = join(__dirname, '../../../../../examples/basic/generated/default/__metadata.json')
 
 const ENUM_NAME = 'СпособыУстановкиКурсаВалюты'
@@ -22,13 +25,27 @@ for (const { fixture, profile } of activeFixtures()) {
   // for this regression test. Keep narrow.
   if (!profile.id.startsWith('trade')) continue
 
-  describe.skipIf(!existsSync(METADATA_PATH))(`live enum roundtrip: ${fixture.id}`, () => {
+  describe(`live enum roundtrip: ${fixture.id}`, () => {
     let client: ReturnType<typeof makeClient>
     let memberNames: Set<string>
 
     beforeAll(async () => {
       client = makeClient(fixture)
-      const idx = await loadMetadataIndex(METADATA_PATH)
+      // loadMetadataIndex wraps every failure in ParseError — for ENOENT (file
+      // truly missing) we want a hint pointing at `pnpm generate`; for everything
+      // else (malformed JSON, schema mismatch) we must surface the original
+      // ParseError so the real diagnosis isn't masked.
+      const idx = await loadMetadataIndex(METADATA_PATH).catch((err: unknown) => {
+        const fsCause = err instanceof ParseError ? (err.cause as { code?: string } | undefined) : undefined
+        if (fsCause?.code === 'ENOENT') {
+          throw new Error(
+            `Metadata fixture missing at ${METADATA_PATH}. ` +
+              `Run 'pnpm -F basic-example generate' first (offline; uses committed metadata/default.xml).`,
+            { cause: err },
+          )
+        }
+        throw err
+      })
       const enumDecl = idx.enums?.[ENUM_NAME]
       if (!enumDecl) {
         throw new Error(

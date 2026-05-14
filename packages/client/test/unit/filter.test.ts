@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { InvalidArgumentError } from '../../src/errors.js'
 import { all, and, any, not, or, raw } from '../../src/filter.js'
 import { compileFilter } from '../../src/query/filter-internal.js'
 
@@ -146,5 +147,60 @@ describe('FilterBuilder — polymorphic-ref ops', () => {
 describe('FilterBuilder — raw', () => {
   it('raw passes through', () => {
     expect(compileFilter<SampleEntity>('Europe/Moscow', () => raw('exotic_call() gt 0'))).toBe('exotic_call() gt 0')
+  })
+})
+
+describe('FilterBuilder — numeric literal validation', () => {
+  it('throws InvalidArgumentError when filtering by NaN', () => {
+    expect(() => compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.eq(Number.NaN))).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
+  it('throws InvalidArgumentError when filtering by +Infinity', () => {
+    expect(() => compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.gt(Number.POSITIVE_INFINITY))).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
+  it('throws InvalidArgumentError when filtering by -Infinity', () => {
+    expect(() => compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.lt(Number.NEGATIVE_INFINITY))).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
+  it('still accepts finite numbers (regression guard)', () => {
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.eq(0))).toBe('Сумма eq 0')
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.gt(-1.5))).toBe('Сумма gt -1.5')
+  })
+
+  it('throws InvalidArgumentError when NaN is used as `add`/`sub` operand', () => {
+    expect(() => compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.add(Number.NaN).eq(0))).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
+  it('throws InvalidArgumentError when NaN is passed to `substring(start)`', () => {
+    expect(() => compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.substring(Number.NaN).eq('x'))).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
+  it('throws InvalidArgumentError when Infinity is passed to `substring(start, length)`', () => {
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.substring(0, Number.POSITIVE_INFINITY).eq('x')),
+    ).toThrow(InvalidArgumentError)
+  })
+
+  it('throws InvalidArgumentError when NaN is passed to `dateadd(amount)`', () => {
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Date.dateadd('day', Number.NaN).gt(new Date(0))),
+    ).toThrow(InvalidArgumentError)
+  })
+
+  it('still emits a valid substring with finite args (regression guard)', () => {
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.substring(1, 3).eq('abc'))).toBe(
+      `substring(Code, 1, 3) eq 'abc'`,
+    )
   })
 })
