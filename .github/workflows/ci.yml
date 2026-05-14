@@ -194,7 +194,7 @@ jobs:
         # `metadata/default.xml`), so it's safe to do before `test:integration:live`.
         run: pnpm --filter basic-example run generate
       - name: Live integration tests (gate 7)
-        run: pnpm turbo test:integration:live
+        run: pnpm turbo test:integration:live --filter='./packages/*'
         env:
           ONEC_TRADE_V11_5_URL: ${{ secrets.ONEC_TRADE_V11_5_URL }}
           ONEC_BP_V3_0_URL: ${{ secrets.ONEC_BP_V3_0_URL }}
@@ -219,7 +219,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
       - name: Write integration tests (gate 9)
-        run: pnpm turbo test:integration:write
+        run: pnpm turbo test:integration:write --filter='./packages/*'
         env:
           ONEC_TESTS_ALLOW_WRITES: 'true'
           ONEC_TRADE_V11_5_URL: ${{ secrets.ONEC_TRADE_V11_5_URL }}
