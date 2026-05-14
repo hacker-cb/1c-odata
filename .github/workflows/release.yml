@@ -56,11 +56,20 @@ jobs:
         run: pnpm turbo package:lint --filter='./packages/*'
       # npm Trusted Publishing (OIDC) requires npm >= 11.5.1. Node 22 LTS
       # ships with npm 10.9.x, which falls back to legacy auth and fails with
-      # ENEEDAUTH on `npm publish`. Upgrade in-place before the publish step.
-      # `--force` works around npm's self-upgrade bug where the old client
-      # unlinks dependencies mid-install (MODULE_NOT_FOUND 'promise-retry').
-      - name: Upgrade npm CLI for Trusted Publishing
-        run: npm install -g --force npm@latest
+      # ENEEDAUTH on `npm publish`.
+      #
+      # In-place self-upgrade (`npm i -g npm@latest`, even with `--force`)
+      # blows up with MODULE_NOT_FOUND because the old client unlinks bundled
+      # deps that its own rebuild step still requires. Install the new client
+      # into a separate prefix instead and prepend it to PATH via
+      # $GITHUB_PATH — the system npm stays untouched.
+      - name: Install npm@latest for Trusted Publishing
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/npm-latest" npm@latest --no-fund --no-audit --silent
+          echo "$RUNNER_TEMP/npm-latest/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Verify npm version
+        run: npm --version
       - name: Create Release Pull Request or Publish to npm
         id: changesets
         uses: changesets/action@v1
