@@ -152,7 +152,7 @@ Default branch — `dev` (через GitHub UI или `gh repo edit --default-br
 
 ## Риски и решения
 
-| Риск | Митigation |
+| Риск | Митигация |
 |---|---|
 | `--filter='./packages/*'` на Windows ломает glob | turbo поддерживает glob нативно; протестировано в `ci.yml` matrix. Если ломается — fallback на explicit list `--filter=@1c-odata/client --filter=@1c-odata/cli`. |
 | Tests 2-3 в этапе 1.2/1.3 окажутся flaky-on-CI-but-green-locally | Включить debug logs, запускать через `act` локально (GitHub Actions runner emulator). Если корень — `process.env.CI=true` change — изолировать через `beforeEach`. |
