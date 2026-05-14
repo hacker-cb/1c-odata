@@ -1,6 +1,6 @@
 {
   "name": "@1c-odata/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "CLI for @1c-odata/client: fetch 1С EDMX metadata and generate TypeScript types.",
   "keywords": [
     "1c",
