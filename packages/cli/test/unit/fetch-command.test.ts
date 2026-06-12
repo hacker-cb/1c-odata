@@ -2,11 +2,11 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { HTTPError, ODataError } from '@1c-odata/client'
+import * as metadata from '@1c-odata/metadata'
 import { HttpResponse, http } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runFetch } from '../../src/commands/fetch.js'
-import * as fetcher from '../../src/fetcher.js'
 
 const server = setupServer()
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
@@ -159,8 +159,8 @@ describe('runFetch', () => {
     expect((err as HTTPError).status).toBe(400)
   })
 
-  it('passes per-connection fetchTimeout to fetcher (override beats config default)', async () => {
-    const spy = vi.spyOn(fetcher, 'fetchMetadata').mockResolvedValueOnce('<edmx:Edmx/>')
+  it('passes per-connection fetchTimeout to fetchMetadataXml (override beats config default)', async () => {
+    const spy = vi.spyOn(metadata, 'fetchMetadataXml').mockResolvedValueOnce('<edmx:Edmx/>')
     await runFetch({
       cwd: tmp,
       config: {
@@ -181,7 +181,7 @@ describe('runFetch', () => {
   })
 
   it('falls back to config-level fetchTimeout when no per-connection override is set', async () => {
-    const spy = vi.spyOn(fetcher, 'fetchMetadata').mockResolvedValueOnce('<edmx:Edmx/>')
+    const spy = vi.spyOn(metadata, 'fetchMetadataXml').mockResolvedValueOnce('<edmx:Edmx/>')
     await runFetch({
       cwd: tmp,
       config: {

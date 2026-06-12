@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { EntitySchema, MetadataIndex } from '../../src/validate.js'
-import { transformDatesToWire } from '../../src/write-transform.js'
+import { bigintToStringReplacer, transformDatesToWire, transformDateValuesUntyped } from '../../src/write-transform.js'
 
 const TZ = 'Europe/Moscow'
 
@@ -85,5 +85,74 @@ describe('transformDatesToWire — dateMode=string', () => {
     const obj = { Date: new Date('2025-03-15T12:00:00Z'), Сумма: 100 }
     const out = transformDatesToWire(obj, documentX, TZ, baseMetadata, 'string')
     expect(out).toBe(obj) // same reference
+  })
+})
+
+describe('transformDatesToWire — fields missing from the schema (forward-compat)', () => {
+  it('applies the value heuristic to an undeclared field', () => {
+    const out = transformDatesToWire(
+      { НоваяДата: new Date('2025-03-15T12:00:00Z'), НовоеЧисло: 5 },
+      documentX,
+      TZ,
+      baseMetadata,
+      'date',
+    )
+    expect(out.НоваяДата).toBe('2025-03-15T15:00:00')
+    expect(out.НовоеЧисло).toBe(5)
+  })
+
+  it('does NOT sentinel null in an undeclared field', () => {
+    const out = transformDatesToWire({ НоваяДата: null }, documentX, TZ, baseMetadata, 'date')
+    expect(out.НоваяДата).toBeNull()
+  })
+})
+
+describe('transformDateValuesUntyped — schema-less value heuristic', () => {
+  it('converts a top-level Date to naive ISO in server tz', () => {
+    expect(transformDateValuesUntyped(new Date('2025-03-15T12:00:00Z'), TZ)).toBe('2025-03-15T15:00:00')
+  })
+
+  it('recurses into plain objects and arrays of objects', () => {
+    const out = transformDateValuesUntyped(
+      {
+        Date: new Date('2025-03-15T12:00:00Z'),
+        Товары: [{ Срок: new Date('2025-06-01T00:00:00Z'), Кол: 2 }],
+      },
+      TZ,
+    ) as Record<string, unknown>
+    expect(out.Date).toBe('2025-03-15T15:00:00')
+    expect((out.Товары as Record<string, unknown>[])[0]?.Срок).toBe('2025-06-01T03:00:00')
+    expect((out.Товары as Record<string, unknown>[])[0]?.Кол).toBe(2)
+  })
+
+  it('leaves null untouched (no sentinel without a schema)', () => {
+    const out = transformDateValuesUntyped({ Date: null }, TZ) as Record<string, unknown>
+    expect(out.Date).toBeNull()
+  })
+
+  it('leaves ISO-looking strings untouched (strings are never re-parsed)', () => {
+    const out = transformDateValuesUntyped({ Date: '2025-03-15T12:00:00' }, TZ) as Record<string, unknown>
+    expect(out.Date).toBe('2025-03-15T12:00:00')
+  })
+
+  it('passes primitives and exotic objects through unchanged', () => {
+    expect(transformDateValuesUntyped(42, TZ)).toBe(42)
+    expect(transformDateValuesUntyped('text', TZ)).toBe('text')
+    const map = new Map([['a', 1]])
+    expect(transformDateValuesUntyped(map, TZ)).toBe(map)
+  })
+
+  it('omits undefined object fields (matches JSON.stringify semantics)', () => {
+    const out = transformDateValuesUntyped({ a: undefined, b: 1 }, TZ) as Record<string, unknown>
+    expect(out).not.toHaveProperty('a')
+    expect(out.b).toBe(1)
+  })
+})
+
+describe('bigintToStringReplacer', () => {
+  it('serializes bigint values as decimal strings via JSON.stringify', () => {
+    expect(JSON.stringify({ BigNum: 123456789012345678901234n, N: 1 }, bigintToStringReplacer)).toBe(
+      '{"BigNum":"123456789012345678901234","N":1}',
+    )
   })
 })

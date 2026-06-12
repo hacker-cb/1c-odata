@@ -72,4 +72,33 @@ describe('e2e: generate against committed snapshots/trade_v11.5.xml', () => {
     )
     expect(docsIndex).not.toBe('export {}\n')
   }, 60_000)
+
+  it('--metadata-only emits only __metadata.json; switching modes invalidates smart-skip', async () => {
+    mkdirSync(`${project.tmp}/metadata`, { recursive: true })
+    copyFileSync(`${repoRoot}/snapshots/trade_v11.5.xml`, `${project.tmp}/metadata/trade.xml`)
+    const config = {
+      connections: {
+        trade: {
+          baseUrl: 'http://example.test/odata',
+          auth: { username: 'u', password: 'p' },
+          serverTimezone: 'Europe/Moscow',
+          codegen: { include: ['Catalog_Валюты'] },
+        },
+      },
+    }
+
+    await runGenerate({ cwd: project.tmp, cliVersion: '0.0.0-test', config, metadataOnly: true })
+    expect(existsSync(`${project.tmp}/generated/trade/__metadata.json`)).toBe(true)
+    expect(existsSync(`${project.tmp}/generated/trade/index.ts`)).toBe(false)
+    expect(existsSync(`${project.tmp}/generated/trade/catalogs`)).toBe(false)
+
+    // Same mode again → smart-skip leaves the tree untouched (no TS appears).
+    await runGenerate({ cwd: project.tmp, cliVersion: '0.0.0-test', config, metadataOnly: true })
+    expect(existsSync(`${project.tmp}/generated/trade/index.ts`)).toBe(false)
+
+    // Switching to full mode must invalidate the input-hash cache and emit TS.
+    await runGenerate({ cwd: project.tmp, cliVersion: '0.0.0-test', config })
+    expect(existsSync(`${project.tmp}/generated/trade/index.ts`)).toBe(true)
+    expect(existsSync(`${project.tmp}/generated/trade/catalogs/index.ts`)).toBe(true)
+  }, 60_000)
 })

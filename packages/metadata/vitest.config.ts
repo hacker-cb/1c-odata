@@ -13,6 +13,7 @@ export default defineConfig(({ mode }) => {
   return {
     test: {
       include: ['test/**/*.test.ts'],
+      setupFiles: ['./test/setup.ts'],
       environment: 'node',
       // Allow individual integration test files to produce zero suites when
       // their fixture's URL env var is unset (live tests gate on .env.local).

@@ -2,14 +2,14 @@ import { BasicAuth } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { fetchMetadata } from '../../src/fetcher.js'
+import { fetchMetadataXml } from '../../src/fetch.js'
 
 const server = setupServer()
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterAll(() => server.close())
 beforeEach(() => server.resetHandlers())
 
-describe('fetchMetadata', () => {
+describe('fetchMetadataXml', () => {
   it('GETs <baseUrl>/$metadata with Basic auth', async () => {
     let receivedAuth: string | null = null
     server.use(
@@ -21,7 +21,7 @@ describe('fetchMetadata', () => {
         })
       }),
     )
-    const xml = await fetchMetadata({
+    const xml = await fetchMetadataXml({
       baseUrl: 'http://example.test/odata',
       auth: BasicAuth({ username: 'u', password: 'p' }),
       timeout: 30_000,
@@ -35,7 +35,7 @@ describe('fetchMetadata', () => {
       http.get('http://example.test/odata/$metadata', () => HttpResponse.text('Unauthorized', { status: 401 })),
     )
     await expect(
-      fetchMetadata({
+      fetchMetadataXml({
         baseUrl: 'http://example.test/odata',
         auth: BasicAuth({ username: 'u', password: 'p' }),
         timeout: 30_000,
@@ -51,7 +51,7 @@ describe('fetchMetadata', () => {
         return HttpResponse.text('<edmx:Edmx/>', { status: 200 })
       }),
     )
-    await fetchMetadata({
+    await fetchMetadataXml({
       baseUrl: 'http://example.test/odata/',
       auth: BasicAuth({ username: 'u', password: 'p' }),
       timeout: 30_000,

@@ -2,7 +2,7 @@
 
 exports[`public surface — dist/index.d.ts snapshot > matches the committed snapshot 1`] = `
 "import { c as FieldExpr, l as FieldExprMap, s as toFilterString, u as FilterExpression } from "./filter-DqRK7ft-.js";
-import { A as NetworkError, B as BasicAuthOptions, C as BusinessError, D as HTTPErrorOptions, E as HTTPError, F as PermissionError, I as TimeoutError, L as TimeoutErrorOptions, M as ODataErrorBody, N as ODataErrorOptions, O as InvalidArgumentError, P as ParseError, R as AuthOptions, S as ResponseEvent, T as ErrorFormat, _ as MutationOptions, a as ValidationErrorOptions, b as RequestEvent, c as validateEntity, d as DataShape, f as connectionAuth, g as ClientOptions, h as validateConnection, i as ValidationError, j as ODataError, k as InvalidArgumentErrorOptions, l as CliConfig, m as parseConnectionUrl, n as MetadataIndex, o as ValidationIssue, p as defineConfig, r as PropertySchema, s as ValidationResult, t as EntitySchema, u as Connection, v as RequestOptions, w as ConcurrencyError, x as RequestHooks, y as RetryPolicy, z as BasicAuth } from "./validate-C_UhMEWZ.js";
+import { A as NetworkError, B as BasicAuthOptions, C as BusinessError, D as HTTPErrorOptions, E as HTTPError, F as PermissionError, I as TimeoutError, L as TimeoutErrorOptions, M as ODataErrorBody, N as ODataErrorOptions, O as InvalidArgumentError, P as ParseError, R as AuthOptions, S as ResponseEvent, T as ErrorFormat, _ as MutationOptions, a as ValidationErrorOptions, b as RequestEvent, c as validateEntity, d as DataShape, f as connectionAuth, g as ClientOptions, h as validateConnection, i as ValidationError, j as ODataError, k as InvalidArgumentErrorOptions, l as CliConfig, m as parseConnectionUrl, n as MetadataIndex, o as ValidationIssue, p as defineConfig, r as PropertySchema, s as ValidationResult, t as EntitySchema, u as Connection, v as RequestOptions, w as ConcurrencyError, x as RequestHooks, y as RetryPolicy, z as BasicAuth } from "./validate-BUFSQsAW.js";
 
 //#region src/functions.d.ts
 /**
@@ -362,14 +362,18 @@ declare class V3DocumentHandle {
 //#region src/client/v3-client.d.ts
 /**
  * V3-specific client options. Extends core's \`ClientOptions\` with optional
- * runtime validation hooks driven by the codegen-emitted \`__metadata.json\`.
+ * schema-driven behaviors powered by a runtime \`MetadataIndex\`.
  *
  * @public
  */
 interface ODataV3ClientOptions extends ClientOptions {
   /**
-   * Schema index loaded from \`__metadata.json\` (per-connection codegen
-   * artifact). Required when \`validateOnWrite\` is \`true\`.
+   * Runtime schema index. Any source conforming to the \`MetadataIndex\`
+   * contract works: the codegen-emitted \`__metadata.json\` (via
+   * \`loadMetadataIndex\`), an index built from a live \`$metadata\` at runtime
+   * (\`fetchMetadataIndex\` / \`buildMetadataIndex\` from \`@1c-odata/metadata\`),
+   * or a revived cache entry (\`parseMetadataIndex\`). Required when
+   * \`validateOnWrite\` is \`true\`.
    */
   metadataIndex?: MetadataIndex;
   /**
@@ -380,8 +384,18 @@ interface ODataV3ClientOptions extends ClientOptions {
   validateOnWrite?: boolean;
   /**
    * Override \`metadataIndex?.shape\` at runtime. Useful when running without
-   * codegen (no \`__metadata.json\`) but still want a non-default \`dateMode\`
-   * or \`int64Mode\` applied. Precedence: \`shape\` wins over \`metadataIndex.shape\`.
+   * any schema (no \`metadataIndex\`) but still wanting a non-default
+   * \`dateMode\` or \`int64Mode\` applied. Precedence: \`shape\` wins over
+   * \`metadataIndex.shape\`.
+   *
+   * @example
+   * \`\`\`ts
+   * // schema-less client that leaves DateTime wire strings untouched:
+   * const client = new ODataV3Client({
+   *   baseUrl, auth, serverTimezone: 'Europe/Moscow',
+   *   shape: { dateMode: 'string' },
+   * })
+   * \`\`\`
    *
    * @public
    */
@@ -394,6 +408,23 @@ interface ODataV3ClientOptions extends ClientOptions {
  * shapes \`client.functions.<EntitySet>.<Func>(args)\` access. Defaults to
  * \`ODataV3FunctionsBase\`, an open-ended index signature; with a real type from
  * \`@1c-odata/cli/codegen\` the call sites become fully typed.
+ *
+ * Works without codegen: construct with just \`baseUrl\` / \`auth\` /
+ * \`serverTimezone\` and query entity sets by name with
+ * \`query<UntypedEntity>(...)\`. Add a \`metadataIndex\` (file, runtime fetch, or
+ * cache — see \`ODataV3ClientOptions.metadataIndex\`) to enable schema-driven
+ * Int64 / ValueStorage handling and write validation.
+ *
+ * @example
+ * \`\`\`ts
+ * // schema-less (no codegen, no metadata):
+ * const client = new ODataV3Client({
+ *   baseUrl: 'http://1c.example.com/base/odata/standard.odata',
+ *   auth: BasicAuth({ username: 'user', password: 'pass' }),
+ *   serverTimezone: 'Europe/Moscow',
+ * })
+ * const { value } = await client.query<UntypedEntity>('Catalog_Валюты').top(5).get()
+ * \`\`\`
  *
  * @public
  */
@@ -475,12 +506,24 @@ declare function consoleHook(opts?: ConsoleHookOptions): RequestHooks;
 //#endregion
 //#region src/load-metadata-index.d.ts
 /**
- * Load and runtime-validate a codegen-emitted \`__metadata.json\` file.
+ * Runtime-validate an already-parsed \`MetadataIndex\` value — the pure core of
+ * \`loadMetadataIndex\` for index data that does not come from a file: a cache
+ * entry (\`JSON.parse\` of a stored \`fetchMetadataIndex\` result), an HTTP
+ * response, or any other transport.
  *
  * Validates structural shape: \`schemaNamespace\`, \`schemas\`, \`entitySetToType\`,
  * optional \`shape\`, optional \`enums\`. Mismatches throw \`ParseError\` with a
  * JSON-path breadcrumb pointing at the offending node (e.g.
- * \`$.schemas.Catalog_X.properties.Y.type\`).
+ * \`$.schemas.Catalog_X.properties.Y.type\`). \`source\` is only used in error
+ * messages to say where the data came from.
+ *
+ * @public
+ */
+declare function parseMetadataIndex(data: unknown, source?: string): MetadataIndex;
+/**
+ * Load and runtime-validate a \`__metadata.json\` file (codegen-emitted, or any
+ * file with the same structure). \`readFile\` + \`JSON.parse\` +
+ * {@link parseMetadataIndex}.
  *
  * @public
  */
@@ -531,6 +574,15 @@ declare const EMPTY_GUID: "00000000-0000-0000-0000-000000000000";
  * Used as the wire-level marker for "no date" in Nullable fields.
  * Library auto-maps this to \`null\` for Nullable Edm.DateTime fields by default;
  * see spec §2.4 «Значение по умолчанию \`Edm.DateTime\`».
+ *
+ * When writing WITHOUT a schema (no \`metadataIndex\`), \`null\` is not turned
+ * into this sentinel automatically — pass it explicitly to clear a date:
+ *
+ * @example
+ * \`\`\`ts
+ * await client.entity('Document_X', key).patch({ ДатаОплаты: ONEC_EMPTY_DATE })
+ * \`\`\`
+ *
  * @public
  */
 declare const ONEC_EMPTY_DATE: "0001-01-01T00:00:00";
@@ -547,6 +599,25 @@ interface Entity {
   PredefinedDataName: string;
 }
 /**
+ * Convenience row type for working WITHOUT codegen: typed 1C system fields
+ * (\`Ref_Key\`, \`DataVersion\`, …) plus an open index signature for everything
+ * else. For object entities (\`Catalog_*\`, \`Document_*\`, …) — register
+ * recordsets have no system fields, use plain \`Record<string, unknown>\`
+ * there.
+ *
+ * @example
+ * \`\`\`ts
+ * const { value } = await client.query<UntypedEntity>('Catalog_Номенклатура').top(10).get()
+ * for (const row of value) {
+ *   row.Ref_Key // Guid — typed, feeds client.entity(set, row.Ref_Key)
+ *   row.Артикул // unknown — narrow as needed
+ * }
+ * \`\`\`
+ *
+ * @public
+ */
+type UntypedEntity = Entity & Record<string, unknown>;
+/**
  * 1C \`ХранилищеЗначения\` reified as a typed object. Codegen groups the wire-level
  * triple \`<X>: Edm.Stream\` + \`<X>_Base64Data: Edm.Binary\` + \`<X>_Type: Edm.String\`
  * into this shape. Read via \`client.entity(...).readStream(...)\`;
@@ -558,6 +629,6 @@ interface ValueStorage {
   readonly base64Data: string;
 }
 //#endregion
-export { type AuthOptions, type BalanceArgs, BasicAuth, type BasicAuthOptions, BusinessError, type CliConfig, type ClientOptions, ConcurrencyError, type Connection, type ConsoleHookOptions, type DataShape, type DrCrTurnoversArgs, EMPTY_GUID, type Entity, type EntityKey, type EntitySchema, type ErrorFormat, type ExtDimensionsArgs, type FieldExpr, type FieldExprMap, type FilterExpression, type Guid, HTTPError, type HTTPErrorOptions, InvalidArgumentError, type InvalidArgumentErrorOptions, type MetadataIndex, type MutationOptions, NetworkError, ODataError, type ODataErrorBody, type ODataErrorOptions, ODataV3Client, type ODataV3ClientOptions, type ODataV3FunctionsBase, ONEC_EMPTY_DATE, ParseError, PermissionError, type PropertySchema, QueryBuilder, type QueryState, type ReadStreamResult, type RecordsWithExtDimensionsArgs, RegisterHelper, type RequestEvent, type RequestHooks, type RequestOptions, type ResponseEvent, type RetryPolicy, type SliceArgs, TimeoutError, type TimeoutErrorOptions, type TurnoversArgs, V3DocumentHandle, V3EntityHandle, V3EntitySetHandle, V3QueryBuilder, ValidationError, type ValidationErrorOptions, type ValidationIssue, type ValidationResult, type ValueStorage, type WithInstanceRef, type WriteStreamInput, clientOptionsFromConnection, connectionAuth, consoleHook, defineConfig, formatInZone, loadMetadataIndex, normalizeBaseUrl, parseConnectionUrl, parseInZone, toFilterString, validateConnection, validateEntity };
+export { type AuthOptions, type BalanceArgs, BasicAuth, type BasicAuthOptions, BusinessError, type CliConfig, type ClientOptions, ConcurrencyError, type Connection, type ConsoleHookOptions, type DataShape, type DrCrTurnoversArgs, EMPTY_GUID, type Entity, type EntityKey, type EntitySchema, type ErrorFormat, type ExtDimensionsArgs, type FieldExpr, type FieldExprMap, type FilterExpression, type Guid, HTTPError, type HTTPErrorOptions, InvalidArgumentError, type InvalidArgumentErrorOptions, type MetadataIndex, type MutationOptions, NetworkError, ODataError, type ODataErrorBody, type ODataErrorOptions, ODataV3Client, type ODataV3ClientOptions, type ODataV3FunctionsBase, ONEC_EMPTY_DATE, ParseError, PermissionError, type PropertySchema, QueryBuilder, type QueryState, type ReadStreamResult, type RecordsWithExtDimensionsArgs, RegisterHelper, type RequestEvent, type RequestHooks, type RequestOptions, type ResponseEvent, type RetryPolicy, type SliceArgs, TimeoutError, type TimeoutErrorOptions, type TurnoversArgs, type UntypedEntity, V3DocumentHandle, V3EntityHandle, V3EntitySetHandle, V3QueryBuilder, ValidationError, type ValidationErrorOptions, type ValidationIssue, type ValidationResult, type ValueStorage, type WithInstanceRef, type WriteStreamInput, clientOptionsFromConnection, connectionAuth, consoleHook, defineConfig, formatInZone, loadMetadataIndex, normalizeBaseUrl, parseConnectionUrl, parseInZone, parseMetadataIndex, toFilterString, validateConnection, validateEntity };
 //# sourceMappingURL=index.d.ts.map"
 `;

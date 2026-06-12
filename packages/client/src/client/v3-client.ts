@@ -8,7 +8,7 @@ import { request, requestStream } from '../http/transport.js'
 import { RegisterHelper } from '../register.js'
 import { type EntityKey, normalizeBaseUrl } from '../url-builder.js'
 import { type MetadataIndex, ValidationError, validateEntity } from '../validate.js'
-import { transformDatesToWire } from '../write-transform.js'
+import { bigintToStringReplacer, transformDatesToWire, transformDateValuesUntyped } from '../write-transform.js'
 import type { ClientOptions, RequestOptions } from './options.js'
 import { createFunctionsProxy } from './v3-functions-proxy.js'
 import { V3DocumentHandle, V3EntityHandle, V3EntitySetHandle } from './v3-handles.js'
@@ -16,14 +16,18 @@ import { V3QueryBuilder } from './v3-query.js'
 
 /**
  * V3-specific client options. Extends core's `ClientOptions` with optional
- * runtime validation hooks driven by the codegen-emitted `__metadata.json`.
+ * schema-driven behaviors powered by a runtime `MetadataIndex`.
  *
  * @public
  */
 export interface ODataV3ClientOptions extends ClientOptions {
   /**
-   * Schema index loaded from `__metadata.json` (per-connection codegen
-   * artifact). Required when `validateOnWrite` is `true`.
+   * Runtime schema index. Any source conforming to the `MetadataIndex`
+   * contract works: the codegen-emitted `__metadata.json` (via
+   * `loadMetadataIndex`), an index built from a live `$metadata` at runtime
+   * (`fetchMetadataIndex` / `buildMetadataIndex` from `@1c-odata/metadata`),
+   * or a revived cache entry (`parseMetadataIndex`). Required when
+   * `validateOnWrite` is `true`.
    */
   metadataIndex?: MetadataIndex
   /**
@@ -34,8 +38,18 @@ export interface ODataV3ClientOptions extends ClientOptions {
   validateOnWrite?: boolean
   /**
    * Override `metadataIndex?.shape` at runtime. Useful when running without
-   * codegen (no `__metadata.json`) but still want a non-default `dateMode`
-   * or `int64Mode` applied. Precedence: `shape` wins over `metadataIndex.shape`.
+   * any schema (no `metadataIndex`) but still wanting a non-default
+   * `dateMode` or `int64Mode` applied. Precedence: `shape` wins over
+   * `metadataIndex.shape`.
+   *
+   * @example
+   * ```ts
+   * // schema-less client that leaves DateTime wire strings untouched:
+   * const client = new ODataV3Client({
+   *   baseUrl, auth, serverTimezone: 'Europe/Moscow',
+   *   shape: { dateMode: 'string' },
+   * })
+   * ```
    *
    * @public
    */
@@ -55,6 +69,23 @@ const V3_BASE_HEADERS = {
  * shapes `client.functions.<EntitySet>.<Func>(args)` access. Defaults to
  * `ODataV3FunctionsBase`, an open-ended index signature; with a real type from
  * `@1c-odata/cli/codegen` the call sites become fully typed.
+ *
+ * Works without codegen: construct with just `baseUrl` / `auth` /
+ * `serverTimezone` and query entity sets by name with
+ * `query<UntypedEntity>(...)`. Add a `metadataIndex` (file, runtime fetch, or
+ * cache — see `ODataV3ClientOptions.metadataIndex`) to enable schema-driven
+ * Int64 / ValueStorage handling and write validation.
+ *
+ * @example
+ * ```ts
+ * // schema-less (no codegen, no metadata):
+ * const client = new ODataV3Client({
+ *   baseUrl: 'http://1c.example.com/base/odata/standard.odata',
+ *   auth: BasicAuth({ username: 'user', password: 'pass' }),
+ *   serverTimezone: 'Europe/Moscow',
+ * })
+ * const { value } = await client.query<UntypedEntity>('Catalog_Валюты').top(5).get()
+ * ```
  *
  * @public
  */
@@ -89,9 +120,12 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
       })
     }
     if (opts.validateOnWrite && opts.metadataIndex === undefined) {
-      throw new InvalidArgumentError('validateOnWrite requires metadataIndex (load from generated __metadata.json)', {
-        argument: 'opts.metadataIndex',
-      })
+      throw new InvalidArgumentError(
+        'validateOnWrite requires metadataIndex (loadMetadataIndex from generated __metadata.json, or fetchMetadataIndex from @1c-odata/metadata)',
+        {
+          argument: 'opts.metadataIndex',
+        },
+      )
     }
     this.opts = { ...opts, baseUrl: normalizeBaseUrl(opts.baseUrl) }
     this.v3Opts = opts
@@ -146,33 +180,35 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
   }
 
   /**
-   * Internal: transform a write body, applying `Edm.DateTime` conversions per
-   * `metadataIndex`. Passthrough when no `metadataIndex` is loaded, the entity
-   * set is unknown (forward-compat with newer server schemas), the body is not
-   * an object, or `body === undefined` (DELETE).
+   * Internal: transform a write body into wire form. Three-level rule:
    *
-   * Mirrors the read-side parser: `Date` → naive ISO in `serverTimezone`,
-   * `null` → `ONEC_EMPTY_DATE` sentinel. Recursive for nested entities and
-   * tabular parts.
+   * 1. Effective `dateMode: 'string'` → full passthrough (the `DataShape`
+   *    contract promises the write path does not touch Edm.DateTime fields).
+   * 2. Schema available (metadataIndex + known entity set) → schema-driven
+   *    `transformDatesToWire`: `Date` → naive ISO in `serverTimezone`,
+   *    `null` → `ONEC_EMPTY_DATE` sentinel, recursion into tabular parts;
+   *    fields missing from the schema fall back to the value heuristic.
+   * 3. No schema (no metadataIndex, or unknown entity set — forward-compat
+   *    with newer server schemas) → value heuristic
+   *    `transformDateValuesUntyped`: every `Date` instance → naive ISO in
+   *    `serverTimezone`; `null` left as-is (no sentinel without a schema —
+   *    pass `ONEC_EMPTY_DATE` explicitly to clear a date).
+   *
+   * `body === undefined` (DELETE) and non-object bodies pass through.
    *
    * @internal
    */
   private transformWriteBody(body: unknown, entitySet: string): unknown {
     if (body === undefined) return undefined
     if (typeof body !== 'object' || body === null) return body
+    if ((this.shape?.dateMode ?? 'date') === 'string') return body
     const idx = this.v3Opts.metadataIndex
-    if (idx === undefined) return body
-    const typeName = idx.entitySetToType[entitySet]
-    if (typeName === undefined) return body
-    const schema = idx.schemas[typeName]
-    if (schema === undefined) return body
-    return transformDatesToWire(
-      body as Record<string, unknown>,
-      schema,
-      this.opts.serverTimezone,
-      idx,
-      this.shape?.dateMode ?? 'date',
-    )
+    const typeName = idx?.entitySetToType[entitySet]
+    const schema = typeName !== undefined ? idx?.schemas[typeName] : undefined
+    if (idx === undefined || schema === undefined) {
+      return transformDateValuesUntyped(body, this.opts.serverTimezone)
+    }
+    return transformDatesToWire(body as Record<string, unknown>, schema, this.opts.serverTimezone, idx, 'date')
   }
 
   query<T = Record<string, unknown>>(entitySet: string): V3QueryBuilder<T> {
@@ -235,7 +271,9 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     extraHeaders: Record<string, string> = {},
   ): Promise<{ status: number; statusText: string; body: string; headers: Record<string, string> }> {
     const transformed = this.transformWriteBody(body, entitySet)
-    const serialized = transformed !== undefined ? JSON.stringify(transformed) : ''
+    // bigint → wire string via replacer (Date can't be fixed here — toJSON
+    // runs before the replacer; dates are handled in transformWriteBody).
+    const serialized = transformed !== undefined ? JSON.stringify(transformed, bigintToStringReplacer) : ''
     const contentLength = String(Buffer.byteLength(serialized, 'utf8'))
     // Library-managed headers go LAST so they win the case-insensitive merge,
     // overriding any user attempt to set Content-Type / Content-Length via

@@ -1,7 +1,7 @@
 import { join, resolve } from 'node:path'
 import type { CliConfig } from '@1c-odata/client'
 import { connectionAuth } from '@1c-odata/client'
-import { fetchMetadata } from '../fetcher.js'
+import { fetchMetadataXml } from '@1c-odata/metadata'
 import { writeOneFile } from '../writer.js'
 import { pickConnections } from './_shared.js'
 
@@ -20,7 +20,7 @@ export async function runFetch(opts: RunFetchOptions): Promise<void> {
   for (const [name, conn] of connections) {
     try {
       const timeout = conn.fetchTimeout ?? defaultTimeout
-      const xml = await fetchMetadata({
+      const xml = await fetchMetadataXml({
         baseUrl: conn.baseUrl,
         auth: connectionAuth(conn),
         timeout,

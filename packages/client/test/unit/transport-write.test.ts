@@ -153,7 +153,7 @@ describe('transport write — transformDatesToWire integration', () => {
     expect(capturedBody).toMatchObject({ Date: '0001-01-01T00:00:00' })
   })
 
-  it('passes body through unchanged when no metadataIndex is loaded', async () => {
+  it('converts Date via the value heuristic when no metadataIndex is loaded', async () => {
     let capturedBody: unknown
     server.use(
       http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
@@ -166,9 +166,123 @@ describe('transport write — transformDatesToWire integration', () => {
       serverTimezone: 'Europe/Moscow',
       auth,
     })
-    const d = new Date('2025-03-15T12:00:00Z')
-    await client.entity('Document_X', 'a').patch({ Date: d })
-    // No metadataIndex → no transform, Date.toJSON() yields ISO-Z
+    // No schema → value heuristic: Date → naive ISO in serverTimezone (the
+    // old passthrough sent an ISO-Z string the server reads as a shifted
+    // wall-clock time); null stays null (no sentinel without a schema).
+    await client.entity('Document_X', 'a').patch({ Date: new Date('2025-03-15T12:00:00Z'), Cleared: null })
+    expect(capturedBody).toMatchObject({ Date: '2025-03-15T15:00:00', Cleared: null })
+  })
+
+  it('converts Date in nested objects and arrays without a schema', async () => {
+    let capturedBody: unknown
+    server.use(
+      http.post(/Document_X$/, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ Ref_Key: 'a' }, { status: 201 })
+      }),
+    )
+    const client = new ODataV3Client({ baseUrl, serverTimezone: 'Europe/Moscow', auth })
+    await client.entity('Document_X').create({
+      Date: new Date('2025-03-15T12:00:00Z'),
+      Товары: [{ Срок: new Date('2025-06-01T00:00:00Z'), Кол: 2 }],
+    })
+    expect(capturedBody).toMatchObject({
+      Date: '2025-03-15T15:00:00',
+      Товары: [{ Срок: '2025-06-01T03:00:00', Кол: 2 }],
+    })
+  })
+
+  it('leaves Date untouched without a schema when dateMode is string', async () => {
+    let capturedBody: unknown
+    server.use(
+      http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ Ref_Key: 'a' })
+      }),
+    )
+    const client = new ODataV3Client({
+      baseUrl,
+      serverTimezone: 'Europe/Moscow',
+      auth,
+      shape: { dateMode: 'string' },
+    })
+    // DataShape contract: in string mode the write path does NOT touch
+    // Edm.DateTime values — a Date here is a user error, serialized as-is.
+    await client.entity('Document_X', 'a').patch({ Date: new Date('2025-03-15T12:00:00Z') })
     expect(capturedBody).toMatchObject({ Date: '2025-03-15T12:00:00.000Z' })
+  })
+
+  it('converts Date for an entity set missing from the loaded index (forward-compat)', async () => {
+    let capturedBody: unknown
+    server.use(
+      http.patch(/Document_New\(guid'a'\)/, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ Ref_Key: 'a' })
+      }),
+    )
+    const client = new ODataV3Client({ baseUrl, serverTimezone: 'Europe/Moscow', auth, metadataIndex })
+    await client.entity('Document_New', 'a').patch({ Date: new Date('2025-03-15T12:00:00Z') })
+    expect(capturedBody).toMatchObject({ Date: '2025-03-15T15:00:00' })
+  })
+
+  it('converts Date in a field missing from the schema (newer server field)', async () => {
+    let capturedBody: unknown
+    server.use(
+      http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
+        capturedBody = await request.json()
+        return HttpResponse.json({ Ref_Key: 'a' })
+      }),
+    )
+    const client = new ODataV3Client({ baseUrl, serverTimezone: 'Europe/Moscow', auth, metadataIndex })
+    await client.entity('Document_X', 'a').patch({ НоваяДата: new Date('2025-03-15T12:00:00Z') })
+    expect(capturedBody).toMatchObject({ НоваяДата: '2025-03-15T15:00:00' })
+  })
+})
+
+describe('transport write — bigint serialization', () => {
+  const int64Index: MetadataIndex = {
+    schemaNamespace: 'StandardODATA',
+    schemas: {
+      Document_X: {
+        properties: {
+          Ref_Key: { type: 'Edm.Guid', nullable: false },
+          BigNum: { type: 'Edm.Int64', nullable: true },
+        },
+      },
+    },
+    entitySetToType: { Document_X: 'Document_X' },
+    shape: { dateMode: 'date', int64Mode: 'bigint' },
+  }
+
+  it('serializes bigint as the wire string WITH a loaded index (int64Mode bigint round-trip)', async () => {
+    let rawBody: string | undefined
+    server.use(
+      http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
+        rawBody = await request.text()
+        return HttpResponse.json({ Ref_Key: 'a' })
+      }),
+    )
+    const client = new ODataV3Client({
+      baseUrl,
+      serverTimezone: 'Europe/Moscow',
+      auth,
+      metadataIndex: int64Index,
+    })
+    // Was: TypeError from JSON.stringify — bigint round-trip impossible.
+    await client.entity('Document_X', 'a').patch({ BigNum: 123456789012345678901234n })
+    expect(JSON.parse(rawBody ?? '')).toEqual({ BigNum: '123456789012345678901234' })
+  })
+
+  it('serializes bigint as the wire string without a metadataIndex', async () => {
+    let rawBody: string | undefined
+    server.use(
+      http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
+        rawBody = await request.text()
+        return HttpResponse.json({ Ref_Key: 'a' })
+      }),
+    )
+    const client = new ODataV3Client({ baseUrl, serverTimezone: 'Europe/Moscow', auth })
+    await client.entity('Document_X', 'a').patch({ BigNum: 9007199254740993n })
+    expect(JSON.parse(rawBody ?? '')).toEqual({ BigNum: '9007199254740993' })
   })
 })

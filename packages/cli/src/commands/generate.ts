@@ -19,6 +19,11 @@ export interface RunGenerateOptions {
   cliVersion: string
   /** Bypass the input-hash cache check; regenerate every selected connection. */
   force?: boolean
+  /**
+   * Emit only `__metadata.json` (no TypeScript files). Part of the
+   * options-hash, so switching modes invalidates the smart-skip cache.
+   */
+  metadataOnly?: boolean
 }
 
 /**
@@ -96,7 +101,10 @@ export async function runGenerate(opts: RunGenerateOptions): Promise<void> {
         }
         throw e
       }
-      const codegenOptions = connectionToCodegenOptions(conn)
+      const codegenOptions: GenerateOptions = {
+        ...connectionToCodegenOptions(conn),
+        ...(opts.metadataOnly === true ? { metadataOnly: true } : {}),
+      }
       const inputs = computeInputs(xml, codegenOptions, opts.cliVersion)
 
       const metaPath = join(generatedDir, name, '__metadata.json')

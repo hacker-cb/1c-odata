@@ -57,9 +57,9 @@ function sha256(s: string): string {
 /**
  * Compute the input-hash triple for one connection.
  *
- * `xml` is the metadata file content, `options` is what
- * `connectionToCodegenOptions(conn)` returns (just `shape` + `include` —
- * the only fields codegen actually consumes), `cliVersion` is the cli
+ * `xml` is the metadata file content, `options` is the effective
+ * `GenerateOptions` for the run (`shape` + `include` from the connection,
+ * plus run-level flags like `metadataOnly`), `cliVersion` is the cli
  * package version (read from `package.json` at the call site).
  */
 export function computeInputs(xml: string, options: GenerateOptions, cliVersion: string): InputHash {

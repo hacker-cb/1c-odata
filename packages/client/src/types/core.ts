@@ -16,6 +16,15 @@ export const EMPTY_GUID = '00000000-0000-0000-0000-000000000000' as const
  * Used as the wire-level marker for "no date" in Nullable fields.
  * Library auto-maps this to `null` for Nullable Edm.DateTime fields by default;
  * see spec §2.4 «Значение по умолчанию `Edm.DateTime`».
+ *
+ * When writing WITHOUT a schema (no `metadataIndex`), `null` is not turned
+ * into this sentinel automatically — pass it explicitly to clear a date:
+ *
+ * @example
+ * ```ts
+ * await client.entity('Document_X', key).patch({ ДатаОплаты: ONEC_EMPTY_DATE })
+ * ```
+ *
  * @public
  */
 export const ONEC_EMPTY_DATE = '0001-01-01T00:00:00' as const
@@ -32,6 +41,26 @@ export interface Entity {
   Predefined: boolean
   PredefinedDataName: string
 }
+
+/**
+ * Convenience row type for working WITHOUT codegen: typed 1C system fields
+ * (`Ref_Key`, `DataVersion`, …) plus an open index signature for everything
+ * else. For object entities (`Catalog_*`, `Document_*`, …) — register
+ * recordsets have no system fields, use plain `Record<string, unknown>`
+ * there.
+ *
+ * @example
+ * ```ts
+ * const { value } = await client.query<UntypedEntity>('Catalog_Номенклатура').top(10).get()
+ * for (const row of value) {
+ *   row.Ref_Key // Guid — typed, feeds client.entity(set, row.Ref_Key)
+ *   row.Артикул // unknown — narrow as needed
+ * }
+ * ```
+ *
+ * @public
+ */
+export type UntypedEntity = Entity & Record<string, unknown>
 
 /**
  * 1C `ХранилищеЗначения` reified as a typed object. Codegen groups the wire-level

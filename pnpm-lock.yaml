@@ -112,6 +112,13 @@ importers:
       fast-xml-parser:
         specifier: ^5.7.3
         version: 5.7.3
+    devDependencies:
+      msw:
+        specifier: ^2.14.3
+        version: 2.14.3(@types/node@25.6.0)(typescript@6.0.3)
+      undici:
+        specifier: ^6.25.0
+        version: 6.25.0
 
 packages:
 
@@ -2484,10 +2491,11 @@ snapshots:
   '@types/node@25.6.0':
     dependencies:
       undici-types: 7.19.2
+    optional: true
 
   '@types/set-cookie-parser@2.4.10':
     dependencies:
-      '@types/node': 25.6.0
+      '@types/node': 22.19.19
 
   '@types/statuses@2.0.6': {}
 
@@ -3460,7 +3468,8 @@ snapshots:
 
   undici-types@6.21.0: {}
 
-  undici-types@7.19.2: {}
+  undici-types@7.19.2:
+    optional: true
 
   undici@6.25.0: {}
 
