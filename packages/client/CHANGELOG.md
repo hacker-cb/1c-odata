@@ -1,5 +1,17 @@
 # @1c-odata/client
 
+## 0.3.0
+
+### Minor Changes
+
+- [#12](https://github.com/hacker-cb/1c-odata/pull/12) [`0fff3c8`](https://github.com/hacker-cb/1c-odata/commit/0fff3c877f31526af8301646f3aa9663f5907f7c) Thanks [@hacker-cb](https://github.com/hacker-cb)! - Filter DSL chaining is now correctly typed. Methods that return an expression (`f.Date.year()`, `f.Сумма.add(5)`, `concat`, `substring`, `cast`, `dateadd`, …) previously returned the bare branded `FieldExpr<V>` with no operator surface, so chains like `f.Date.year().eq(2025)` — the README example — failed to compile against the public types (the runtime Proxy always worked). They now return the new `ChainedFieldExpr<V>` (brand + operators), and `FieldExprMap` property access carries the brand, so field proxies type-check as arguments to `any`/`all` and operator parameters.
+
+- [#9](https://github.com/hacker-cb/1c-odata/pull/9) [`39e3003`](https://github.com/hacker-cb/1c-odata/commit/39e3003a1f287d0cf21ed519699379cc04774c1e) Thanks [@hacker-cb](https://github.com/hacker-cb)! - Schema-less write correctness. `Date` instances in write payloads now convert to naive ISO in `serverTimezone` even without a `metadataIndex` (and for entity sets / fields missing from a loaded index — forward-compat with newer server schemas). Previously they serialized as UTC strings with a `Z` suffix, which 1С reads as a shifted wall-clock time. `bigint` values now serialize as the Edm.Int64 wire string everywhere (previously `JSON.stringify` threw `TypeError`, breaking the `int64Mode: 'bigint'` read → write round-trip even WITH a schema). `null` without a schema stays `null` — pass `ONEC_EMPTY_DATE` explicitly to clear a date. `shape: { dateMode: 'string' }` disables all date handling on both paths, as before.
+
+  Migration: if you relied on the UTC-`Z` passthrough, set `shape: { dateMode: 'string' }` or pass pre-formatted strings.
+
+- [#9](https://github.com/hacker-cb/1c-odata/pull/9) [`39e3003`](https://github.com/hacker-cb/1c-odata/commit/39e3003a1f287d0cf21ed519699379cc04774c1e) Thanks [@hacker-cb](https://github.com/hacker-cb)! - Schema-less usage helpers: new `UntypedEntity` type (typed 1С system fields + open index signature) for `query<UntypedEntity>(...)` without codegen, and `parseMetadataIndex(data, source?)` — the pure validation core of `loadMetadataIndex` for reviving a `MetadataIndex` from caches or other non-file transports.
+
 ## 0.2.0
 
 ### Minor Changes
