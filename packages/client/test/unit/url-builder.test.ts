@@ -6,7 +6,7 @@ const base = 'http://1c.test/odata/standard.odata'
 
 describe('V3 URL builder', () => {
   it('builds simple entity-set URL with $format=json nometadata', () => {
-    const q = new QueryBuilder('Catalog_Валюты')
+    const q = new QueryBuilder('Catalog_Валюты', 'Europe/Moscow')
     const url = buildV3CollectionUrl(base, q)
     expect(url).toBe(
       `${base}/Catalog_%D0%92%D0%B0%D0%BB%D1%8E%D1%82%D1%8B?%24format=application%2Fjson%3Bodata%3Dnometadata`,
@@ -14,7 +14,7 @@ describe('V3 URL builder', () => {
   })
 
   it('appends $top + $skip + $select', () => {
-    const q = new QueryBuilder('Catalog_X').top(10).skip(20).select('Code', 'Description')
+    const q = new QueryBuilder('Catalog_X', 'Europe/Moscow').top(10).skip(20).select('Code', 'Description')
     const url = buildV3CollectionUrl(base, q)
     expect(url).toContain('%24top=10')
     expect(url).toContain('%24skip=20')
@@ -30,13 +30,13 @@ describe('V3 URL builder', () => {
   })
 
   it('appends $orderby with mixed directions', () => {
-    const q = new QueryBuilder('Catalog_X').orderBy('Code').orderBy('Date', 'desc')
+    const q = new QueryBuilder('Catalog_X', 'Europe/Moscow').orderBy('Code').orderBy('Date', 'desc')
     const url = buildV3CollectionUrl(base, q)
     expect(url).toContain('%24orderby=Code%20asc%2CDate%20desc')
   })
 
   it('appends $expand', () => {
-    const q = new QueryBuilder('Document_X').expand('Контрагент', 'Организация')
+    const q = new QueryBuilder('Document_X', 'Europe/Moscow').expand('Контрагент', 'Организация')
     const url = buildV3CollectionUrl(base, q)
     expect(url).toContain(
       '%24expand=%D0%9A%D0%BE%D0%BD%D1%82%D1%80%D0%B0%D0%B3%D0%B5%D0%BD%D1%82%2C%D0%9E%D1%80%D0%B3%D0%B0%D0%BD%D0%B8%D0%B7%D0%B0%D1%86%D0%B8%D1%8F',
@@ -44,7 +44,7 @@ describe('V3 URL builder', () => {
   })
 
   it('appends $inlinecount=allpages', () => {
-    const q = new QueryBuilder('Catalog_X').withCount()
+    const q = new QueryBuilder('Catalog_X', 'Europe/Moscow').withCount()
     const url = buildV3CollectionUrl(base, q)
     expect(url).toContain('%24inlinecount=allpages')
   })

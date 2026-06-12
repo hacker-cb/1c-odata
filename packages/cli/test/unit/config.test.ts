@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { InvalidArgumentError } from '@1c-odata/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { loadConfig } from '../../src/config.js'
+import { rejection } from './_helpers.js'
 
 let tmp: string
 
@@ -77,7 +78,7 @@ export default defineConfig({
       join(tmp, '1c-odata.config.ts'),
       `export default { connections: { trade: { baseUrl: 'http://leak:secret@example/odata', auth: { username: 'u', password: 'p' }, serverTimezone: 'Europe/Moscow' } } }`,
     )
-    const err = await loadConfig({ cwd: tmp }).catch((e) => e as Error)
+    const err = await rejection(loadConfig({ cwd: tmp }))
     expect(err.message).toMatch(/must NOT contain credentials/)
     // Error must NOT leak URL contents
     expect(err.message).not.toContain('leak')
@@ -89,7 +90,7 @@ export default defineConfig({
       join(tmp, '1c-odata.config.ts'),
       `export default { connections: { x: { baseUrl: 'not a url', auth: { username: 'u', password: 'p' }, serverTimezone: 'Europe/Moscow' } } }`,
     )
-    const err = await loadConfig({ cwd: tmp }).catch((e) => e as Error)
+    const err = await rejection(loadConfig({ cwd: tmp }))
     expect(err.message).toMatch(/is not a valid URL/)
     expect(err.message).not.toContain('not a url')
   })

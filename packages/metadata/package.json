@@ -53,7 +53,7 @@
     "test:integration:live": "vitest run test/integration/live",
     "test:integration:write": "echo 'no write integration in metadata' && exit 0",
     "test:e2e": "echo no e2e in metadata && exit 0",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "package:lint": "publint && attw --pack . --ignore-rules no-resolution cjs-resolves-to-esm"
   },
   "dependencies": {

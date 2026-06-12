@@ -17,7 +17,7 @@ describe('V3 parser', () => {
     })
     const r = parseV3Collection<{ Ref_Key: string; Code: string }>(body, { serverTimezone: TZ })
     expect(r.value).toHaveLength(2)
-    expect(r.value[0].Code).toBe('1')
+    expect(r.value[0]?.Code).toBe('1')
     expect(r.odataMetadata).toContain('Catalog_X')
   })
 
@@ -39,15 +39,15 @@ describe('V3 parser', () => {
     const r = parseV3Collection<{ Ref_Key: string; СрокДоставки: Date | null; ДатаПлатежа: Date | null }>(body, {
       serverTimezone: TZ,
     })
-    expect(r.value[0].СрокДоставки).toBeNull()
-    expect(r.value[0].ДатаПлатежа).toBeInstanceOf(Date)
+    expect(r.value[0]?.СрокДоставки).toBeNull()
+    expect(r.value[0]?.ДатаПлатежа).toBeInstanceOf(Date)
   })
 
   it('parseV3Collection parses valid datetime via parseInZone', () => {
     const input = '2025-03-15T00:00:00'
     const body = JSON.stringify({ value: [{ ДатаПлатежа: input }] })
     const r = parseV3Collection<{ ДатаПлатежа: Date }>(body, { serverTimezone: TZ })
-    expect(r.value[0].ДатаПлатежа).toEqual(parseInZone(input, TZ))
+    expect(r.value[0]?.ДатаПлатежа).toEqual(parseInZone(input, TZ))
   })
 
   it('parseV3Single returns single entity (no value wrapper)', () => {
@@ -242,8 +242,8 @@ describe('schema-aware parsing', () => {
       metadataIndex,
     })
     // dateMode='string' — sentinel is NOT converted to null, visible as literal
-    expect(r.value[0].Date).toBe('2025-03-15T15:30:00')
-    expect(r.value[0].EmptyDate).toBe('0001-01-01T00:00:00')
+    expect(r.value[0]?.Date).toBe('2025-03-15T15:30:00')
+    expect(r.value[0]?.EmptyDate).toBe('0001-01-01T00:00:00')
   })
 
   it('converts Edm.DateTime sentinel to null when shape.dateMode=date (default)', () => {
@@ -268,6 +268,6 @@ describe('schema-aware parsing', () => {
       typeHint: 'Catalog_X',
       metadataIndex,
     })
-    expect(r.value[0].Date).toBeNull()
+    expect(r.value[0]?.Date).toBeNull()
   })
 })

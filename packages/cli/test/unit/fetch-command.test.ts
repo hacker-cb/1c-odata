@@ -7,6 +7,7 @@ import { HttpResponse, http } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runFetch } from '../../src/commands/fetch.js'
+import { rejection } from './_helpers.js'
 
 const server = setupServer()
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
@@ -141,18 +142,20 @@ describe('runFetch', () => {
         ),
       ),
     )
-    const err = await runFetch({
-      cwd: tmp,
-      config: {
-        connections: {
-          x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+    const err = await rejection(
+      runFetch({
+        cwd: tmp,
+        config: {
+          connections: {
+            x: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
-      },
-    }).catch((e) => e as Error)
+      }),
+    )
     expect(err).toBeInstanceOf(HTTPError)
     expect(err).toBeInstanceOf(ODataError)
     expect(err.message).toMatch(/connection "x"/)

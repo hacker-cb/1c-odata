@@ -1,5 +1,5 @@
 import { InvalidArgumentError } from './errors.js'
-import type { FieldExpr, FieldExprMap, FilterExpression } from './query/filter-internal.js'
+import type { ChainedFieldExpr, FieldExpr, FieldExprMap, FilterExpression } from './query/filter-internal.js'
 import { type CompileContext, makeFieldProxy } from './query/filter-internal.js'
 
 // OData V3 precedence: `not > and > or`. `or` is loosest, so an `or`-joined
@@ -92,4 +92,4 @@ export function toFilterString(f: FilterExpression): string {
   return (f as unknown as { _expr: string })._expr
 }
 
-export type { FieldExpr, FieldExprMap, FilterExpression }
+export type { ChainedFieldExpr, FieldExpr, FieldExprMap, FilterExpression }

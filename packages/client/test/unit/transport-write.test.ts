@@ -14,13 +14,17 @@ const auth = BasicAuth({ username: 'u', password: 'p' })
 
 describe('transport write methods', () => {
   it('transportPost sends POST with JSON body + Content-Type + Content-Length', async () => {
-    let received: { method: string; ct?: string; cl?: string; body?: string } | null = null
+    // Box pattern: assignments inside the MSW callback don't widen a
+    // closed-over `let` for TS control flow — a property write does.
+    const received: { current: { method: string; ct: string | null; cl: string | null; body: string } | null } = {
+      current: null,
+    }
     server.use(
       http.post(`${baseUrl}/Catalog_X`, async ({ request }) => {
-        received = {
+        received.current = {
           method: request.method,
-          ct: request.headers.get('content-type') ?? undefined,
-          cl: request.headers.get('content-length') ?? undefined,
+          ct: request.headers.get('content-type'),
+          cl: request.headers.get('content-length'),
           body: await request.text(),
         }
         return HttpResponse.json({ Ref_Key: 'g', Code: 'X' }, { status: 201 })
@@ -29,10 +33,10 @@ describe('transport write methods', () => {
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     const r = await c.transportPost(`${baseUrl}/Catalog_X`, { Code: 'X' }, {}, 'Catalog_X')
     expect(r.status).toBe(201)
-    expect(received?.method).toBe('POST')
-    expect(received?.ct).toBe('application/json')
-    expect(received?.cl).toBe(String(Buffer.byteLength(received?.body ?? '', 'utf8')))
-    expect(JSON.parse(received?.body ?? '')).toEqual({ Code: 'X' })
+    expect(received.current?.method).toBe('POST')
+    expect(received.current?.ct).toBe('application/json')
+    expect(received.current?.cl).toBe(String(Buffer.byteLength(received.current?.body ?? '', 'utf8')))
+    expect(JSON.parse(received.current?.body ?? '')).toEqual({ Code: 'X' })
   })
 
   // NOTE: parentheses are reserved in MSW's path-to-regexp matcher, so the
@@ -69,35 +73,35 @@ describe('transport write methods', () => {
   })
 
   it('withHeader merges case-insensitively (user override wins, no duplicates)', async () => {
-    let received: { allHeaders: Record<string, string> } | null = null
+    const received: { current: { allHeaders: Record<string, string> } | null } = { current: null }
     server.use(
       http.patch(/Catalog_X\(guid'g'\)/, ({ request }) => {
         const all: Record<string, string> = {}
         request.headers.forEach((v, k) => {
           all[k] = v
         })
-        received = { allHeaders: all }
+        received.current = { allHeaders: all }
         return HttpResponse.json({ Ref_Key: 'g', Code: 'Y' }, { status: 200 })
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     await c.entity('Catalog_X', 'g').withHeader('authorization', 'Bearer custom-token').patch({ Code: 'Y' })
 
-    expect(received).not.toBeNull()
-    expect(received?.allHeaders?.authorization).toBe('Bearer custom-token')
+    expect(received.current).not.toBeNull()
+    expect(received.current?.allHeaders?.authorization).toBe('Bearer custom-token')
   })
 
   it('withHeader cannot override library-managed Content-Type on write', async () => {
-    let received: { ct?: string } | null = null
+    const received: { current: { ct: string | null } | null } = { current: null }
     server.use(
       http.patch(/Catalog_X\(guid'g'\)/, ({ request }) => {
-        received = { ct: request.headers.get('content-type') ?? undefined }
+        received.current = { ct: request.headers.get('content-type') }
         return HttpResponse.json({ Ref_Key: 'g', Code: 'Y' }, { status: 200 })
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     await c.entity('Catalog_X', 'g').withHeader('content-type', 'text/plain').patch({ Code: 'Y' })
-    expect(received?.ct).toBe('application/json')
+    expect(received.current?.ct).toBe('application/json')
   })
 })
 

@@ -49,7 +49,7 @@
   "scripts": {
     "build": "tsdown",
     "prepare": "pnpm build",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "test:unit": "vitest run --exclude \"test/integration/**\" --exclude \"test/e2e/**\"",
     "test:integration:offline": "vitest run test/codegen/integration",
     "test:integration:live": "echo no live integration in cli && exit 0",
