@@ -170,6 +170,18 @@ jobs:
           ONEC_EXAMPLE_BASIC_URL: ${{ secrets.ONEC_EXAMPLE_BASIC_URL }}
           HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
           NODE_OPTIONS: --import=${{ github.workspace }}/.ci/proxy-init.mjs
+      - name: Typecheck dynamic example (gate 10d)
+        # No codegen step at all — that's the point of the example. Offline.
+        run: pnpm --filter dynamic-example typecheck
+      - name: Run dynamic demo against live base (gate 10e)
+        # No-codegen runtime path end-to-end: createDynamicClient fetches
+        # $metadata, builds the index, and queries the same live base
+        # (reusing the basic-example secret under the example's own var).
+        run: pnpm --filter dynamic-example run demo
+        env:
+          ONEC_EXAMPLE_DYNAMIC_URL: ${{ secrets.ONEC_EXAMPLE_BASIC_URL }}
+          HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+          NODE_OPTIONS: --import=${{ github.workspace }}/.ci/proxy-init.mjs
 
   test-live:
     runs-on: ubuntu-latest

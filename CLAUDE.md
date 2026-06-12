@@ -4,12 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-TypeScript library for the 1С:Enterprise REST/OData V3 interface. Two-package pnpm + turbo monorepo:
+TypeScript library for the 1С:Enterprise REST/OData V3 interface. Three-package pnpm + turbo monorepo:
 
 | Package | Role |
 |---|---|
-| [`@1c-odata/client`](./packages/client/src) | Runtime — `ODataV3Client`, query builder, filter DSL, value-storage, errors, register helpers |
-| [`@1c-odata/cli`](./packages/cli/src) | `1c-odata fetch` + `1c-odata generate` binaries; codegen library at [`@1c-odata/cli/codegen`](./packages/cli/src/codegen) |
+| [`@1c-odata/client`](./packages/client/src) | Runtime — `ODataV3Client`, query builder, filter DSL, value-storage, errors, register helpers. Zero dependencies |
+| [`@1c-odata/metadata`](./packages/metadata/src) | Schema toolkit — EDMX (`$metadata`) parser, `buildMetadataIndex`, `fetchMetadataIndex`, `createDynamicClient`, entity-kind classification. Deps: client + fast-xml-parser |
+| [`@1c-odata/cli`](./packages/cli/src) | `1c-odata fetch` + `1c-odata generate` binaries; codegen library at [`@1c-odata/cli/codegen`](./packages/cli/src/codegen). Consumes `@1c-odata/metadata` |
 
 Server-side only. Pure ESM. Node ≥ 22.21.0, pnpm ≥ 10.
 
@@ -18,14 +19,16 @@ Server-side only. Pure ESM. Node ≥ 22.21.0, pnpm ≥ 10.
 
 ## Big picture
 
-**Codegen-driven type safety.** The user writes `1c-odata.config.ts` declaring connections; the CLI fetches each base's `$metadata` (EDMX XML) into `metadata/<connection>.xml`, then emits per-connection TS in `generated/<connection>/<kind>/<Name>.ts`. The runtime `ODataV3Client` is generic over the user's emitted `Functions` type — full IDE completion against the live schema. **The schema (1С EDMX) is the single source of truth for both codegen and runtime parsing** (`DataShape` lives in [`packages/client/src/connection.ts`](./packages/client/src/connection.ts) and MUST match between layers).
+**Schema-driven, codegen optional.** All schema-powered runtime features (DateTime/Int64 conversion, ValueStorage grouping, `validateOnWrite`) read a `MetadataIndex`. Three sources, identical behavior: codegen-emitted `__metadata.json` (`loadMetadataIndex`), a live `$metadata` fetched at runtime (`fetchMetadataIndex` / `createDynamicClient` in `@1c-odata/metadata` — any base, zero generated files), or a revived cache (`parseMetadataIndex`). **The schema (1С EDMX) is the single source of truth**: `buildMetadataIndex` in `@1c-odata/metadata` is the one code path producing the index — cli's `normalizeModel` composes it and only adds debug sections (byte-parity pinned by the `metadata-parity` test). `DataShape` lives in [`packages/client/src/connection.ts`](./packages/client/src/connection.ts) and MUST match between layers. Without any index the client still works under the schema-less contract (STABILITY.md): date heuristics both ways, Int64 stays a string.
+
+**Codegen is the DX layer.** The user writes `1c-odata.config.ts` declaring connections; the CLI fetches each base's `$metadata` (EDMX XML) into `metadata/<connection>.xml`, then emits per-connection TS in `generated/<connection>/<kind>/<Name>.ts` (or only `__metadata.json` with `--metadata-only`). The runtime `ODataV3Client` is generic over the user's emitted `Functions` type — full IDE completion against the live schema.
 
 **Three-tier API boundary** (enforced by `package.json#exports`):
 - `@1c-odata/client` — stable surface (semver-protected per STABILITY.md)
 - `@1c-odata/client/filter` — separate entrypoint for the filter DSL (`and`, `or`, `any`, `all`, `not`, `raw`)
-- `@1c-odata/client/internal` — escape hatch consumed by `@1c-odata/cli` and integration tests; MAY break in minor versions
+- `@1c-odata/client/internal` — escape hatch consumed by `@1c-odata/cli`, `@1c-odata/metadata`, and integration tests; MAY break in minor versions (safe: all packages are changesets-`linked` and release in lock-step)
 
-**Workspace deps via `workspace:*`.** `prepare` hook on `pnpm install` builds both packages' `dist/` automatically — running tests / typecheck on a fresh clone "just works" without an explicit build step. Don't manually run `pnpm build` unless investigating dist output.
+**Workspace deps via `workspace:*`.** `prepare` hook on `pnpm install` builds all packages' `dist/` automatically (topological order client → metadata → cli) — running tests / typecheck on a fresh clone "just works" without an explicit build step. Don't manually run `pnpm build` unless investigating dist output.
 
 ## Commands
 
