@@ -134,7 +134,7 @@ Everything URL-shaped works without a schema: query builder + filter DSL, CRUD, 
 | Clearing a date on write | `null` → sentinel automatically | pass `ONEC_EMPTY_DATE` explicitly (`null` stays `null`) |
 | `validateOnWrite` | ✅ | ❌ (throws at construction) |
 
-Recipes: opt out of all date handling with `shape: { dateMode: 'string' }` and convert manually via `parseInZone` / `formatInZone`; list a base's entity sets from `Object.keys(metadataIndex.entitySetToType)`.
+Recipes: opt out of all date handling with `shape: { dateMode: 'string' }` and convert manually via `parseInZone` / `formatInZone`. With a runtime index (previous section) you can also introspect the base: `Object.keys(client.metadataIndex.entitySetToType)` lists every entity set.
 
 ## Network configuration
 
