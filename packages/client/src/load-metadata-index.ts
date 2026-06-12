@@ -4,12 +4,28 @@ import { ParseError } from './errors.js'
 import type { MetadataIndex } from './validate.js'
 
 /**
- * Load and runtime-validate a codegen-emitted `__metadata.json` file.
+ * Runtime-validate an already-parsed `MetadataIndex` value — the pure core of
+ * `loadMetadataIndex` for index data that does not come from a file: a cache
+ * entry (`JSON.parse` of a stored `fetchMetadataIndex` result), an HTTP
+ * response, or any other transport.
  *
  * Validates structural shape: `schemaNamespace`, `schemas`, `entitySetToType`,
  * optional `shape`, optional `enums`. Mismatches throw `ParseError` with a
  * JSON-path breadcrumb pointing at the offending node (e.g.
- * `$.schemas.Catalog_X.properties.Y.type`).
+ * `$.schemas.Catalog_X.properties.Y.type`). `source` is only used in error
+ * messages to say where the data came from.
+ *
+ * @public
+ */
+export function parseMetadataIndex(data: unknown, source = '<metadata index>'): MetadataIndex {
+  assertMetadataIndex(data, source, '$')
+  return data
+}
+
+/**
+ * Load and runtime-validate a `__metadata.json` file (codegen-emitted, or any
+ * file with the same structure). `readFile` + `JSON.parse` +
+ * {@link parseMetadataIndex}.
  *
  * @public
  */
@@ -36,8 +52,7 @@ export async function loadMetadataIndex(input: string | URL): Promise<MetadataIn
   } catch (e) {
     throw new ParseError(`Invalid JSON in ${path}`, { cause: e })
   }
-  assertMetadataIndex(parsed, path, '$')
-  return parsed
+  return parseMetadataIndex(parsed, path)
 }
 
 // ── type guards ──────────────────────────────────────────────────────────────

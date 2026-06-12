@@ -9,6 +9,15 @@ export { type ClosureAddition, type ClosureResult, computeClosure } from './anal
 export { groupFunctionImportsByEntitySet } from './analysis/function-bindings.js'
 export { linkTabularParts } from './analysis/tabular-parts.js'
 export { detectValueStorage } from './analysis/value-storage.js'
+// ── runtime client ──
+export { type CreateDynamicClientOptions, createDynamicClient } from './dynamic-client.js'
+// ── $metadata download ──
+export {
+  type FetchMetadataIndexOptions,
+  type FetchMetadataXmlOptions,
+  fetchMetadataIndex,
+  fetchMetadataXml,
+} from './fetch.js'
 // ── runtime MetadataIndex building ──
 export { type BuildMetadataIndexOptions, buildMetadataIndex } from './index-builder.js'
 export type {

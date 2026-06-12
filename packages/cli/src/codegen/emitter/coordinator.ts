@@ -24,6 +24,18 @@ import { emitKindIndex, emitMasterIndex } from './index-emitter.js'
 export interface GenerateOptions extends DataShape {
   /** Whitelist of entity-type names. Globs supported. Closure auto-expands. */
   include?: string[]
+  /**
+   * Emit ONLY `__metadata.json` — skip all TypeScript files. For consumers
+   * that want a pinned runtime schema (validateOnWrite, date/Int64 parsing)
+   * without generated types and without fetching `$metadata` at startup.
+   *
+   * Controls what is EMITTED, not a cleaner: like every generate run, files
+   * from previous runs are overwritten but never deleted. Switching an
+   * already fully-generated connection to metadata-only refreshes
+   * `__metadata.json` and leaves the existing TypeScript untouched (it may
+   * go stale until the next full run).
+   */
+  metadataOnly?: boolean
 }
 
 export interface GenerateInput extends GenerateOptions {
@@ -78,7 +90,9 @@ export function generate(input: GenerateInput): GenerateResult {
   const { headerToTabulars, tabularToHeader } = linkTabularParts(kept)
   const keptByName = new Map(kept.map((e) => [e.name, e]))
 
-  // 3. Emit each header entity (or constant) → one file
+  // 3. Emit each header entity (or constant) → one file.
+  // In metadata-only mode the loop still runs for headerCountsByKind (the
+  // counts feed __metadata.json's debug section), but emits nothing.
   const populatedKinds = new Set<Kind>()
   const headerCountsByKind: Record<Kind, number> = Object.fromEntries(KIND_ORDER.map((k) => [k, 0])) as Record<
     Kind,
@@ -88,6 +102,8 @@ export function generate(input: GenerateInput): GenerateResult {
     if (tabularToHeader.has(e.name)) continue // emitted as nested in parent
     const kind = classifyEntity(e.name)
     if (!kind) continue
+    headerCountsByKind[kind] += 1
+    if (input.metadataOnly === true) continue
     const folder = KIND_TO_FOLDER[kind]
     const fileName = tailName(e.name)
     let body: string
@@ -111,78 +127,81 @@ export function generate(input: GenerateInput): GenerateResult {
     }
     files.set(`${folder}/${fileName}.ts`, body)
     populatedKinds.add(kind)
-    headerCountsByKind[kind] += 1
   }
 
-  // 4. Per-kind index.ts (always emit all 14 — empty ones get `export {}`)
-  for (const kind of KIND_ORDER) {
-    const folder = KIND_TO_FOLDER[kind]
-    const tails: string[] = []
-    for (const [path] of files) {
-      const prefix = `${folder}/`
-      if (!path.startsWith(prefix)) continue
-      if (path === `${prefix}index.ts`) continue
-      const tail = path.slice(prefix.length).replace(/\.ts$/, '')
-      tails.push(tail)
+  // Steps 4–7 are TypeScript emission — skipped entirely in metadata-only mode.
+  if (input.metadataOnly !== true) {
+    // 4. Per-kind index.ts (always emit all 14 — empty ones get `export {}`)
+    for (const kind of KIND_ORDER) {
+      const folder = KIND_TO_FOLDER[kind]
+      const tails: string[] = []
+      for (const [path] of files) {
+        const prefix = `${folder}/`
+        if (!path.startsWith(prefix)) continue
+        if (path === `${prefix}index.ts`) continue
+        const tail = path.slice(prefix.length).replace(/\.ts$/, '')
+        tails.push(tail)
+      }
+      files.set(`${folder}/index.ts`, emitKindIndex(tails))
     }
-    files.set(`${folder}/index.ts`, emitKindIndex(tails))
-  }
 
-  // 5. Standalone ComplexTypes (skip _RowType — those are emitted nested)
-  const standaloneComplex = filterStandaloneComplexTypes(
-    model.complexTypes.filter((ct) => closure.complexTypes.has(ct.name)),
-    tabularToHeader,
-  )
-  if (standaloneComplex.length > 0) {
+    // 5. Standalone ComplexTypes (skip _RowType — those are emitted nested)
+    const standaloneComplex = filterStandaloneComplexTypes(
+      model.complexTypes.filter((ct) => closure.complexTypes.has(ct.name)),
+      tabularToHeader,
+    )
+    if (standaloneComplex.length > 0) {
+      files.set(
+        'complex-types.ts',
+        emitComplexTypesFile({
+          types: standaloneComplex,
+          schemaNamespace: model.schemaNamespace,
+          int64Mode: opts.int64Mode,
+          dateMode: opts.dateMode,
+        }),
+      )
+    }
+
+    // 6. FunctionImports (from closure — bound to kept EntitySets)
+    const filteredFis = closure.functionImports
+    if (filteredFis.length > 0) {
+      files.set(
+        'function-imports.ts',
+        emitFunctionImportsFile({
+          fis: filteredFis,
+          schemaNamespace: model.schemaNamespace,
+          int64Mode: opts.int64Mode,
+          dateMode: opts.dateMode,
+        }),
+      )
+    }
+
+    // 6b. Enums (one file with all EDMX-declared enums)
+    const enumsToEmit = model.enumTypes
+    let hasEnums = false
+    if (enumsToEmit.length > 0) {
+      const enumsResult = emitEnumsFile(enumsToEmit)
+      for (const w of enumsResult.warnings) {
+        process.stderr.write(`@1c-odata/cli: ${w}\n`)
+      }
+      files.set('enums.ts', enumsResult.code)
+      hasEnums = true
+    }
+
+    // 7. Master index.ts + connection client
     files.set(
-      'complex-types.ts',
-      emitComplexTypesFile({
-        types: standaloneComplex,
-        schemaNamespace: model.schemaNamespace,
-        int64Mode: opts.int64Mode,
-        dateMode: opts.dateMode,
+      'index.ts',
+      emitMasterIndex({
+        populatedKinds: KIND_ORDER.filter((k) => populatedKinds.has(k)).map((k) => KIND_TO_FOLDER[k]),
+        hasComplexTypes: standaloneComplex.length > 0,
+        hasFunctionImports: filteredFis.length > 0,
+        hasEnums,
       }),
     )
+    files.set('client.ts', emitConnectionClientFile(filteredFis.length > 0))
   }
 
-  // 6. FunctionImports (from closure — bound to kept EntitySets)
-  const filteredFis = closure.functionImports
-  if (filteredFis.length > 0) {
-    files.set(
-      'function-imports.ts',
-      emitFunctionImportsFile({
-        fis: filteredFis,
-        schemaNamespace: model.schemaNamespace,
-        int64Mode: opts.int64Mode,
-        dateMode: opts.dateMode,
-      }),
-    )
-  }
-
-  // 6b. Enums (one file with all EDMX-declared enums)
-  const enumsToEmit = model.enumTypes
-  let hasEnums = false
-  if (enumsToEmit.length > 0) {
-    const enumsResult = emitEnumsFile(enumsToEmit)
-    for (const w of enumsResult.warnings) {
-      process.stderr.write(`@1c-odata/cli: ${w}\n`)
-    }
-    files.set('enums.ts', enumsResult.code)
-    hasEnums = true
-  }
-
-  // 7. Master index.ts
-  files.set(
-    'index.ts',
-    emitMasterIndex({
-      populatedKinds: KIND_ORDER.filter((k) => populatedKinds.has(k)).map((k) => KIND_TO_FOLDER[k]),
-      hasComplexTypes: standaloneComplex.length > 0,
-      hasFunctionImports: filteredFis.length > 0,
-      hasEnums,
-    }),
-  )
-
-  // 8. __metadata.json
+  // 8. __metadata.json — emitted in BOTH modes.
   // __metadata.json shape — ALWAYS persist resolved values, not conditional spread.
   // Without this: user without explicit shape → metadataIndex.shape lacks the field →
   // runtime parser sees undefined → no conversion → wire string returned, while
@@ -192,7 +211,6 @@ export function generate(input: GenerateInput): GenerateResult {
     dateMode: opts.dateMode,
   }
   files.set('__metadata.json', normalizeModel(model, headerCountsByKind, closure, shape, input.inputs))
-  files.set('client.ts', emitConnectionClientFile(filteredFis.length > 0))
 
   return { files }
 }

@@ -44,7 +44,7 @@ export function canonicalJSON(value: unknown): string {
 export interface InputHash {
   /** SHA-256 of the metadata XML file content. */
   metadata: string
-  /** SHA-256 of the canonical-JSON of `connectionToCodegenOptions(conn)`. */
+  /** SHA-256 of the canonical-JSON of the run's effective `GenerateOptions`. */
   options: string
   /** `@1c-odata/cli` package.json version verbatim. */
   cliVersion: string
@@ -57,9 +57,9 @@ function sha256(s: string): string {
 /**
  * Compute the input-hash triple for one connection.
  *
- * `xml` is the metadata file content, `options` is what
- * `connectionToCodegenOptions(conn)` returns (just `shape` + `include` —
- * the only fields codegen actually consumes), `cliVersion` is the cli
+ * `xml` is the metadata file content, `options` is the effective
+ * `GenerateOptions` for the run (`shape` + `include` from the connection,
+ * plus run-level flags like `metadataOnly`), `cliVersion` is the cli
  * package version (read from `package.json` at the call site).
  */
 export function computeInputs(xml: string, options: GenerateOptions, cliVersion: string): InputHash {

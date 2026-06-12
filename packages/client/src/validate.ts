@@ -26,10 +26,13 @@ export interface EntitySchema {
 }
 
 /**
- * Runtime schema index loaded from the codegen-emitted `__metadata.json` and
- * passed to the `ODataV3Client` when `validateOnWrite: true`. Keyed by
- * EntityType *local* name (no `<schema>.` prefix), matching the codegen
- * convention.
+ * Runtime schema index consumed by `ODataV3Client` for schema-driven parsing
+ * and write validation. This is a structural contract — the source is not
+ * specified: typically the codegen-emitted `__metadata.json`
+ * (`loadMetadataIndex`), an index built at runtime from a live `$metadata`
+ * (`buildMetadataIndex` / `fetchMetadataIndex` in `@1c-odata/metadata`), or
+ * a revived cache entry (`parseMetadataIndex`). Keyed by EntityType *local*
+ * name (no `<schema>.` prefix), matching the codegen convention.
  *
  * @public
  */

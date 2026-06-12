@@ -16,7 +16,8 @@ export interface DataShape {
    *          (safe integer range is ±2^53; typical 1С Int64 fields like LineNumber
    *          are small counters well within range).
    * 'bigint' — precision-correct via native bigint. Use when values may exceed 2^53.
-   *          NOTE: bigint values cannot be JSON.stringified directly — needs a replacer.
+   *          The client serializes bigint write payloads as the wire string form
+   *          automatically — read → write round-trips work out of the box.
    * 'string' — wire passthrough; no automatic conversion, user-managed.
    */
   int64Mode?: 'number' | 'bigint' | 'string'

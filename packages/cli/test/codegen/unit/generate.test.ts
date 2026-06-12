@@ -113,6 +113,16 @@ describe('generate() orchestrates parser + analysis + emitters', () => {
     expect(result.files.has('documents/РТУ.ts')).toBe(false)
   })
 
+  it('metadataOnly emits __metadata.json and nothing else', () => {
+    const full = generate({ metadata: FIXTURE })
+    const result = generate({ metadata: FIXTURE, metadataOnly: true })
+    expect([...result.files.keys()]).toEqual(['__metadata.json'])
+    // Same content as a full run — headerCounts included.
+    expect(JSON.parse(result.files.get('__metadata.json') as string)).toEqual(
+      JSON.parse(full.files.get('__metadata.json') as string),
+    )
+  })
+
   it('emits all 14 kind index.ts files for consistency', () => {
     const result = generate({ metadata: FIXTURE })
     const expectedKinds = [
