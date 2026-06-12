@@ -3,7 +3,8 @@ import { ODataError, type ODataErrorOptions } from './errors.js'
 
 /**
  * Per-property constraints emitted by codegen into `__metadata.json`.
- * Mirrors `PropertySchema` in `@1c-odata/cli/codegen` (see `normalize.ts`).
+ * Produced by `buildMetadataIndex` in `@1c-odata/metadata` (see
+ * `index-builder.ts`).
  *
  * @public
  */

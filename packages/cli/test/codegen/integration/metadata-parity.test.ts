@@ -20,6 +20,7 @@ const FIXTURES = ['trade_v11.5.xml', 'bp_v3.0.xml'] as const
 
 const SHAPES: DataShape[] = [
   {}, // defaults: int64Mode 'number', dateMode 'date'
+  { int64Mode: 'bigint' }, // partial — dateMode must resolve to its default on both paths
   { int64Mode: 'bigint', dateMode: 'string' },
 ]
 

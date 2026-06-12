@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
-import { buildMetadataIndex, parseEdmx } from '../../src/index.js'
+import { beforeAll, describe, expect, it } from 'vitest'
+import { buildMetadataIndex, type EdmxModel, parseEdmx } from '../../src/index.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const snapshotsDir = resolve(here, '../../../../snapshots')
@@ -45,20 +45,23 @@ const FIXTURES: SnapshotExpected[] = [
 describe('integration: real EDMX snapshots from snapshots/', () => {
   for (const fx of FIXTURES) {
     describe(fx.file, () => {
-      // Read once per describe — XML is up to 16 MB, don't re-read for every `it()`
-      const xml = readFileSync(resolve(snapshotsDir, fx.file), 'utf8')
+      // Read + parse once per fixture — XML is up to 16 MB, don't redo for every `it()`.
+      // A parse failure fails the whole suite from beforeAll, which is the intent.
+      let model: EdmxModel
+      beforeAll(() => {
+        const xml = readFileSync(resolve(snapshotsDir, fx.file), 'utf8')
+        model = parseEdmx(xml)
+      }, 30_000)
 
-      it('parseEdmx() does not throw + extracts the expected counts', () => {
-        const model = parseEdmx(xml)
+      it('parseEdmx() extracts the expected counts', () => {
         expect(model.schemaNamespace).toBe('StandardODATA')
         expect(model.entityTypes.length).toBe(fx.entityTypeCount)
         expect(model.complexTypes.length).toBe(fx.complexTypeCount)
         expect(model.enumTypes.length).toBe(fx.enumTypeCount)
         expect(model.entityContainer.functionImports.length).toBe(fx.functionImportCount)
-      }, 30_000)
+      })
 
       it('buildMetadataIndex() covers the full model with resolved shape defaults', () => {
-        const model = parseEdmx(xml)
         const idx = buildMetadataIndex(model)
 
         expect(idx.schemaNamespace).toBe('StandardODATA')
@@ -78,7 +81,6 @@ describe('integration: real EDMX snapshots from snapshots/', () => {
       }, 60_000)
 
       it('buildMetadataIndex({ filter }) narrows to the dependency closure', () => {
-        const model = parseEdmx(xml)
         const full = buildMetadataIndex(model)
         const narrowed = buildMetadataIndex(model, { filter: (name) => name === fx.filterSeed })
 
