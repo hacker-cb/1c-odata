@@ -75,15 +75,15 @@ importers:
       '@1c-odata/client':
         specifier: workspace:*
         version: link:../client
+      '@1c-odata/metadata':
+        specifier: workspace:*
+        version: link:../metadata
       c12:
         specifier: ^3.3.4
         version: 3.3.4
       commander:
         specifier: ^14.0.3
         version: 14.0.3
-      fast-xml-parser:
-        specifier: ^5.7.3
-        version: 5.7.3
       micromatch:
         specifier: ^4.0.8
         version: 4.0.8
@@ -103,6 +103,15 @@ importers:
       undici:
         specifier: ^6.25.0
         version: 6.25.0
+
+  packages/metadata:
+    dependencies:
+      '@1c-odata/client':
+        specifier: workspace:*
+        version: link:../client
+      fast-xml-parser:
+        specifier: ^5.7.3
+        version: 5.7.3
 
 packages:
 

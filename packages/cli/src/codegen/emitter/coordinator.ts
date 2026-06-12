@@ -1,11 +1,18 @@
 import type { DataShape } from '@1c-odata/client'
-import { computeClosure } from '../analysis/closure.js'
-import { linkTabularParts } from '../analysis/tabular-parts.js'
+import {
+  classifyEntity,
+  computeClosure,
+  type EdmxComplexType,
+  type EdmxEntityType,
+  KIND_ORDER,
+  KIND_TO_FOLDER,
+  type Kind,
+  linkTabularParts,
+  parseEdmx,
+  tailName,
+} from '@1c-odata/metadata'
 import { buildNameFilter } from '../name-filter.js'
 import { normalizeModel } from '../normalize.js'
-import type { EdmxComplexType, EdmxEntityType } from '../parser/ast.js'
-import { classifyEntity, KIND_ORDER, KIND_TO_FOLDER, type Kind, tailName } from '../parser/classifier.js'
-import { parseEdmx } from '../parser/edmx-parser.js'
 import { emitComplexTypesFile } from './complex.js'
 import { emitConnectionClientFile } from './connection-client.js'
 import { emitConstantFile } from './constant.js'

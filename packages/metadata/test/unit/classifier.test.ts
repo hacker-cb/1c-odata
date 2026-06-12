@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { classifyEntity, KIND_ORDER, KIND_TO_FOLDER, type Kind } from '../../../src/codegen/parser/classifier.js'
+import { classifyEntity, KIND_ORDER, KIND_TO_FOLDER, type Kind } from '../../src/parser/classifier.js'
 
 describe('classifier', () => {
   it('maps each prefix to its expected kind', () => {

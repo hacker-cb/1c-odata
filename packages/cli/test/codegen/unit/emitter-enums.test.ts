@@ -1,6 +1,6 @@
+import type { EdmxEnumType } from '@1c-odata/metadata'
 import { describe, expect, it } from 'vitest'
 import { emitEnumsFile } from '../../../src/codegen/emitter/enums.js'
-import type { EdmxEnumType } from '../../../src/codegen/parser/ast.js'
 
 describe('emitEnumsFile', () => {
   it('emits a header comment + a const + type alias for a single enum', () => {

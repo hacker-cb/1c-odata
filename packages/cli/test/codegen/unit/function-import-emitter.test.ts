@@ -1,6 +1,6 @@
+import type { EdmxFunctionImport } from '@1c-odata/metadata'
 import { describe, expect, it } from 'vitest'
 import { emitFunctionImportsFile } from '../../../src/codegen/emitter/function-import.js'
-import type { EdmxFunctionImport } from '../../../src/codegen/parser/ast.js'
 
 const fis: EdmxFunctionImport[] = [
   {

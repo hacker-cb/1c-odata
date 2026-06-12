@@ -11,7 +11,7 @@ import type {
   EdmxNavigationProperty,
   EdmxParameter,
   EdmxProperty,
-} from '../../../src/codegen/parser/ast.js'
+} from '../../src/parser/ast.js'
 
 describe('parser/ast type shape', () => {
   it('EdmxModel composes the documented child arrays', () => {

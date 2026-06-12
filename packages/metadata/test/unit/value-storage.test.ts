@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { detectValueStorage } from '../../../src/codegen/analysis/value-storage.js'
-import type { EdmxEntityType } from '../../../src/codegen/parser/ast.js'
+import { detectValueStorage } from '../../src/analysis/value-storage.js'
+import type { EdmxEntityType } from '../../src/parser/ast.js'
 
 const entity: EdmxEntityType = {
   name: 'Catalog_Файлы',

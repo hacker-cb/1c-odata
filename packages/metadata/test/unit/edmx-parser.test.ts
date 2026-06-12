@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseEdmx } from '../../../src/codegen/parser/edmx-parser.js'
+import { parseEdmx } from '../../src/parser/edmx-parser.js'
 
 const EMPTY_EDMX = `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { computeClosure } from '../../../src/codegen/analysis/closure.js'
-import type { EdmxModel } from '../../../src/codegen/parser/ast.js'
+import { computeClosure } from '../../src/analysis/closure.js'
+import type { EdmxModel } from '../../src/parser/ast.js'
 
 const minimalModel: EdmxModel = {
   schemaNamespace: 'StandardODATA',
