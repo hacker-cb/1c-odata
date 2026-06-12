@@ -13,3 +13,22 @@ updates:
     groups:
       github-actions:
         patterns: ['*']
+
+  # `npm` also covers pnpm: the workspace is resolved from the root
+  # pnpm-lock.yaml + pnpm-workspace.yaml, so this single entry reaches
+  # packages/* and examples/*. Minor + patch bumps are grouped weekly,
+  # production deps separately from dev deps — a production bump of a
+  # published package changes what consumers install, so it deserves its
+  # own PR (and a manual changeset before merge). Majors match no group
+  # and arrive as individual PRs.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-prod-minor-patch:
+        dependency-type: production
+        update-types: [minor, patch]
+      npm-dev-minor-patch:
+        dependency-type: development
+        update-types: [minor, patch]
