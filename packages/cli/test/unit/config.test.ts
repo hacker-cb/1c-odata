@@ -4,20 +4,11 @@ import { join } from 'node:path'
 import { InvalidArgumentError } from '@1c-odata/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { loadConfig } from '../../src/config.js'
+import { rejection } from './_helpers.js'
 
 let tmp: string
 
 const VALID_CONN = `{ baseUrl: 'http://example.test/odata', auth: { username: 'u', password: 'p' }, serverTimezone: 'Europe/Moscow' }`
-
-/** Await a promise that MUST reject; returns the typed Error (fails loudly on fulfill). */
-async function rejection(p: Promise<unknown>): Promise<Error> {
-  return p.then(
-    () => {
-      throw new Error('expected promise to reject, but it fulfilled')
-    },
-    (e: unknown) => (e instanceof Error ? e : new Error(String(e))),
-  )
-}
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), '1c-odata-cli-'))
