@@ -201,7 +201,7 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
   private transformWriteBody(body: unknown, entitySet: string): unknown {
     if (body === undefined) return undefined
     if (typeof body !== 'object' || body === null) return body
-    if ((this.shape?.dateMode ?? 'date') === 'string') return body
+    if (this.shape?.dateMode === 'string') return body
     const idx = this.v3Opts.metadataIndex
     const typeName = idx?.entitySetToType[entitySet]
     const schema = typeName !== undefined ? idx?.schemas[typeName] : undefined

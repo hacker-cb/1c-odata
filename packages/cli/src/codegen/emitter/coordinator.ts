@@ -28,6 +28,12 @@ export interface GenerateOptions extends DataShape {
    * Emit ONLY `__metadata.json` — skip all TypeScript files. For consumers
    * that want a pinned runtime schema (validateOnWrite, date/Int64 parsing)
    * without generated types and without fetching `$metadata` at startup.
+   *
+   * Controls what is EMITTED, not a cleaner: like every generate run, files
+   * from previous runs are overwritten but never deleted. Switching an
+   * already fully-generated connection to metadata-only refreshes
+   * `__metadata.json` and leaves the existing TypeScript untouched (it may
+   * go stale until the next full run).
    */
   metadataOnly?: boolean
 }

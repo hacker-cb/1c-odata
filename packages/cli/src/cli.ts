@@ -67,7 +67,11 @@ export function buildProgram(): Command {
     .option('-c, --connection <name>', 'connection name (defaults to all)')
     .option('--config <path>', 'override config file path')
     .option('-f, --force', 'regenerate even when inputs are unchanged', false)
-    .option('--metadata-only', 'emit only __metadata.json (no TypeScript files)', false)
+    .option(
+      '--metadata-only',
+      'emit only __metadata.json (no TypeScript files; existing generated files are left untouched)',
+      false,
+    )
     .action(async (opts: CommandOptions) => {
       const cwd = process.cwd()
       const loaded = await loadConfig({

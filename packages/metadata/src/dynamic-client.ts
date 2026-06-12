@@ -65,9 +65,16 @@ export async function createDynamicClient<TFunctions = ODataV3FunctionsBase>(
 ): Promise<ODataV3Client<TFunctions>> {
   const { validateOnWrite, client, ...fetchOpts } = opts
   const metadataIndex = await fetchMetadataIndex(conn, fetchOpts)
+  // Pick the allowed client options explicitly — a blind spread of an object
+  // that happens to carry extra keys (structural typing) must not be able to
+  // override the connection's baseUrl / auth / serverTimezone.
+  const { timeout, retry, hooks, signal } = client ?? {}
   return new ODataV3Client<TFunctions>({
     ...clientOptionsFromConnection(conn),
-    ...client,
+    ...(timeout !== undefined ? { timeout } : {}),
+    ...(retry !== undefined ? { retry } : {}),
+    ...(hooks !== undefined ? { hooks } : {}),
+    ...(signal !== undefined ? { signal } : {}),
     metadataIndex,
     ...(validateOnWrite !== undefined ? { validateOnWrite } : {}),
   })

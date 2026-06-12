@@ -44,7 +44,7 @@ export function canonicalJSON(value: unknown): string {
 export interface InputHash {
   /** SHA-256 of the metadata XML file content. */
   metadata: string
-  /** SHA-256 of the canonical-JSON of `connectionToCodegenOptions(conn)`. */
+  /** SHA-256 of the canonical-JSON of the run's effective `GenerateOptions`. */
   options: string
   /** `@1c-odata/cli` package.json version verbatim. */
   cliVersion: string

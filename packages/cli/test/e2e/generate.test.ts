@@ -100,5 +100,12 @@ describe('e2e: generate against committed snapshots/trade_v11.5.xml', () => {
     await runGenerate({ cwd: project.tmp, cliVersion: '0.0.0-test', config })
     expect(existsSync(`${project.tmp}/generated/trade/index.ts`)).toBe(true)
     expect(existsSync(`${project.tmp}/generated/trade/catalogs/index.ts`)).toBe(true)
+
+    // Contract: the flag controls what is EMITTED, not a cleaner. Going back
+    // to metadata-only refreshes __metadata.json but leaves the previously
+    // generated TypeScript in place (generate never deletes files).
+    await runGenerate({ cwd: project.tmp, cliVersion: '0.0.0-test', config, metadataOnly: true })
+    expect(existsSync(`${project.tmp}/generated/trade/index.ts`)).toBe(true)
+    expect(existsSync(`${project.tmp}/generated/trade/__metadata.json`)).toBe(true)
   }, 60_000)
 })
