@@ -61,7 +61,7 @@
     "@1c-odata/client": "workspace:*",
     "@1c-odata/metadata": "workspace:*",
     "c12": "^3.3.4",
-    "commander": "^14.0.3",
+    "commander": "^15.0.0",
     "micromatch": "^4.0.8"
   },
   "devDependencies": {
