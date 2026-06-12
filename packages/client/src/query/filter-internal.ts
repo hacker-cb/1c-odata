@@ -174,9 +174,9 @@ interface BooleanOps {}
  * ones. Calling `isof`/`cast` on a non-composite string is a server-side
  * error; caller responsibility.
  *
- * `cast()` here is typed `FieldExpr<string>` because polymorphic-ref pairs
- * are the only composite kind we surface as `string`. The 1С platform also
- * accepts `cast`/`isof` on other composite-typed attrs (e.g. composite-
+ * `cast()` here is typed `ChainedFieldExpr<string>` because polymorphic-ref
+ * pairs are the only composite kind we surface as `string`. The 1С platform
+ * also accepts `cast`/`isof` on other composite-typed attrs (e.g. composite-
  * numeric requisites) — those aren't reachable through this typed surface;
  * fall back to `raw(...)` if you need them.
  */
