@@ -1,6 +1,6 @@
+import type { EdmxEntityType } from '@1c-odata/metadata'
 import { describe, expect, it } from 'vitest'
 import { emitConstantFile } from '../../../src/codegen/emitter/constant.js'
-import type { EdmxEntityType } from '../../../src/codegen/parser/ast.js'
 
 const constant: EdmxEntityType = {
   name: 'Constant_ОсновнаяВалюта',

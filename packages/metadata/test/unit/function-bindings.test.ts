@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { groupFunctionImportsByEntitySet } from '../../../src/codegen/analysis/function-bindings.js'
-import type { EdmxFunctionImport } from '../../../src/codegen/parser/ast.js'
+import { groupFunctionImportsByEntitySet } from '../../src/analysis/function-bindings.js'
+import type { EdmxFunctionImport } from '../../src/parser/ast.js'
 
 describe('groupFunctionImportsByEntitySet', () => {
   it('groups FIs by their entitySetPath; keeps unbound FIs under "" key', () => {

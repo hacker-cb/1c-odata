@@ -1,0 +1,63 @@
+{
+  "name": "@1c-odata/metadata",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "1С:Enterprise OData V3 schema toolkit — EDMX ($metadata) parsing and runtime MetadataIndex building for @1c-odata/client.",
+  "keywords": [
+    "1c",
+    "1c-enterprise",
+    "odata",
+    "odata-v3",
+    "edmx",
+    "metadata",
+    "typescript"
+  ],
+  "author": "Pavel Sokolov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hacker-cb/1c-odata.git",
+    "directory": "packages/metadata"
+  },
+  "homepage": "https://github.com/hacker-cb/1c-odata#readme",
+  "bugs": {
+    "url": "https://github.com/hacker-cb/1c-odata/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.21.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "prepare": "pnpm build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:unit": "vitest run --exclude \"test/integration/**\"",
+    "test:integration:offline": "vitest run test/integration",
+    "test:integration:live": "echo 'no live integration in metadata' && exit 0",
+    "test:integration:write": "echo 'no write integration in metadata' && exit 0",
+    "test:e2e": "echo no e2e in metadata && exit 0",
+    "typecheck": "tsc --noEmit",
+    "package:lint": "publint && attw --pack . --ignore-rules no-resolution cjs-resolves-to-esm"
+  },
+  "dependencies": {
+    "@1c-odata/client": "workspace:*",
+    "fast-xml-parser": "^5.7.3"
+  }
+}

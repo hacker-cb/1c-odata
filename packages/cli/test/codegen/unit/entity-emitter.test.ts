@@ -1,6 +1,6 @@
+import type { EdmxEntityType } from '@1c-odata/metadata'
 import { describe, expect, it } from 'vitest'
 import { type EntityEmitInput, emitEntityFile } from '../../../src/codegen/emitter/entity.js'
-import type { EdmxEntityType } from '../../../src/codegen/parser/ast.js'
 
 const header: EdmxEntityType = {
   name: 'Document_РТУ',

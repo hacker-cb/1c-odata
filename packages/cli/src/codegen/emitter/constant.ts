@@ -1,4 +1,4 @@
-import type { EdmxEntityType } from '../parser/ast.js'
+import type { EdmxEntityType } from '@1c-odata/metadata'
 import { compareCyrillic } from '../util.js'
 import { applyNullable, mapEdmxTypeToTs } from './type-mapper.js'
 

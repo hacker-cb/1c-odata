@@ -1,5 +1,4 @@
-import { detectValueStorage } from '../analysis/value-storage.js'
-import type { EdmxEntityType, EdmxNavigationProperty } from '../parser/ast.js'
+import { detectValueStorage, type EdmxEntityType, type EdmxNavigationProperty } from '@1c-odata/metadata'
 import { compareCyrillic } from '../util.js'
 import { applyNullable, extractCustomSymbols, mapEdmxTypeToTs } from './type-mapper.js'
 

@@ -1,5 +1,4 @@
-import { groupFunctionImportsByEntitySet } from '../analysis/function-bindings.js'
-import type { EdmxFunctionImport, EdmxParameter } from '../parser/ast.js'
+import { type EdmxFunctionImport, type EdmxParameter, groupFunctionImportsByEntitySet } from '@1c-odata/metadata'
 import { compareCyrillic } from '../util.js'
 import { applyNullable, extractCustomSymbols, mapEdmxTypeToTs } from './type-mapper.js'
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { linkTabularParts } from '../../../src/codegen/analysis/tabular-parts.js'
-import type { EdmxEntityType } from '../../../src/codegen/parser/ast.js'
+import { linkTabularParts } from '../../src/analysis/tabular-parts.js'
+import type { EdmxEntityType } from '../../src/parser/ast.js'
 
 describe('linkTabularParts', () => {
   it('groups <Header>_<Tabular> entities under their parent header', () => {

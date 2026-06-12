@@ -1,4 +1,4 @@
-import type { EdmxComplexType } from '../parser/ast.js'
+import type { EdmxComplexType } from '@1c-odata/metadata'
 import { applyNullable, mapEdmxTypeToTs } from './type-mapper.js'
 
 export interface ComplexEmitInput {

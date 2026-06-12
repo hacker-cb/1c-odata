@@ -1,6 +1,6 @@
+import type { EdmxComplexType } from '@1c-odata/metadata'
 import { describe, expect, it } from 'vitest'
 import { emitComplexTypesFile } from '../../../src/codegen/emitter/complex.js'
-import type { EdmxComplexType } from '../../../src/codegen/parser/ast.js'
 
 const types: EdmxComplexType[] = [
   {

@@ -3,7 +3,7 @@
   "changelog": ["@changesets/changelog-github", { "repo": "hacker-cb/1c-odata" }],
   "commit": false,
   "fixed": [],
-  "linked": [["@1c-odata/client", "@1c-odata/cli"]],
+  "linked": [["@1c-odata/client", "@1c-odata/metadata", "@1c-odata/cli"]],
   "access": "public",
   "baseBranch": "master",
   "updateInternalDependencies": "patch",

@@ -27,6 +27,11 @@
       "inputs": ["src/**", "test/**", "vitest.config.ts"],
       "outputs": []
     },
+    "@1c-odata/metadata#test:unit": {
+      "dependsOn": ["^build", "build"],
+      "inputs": ["src/**", "test/**", "vitest.config.ts"],
+      "outputs": []
+    },
     "test:integration:offline": {
       "dependsOn": ["^build"],
       "inputs": ["src/**", "test/**", "../../snapshots/**", "vitest.config.ts"],
