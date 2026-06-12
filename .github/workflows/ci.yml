@@ -92,7 +92,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
       - name: Lint (gate 1)
         run: pnpm biome ci .
@@ -107,7 +107,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
       - name: Unit tests (gate 3)
         run: pnpm turbo test:unit --filter='./packages/*'
@@ -121,7 +121,7 @@ jobs:
         run: pnpm turbo test:e2e --filter='./packages/*'
       - name: Upload coverage
         if: success() && matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: packages/*/coverage/
@@ -139,11 +139,11 @@ jobs:
     # carries embedded credentials).
     #
     # NODE_OPTIONS=--import=.ci/proxy-init.mjs is set per-step (not
-    # job-level) — job-level env applies to actions/checkout@v5 which runs
+    # job-level) — job-level env applies to actions/checkout@v6 which runs
     # Node before the workspace is checked out, so the preload file
     # doesn't exist yet and Node fails with ERR_MODULE_NOT_FOUND.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
       - name: Fetch live metadata (gate 10a)
         # Overwrites the committed metadata/default.xml snapshot (full ~15 MB,
@@ -192,7 +192,7 @@ jobs:
     # its `needs` is sufficient gating — if detect-secrets skipped (fork)
     # or failed (missing secret), this job is automatically skipped too.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
       - name: Generate example types (needed by enum-roundtrip live test)
         # `packages/client/test/integration/live/enum-roundtrip.test.ts` loads
@@ -228,7 +228,7 @@ jobs:
     # no needs-edge to an owner-gated job would expose secrets to fork PRs.
     if: needs.detect-secrets.outputs.allow-writes == 'yes'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
       - name: Generate example types (needed by enum-roundtrip live test)
         # `test:integration:write` turbo-depends on `test:integration:live`, which

@@ -1,0 +1,15 @@
+# Weekly grouped version bumps for GitHub Actions. For the github-actions
+# ecosystem `/` only covers .github/workflows + a root-level action.yml;
+# composite actions under .github/actions/ need their own directory entry,
+# hence the glob.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ['*']
