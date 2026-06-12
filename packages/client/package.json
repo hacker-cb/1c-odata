@@ -65,7 +65,7 @@
     "package:lint": "publint && attw --pack . --ignore-rules no-resolution cjs-resolves-to-esm"
   },
   "devDependencies": {
-    "msw": "^2.14.3",
+    "msw": "^2.14.6",
     "undici": "^6.25.0"
   }
 }

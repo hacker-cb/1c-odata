@@ -61,7 +61,7 @@
     "fast-xml-parser": "^5.8.0"
   },
   "devDependencies": {
-    "msw": "^2.14.3",
+    "msw": "^2.14.6",
     "undici": "^6.25.0"
   }
 }
