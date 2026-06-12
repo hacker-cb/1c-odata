@@ -22,6 +22,11 @@ export interface CreateDynamicClientOptions extends FetchMetadataIndexOptions {
    * Runtime client options applied on top of
    * `clientOptionsFromConnection(conn)` — request timeout, retry policy,
    * hooks, umbrella abort signal.
+   *
+   * NB: the top-level `signal` (from `FetchMetadataIndexOptions`) aborts the
+   * `$metadata` download AND becomes the returned client's umbrella signal,
+   * so one signal cancels everything. Set `client.signal` to use a different
+   * umbrella signal for the client phase.
    */
   client?: Pick<ClientOptions, 'timeout' | 'retry' | 'hooks' | 'signal'>
 }
@@ -69,12 +74,15 @@ export async function createDynamicClient<TFunctions = ODataV3FunctionsBase>(
   // that happens to carry extra keys (structural typing) must not be able to
   // override the connection's baseUrl / auth / serverTimezone.
   const { timeout, retry, hooks, signal } = client ?? {}
+  // One-signal ergonomics: the top-level signal cancelled the download and
+  // also becomes the client umbrella unless client.signal overrides it.
+  const umbrellaSignal = signal ?? fetchOpts.signal
   return new ODataV3Client<TFunctions>({
     ...clientOptionsFromConnection(conn),
     ...(timeout !== undefined ? { timeout } : {}),
     ...(retry !== undefined ? { retry } : {}),
     ...(hooks !== undefined ? { hooks } : {}),
-    ...(signal !== undefined ? { signal } : {}),
+    ...(umbrellaSignal !== undefined ? { signal: umbrellaSignal } : {}),
     metadataIndex,
     ...(validateOnWrite !== undefined ? { validateOnWrite } : {}),
   })
