@@ -1,5 +1,19 @@
 # @1c-odata/cli
 
+## 0.3.0
+
+### Minor Changes
+
+- [#7](https://github.com/hacker-cb/1c-odata/pull/7) [`2867f7d`](https://github.com/hacker-cb/1c-odata/commit/2867f7d987c18d26bc1b43cadc4cf16c40c7edce) Thanks [@hacker-cb](https://github.com/hacker-cb)! - Codegen now consumes `@1c-odata/metadata` for EDMX parsing, schema analysis, and the runtime sections of `__metadata.json` (`buildMetadataIndex` is the single source of truth shared with runtime consumers; emitted JSON is byte-identical). Dependency changes: `fast-xml-parser` moved to `@1c-odata/metadata`, which is now a dependency of the CLI. The public API (`1c-odata` binary, `@1c-odata/cli/codegen` exports) is unchanged; only unsupported deep imports of internal parser/analysis modules would need updating.
+
+- [#9](https://github.com/hacker-cb/1c-odata/pull/9) [`39e3003`](https://github.com/hacker-cb/1c-odata/commit/39e3003a1f287d0cf21ed519699379cc04774c1e) Thanks [@hacker-cb](https://github.com/hacker-cb)! - `1c-odata generate --metadata-only` emits just `__metadata.json` (no TypeScript files) — a pinned runtime schema for `validateOnWrite` / date / Int64 parsing without generating thousands of types and without fetching `$metadata` at process startup. The flag participates in the smart-skip input hash, so switching modes regenerates correctly.
+
+### Patch Changes
+
+- Updated dependencies [[`2867f7d`](https://github.com/hacker-cb/1c-odata/commit/2867f7d987c18d26bc1b43cadc4cf16c40c7edce), [`0fff3c8`](https://github.com/hacker-cb/1c-odata/commit/0fff3c877f31526af8301646f3aa9663f5907f7c), [`39e3003`](https://github.com/hacker-cb/1c-odata/commit/39e3003a1f287d0cf21ed519699379cc04774c1e), [`39e3003`](https://github.com/hacker-cb/1c-odata/commit/39e3003a1f287d0cf21ed519699379cc04774c1e), [`39e3003`](https://github.com/hacker-cb/1c-odata/commit/39e3003a1f287d0cf21ed519699379cc04774c1e)]:
+  - @1c-odata/metadata@0.3.0
+  - @1c-odata/client@0.3.0
+
 ## 0.2.0
 
 ### Minor Changes
