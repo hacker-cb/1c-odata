@@ -98,6 +98,17 @@ jobs:
         run: pnpm biome ci .
       - name: Typecheck (gate 2)
         run: pnpm turbo typecheck --filter='./packages/*'
+      - name: Typecheck examples offline (gate 2b)
+        # Examples are otherwise typechecked only inside the owner-gated
+        # test-example job (it needs live secrets) — fork PRs would skip them
+        # entirely. Both examples typecheck offline: dynamic needs no codegen
+        # at all, basic regenerates from its committed metadata/default.xml.
+        # Ubuntu-only: tsc over thousands of generated files is slow on the
+        # Windows runner (NTFS), and type results are OS-independent.
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          pnpm --filter basic-example typecheck
+          pnpm --filter dynamic-example typecheck
 
   test-and-build:
     runs-on: ${{ matrix.os }}

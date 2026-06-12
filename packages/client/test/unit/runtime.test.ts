@@ -16,10 +16,10 @@ describe('clientOptionsFromConnection', () => {
     expect(opts.serverTimezone).toBe('Europe/Moscow')
     // `shape` is forwarded from Connection into ODataV3ClientOptions so the client
     // can resolve it at runtime even when no metadataIndex is loaded.
-    expect((opts as Record<string, unknown>).shape).toEqual({ int64Mode: 'bigint' })
+    expect((opts as unknown as Record<string, unknown>).shape).toEqual({ int64Mode: 'bigint' })
     expect(opts.auth.scheme).toBe('basic')
     expect(opts.auth.header).toBe(`Basic ${Buffer.from('u:p').toString('base64')}`)
-    expect((opts as Record<string, unknown>).codegen).toBeUndefined()
+    expect((opts as unknown as Record<string, unknown>).codegen).toBeUndefined()
   })
 
   it('does NOT read process.env (pure)', () => {

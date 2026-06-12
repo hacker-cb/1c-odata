@@ -10,6 +10,13 @@ beforeEach(() => server.resetHandlers())
 
 const baseUrl = 'http://example.test/odata'
 const auth = BasicAuth({ username: 'u', password: 'p' })
+
+// Codegen-style Functions shape — Promise<void> write FIs gain `ref` via
+// WithInstanceRef, mirroring what @1c-odata/cli/codegen emits.
+interface TestFunctions {
+  BusinessProcess_X: { Start(args: Record<string, unknown>): Promise<void> }
+  Task_X: { ExecuteTask(args: Record<string, unknown>): Promise<void> }
+}
 const REF = '11111111-2222-3333-4444-555555555555'
 
 describe('client.document(...).post / .unpost', () => {
@@ -55,7 +62,7 @@ describe('functions proxy: BusinessProcess.Start + Task.ExecuteTask (replaces re
         return HttpResponse.json({})
       }),
     )
-    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    const c = new ODataV3Client<TestFunctions>({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     await c.functions.BusinessProcess_X.Start({ ref: REF })
     expect(url).toContain(`BusinessProcess_X(guid'${REF}')/Start()`)
   })
@@ -68,7 +75,7 @@ describe('functions proxy: BusinessProcess.Start + Task.ExecuteTask (replaces re
         return HttpResponse.json({})
       }),
     )
-    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    const c = new ODataV3Client<TestFunctions>({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     await c.functions.Task_X.ExecuteTask({ ref: REF })
     expect(url).toContain(`Task_X(guid'${REF}')/ExecuteTask()`)
   })

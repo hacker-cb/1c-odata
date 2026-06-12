@@ -9,6 +9,16 @@ let tmp: string
 
 const VALID_CONN = `{ baseUrl: 'http://example.test/odata', auth: { username: 'u', password: 'p' }, serverTimezone: 'Europe/Moscow' }`
 
+/** Await a promise that MUST reject; returns the typed Error (fails loudly on fulfill). */
+async function rejection(p: Promise<unknown>): Promise<Error> {
+  return p.then(
+    () => {
+      throw new Error('expected promise to reject, but it fulfilled')
+    },
+    (e: unknown) => (e instanceof Error ? e : new Error(String(e))),
+  )
+}
+
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), '1c-odata-cli-'))
 })
@@ -77,7 +87,7 @@ export default defineConfig({
       join(tmp, '1c-odata.config.ts'),
       `export default { connections: { trade: { baseUrl: 'http://leak:secret@example/odata', auth: { username: 'u', password: 'p' }, serverTimezone: 'Europe/Moscow' } } }`,
     )
-    const err = await loadConfig({ cwd: tmp }).catch((e) => e as Error)
+    const err = await rejection(loadConfig({ cwd: tmp }))
     expect(err.message).toMatch(/must NOT contain credentials/)
     // Error must NOT leak URL contents
     expect(err.message).not.toContain('leak')
@@ -89,7 +99,7 @@ export default defineConfig({
       join(tmp, '1c-odata.config.ts'),
       `export default { connections: { x: { baseUrl: 'not a url', auth: { username: 'u', password: 'p' }, serverTimezone: 'Europe/Moscow' } } }`,
     )
-    const err = await loadConfig({ cwd: tmp }).catch((e) => e as Error)
+    const err = await rejection(loadConfig({ cwd: tmp }))
     expect(err.message).toMatch(/is not a valid URL/)
     expect(err.message).not.toContain('not a url')
   })

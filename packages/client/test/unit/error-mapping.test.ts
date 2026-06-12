@@ -7,7 +7,7 @@ describe('mapResponseToError', () => {
     const json = '{"odata.error":{"code":"-1","message":{"lang":"ru","value":"Не удалось провести \\"X\\""}}}'
     const err = await mapResponseToError(500, 'Internal Server Error', { 'content-type': 'application/json' }, json)
     expect(err).toBeInstanceOf(BusinessError)
-    expect(err.code).toBe('-1')
+    expect((err as HTTPError).code).toBe('-1')
   })
 
   it('maps HTTP 401 + code "20" to PermissionError', async () => {
@@ -33,8 +33,8 @@ describe('mapResponseToError', () => {
     const xml = `<?xml version="1.0"?><error xmlns="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata"><code>0</code><message xml:lang="ru">Произошла ошибка сервиса</message></error>`
     const err = await mapResponseToError(501, 'Not Implemented', { 'content-type': 'application/xml' }, xml)
     expect(err).toBeInstanceOf(HTTPError)
-    expect(err.code).toBe('0')
-    expect(err.errorFormat).toBe('xml')
+    expect((err as HTTPError).code).toBe('0')
+    expect((err as HTTPError).errorFormat).toBe('xml')
   })
 
   it('returns ParseError when body is neither JSON nor XML', async () => {

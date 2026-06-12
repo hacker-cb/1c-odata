@@ -13,7 +13,6 @@ afterAll(() => server.close())
 const base = 'http://1c.test/odata/standard.odata'
 const auth = BasicAuth({ username: 'u', password: 'p' })
 
-const noRetry: RetryPolicy | undefined = undefined
 const retryPolicy: RetryPolicy = {
   maxRetries: 2,
   retryableStatuses: [503],
@@ -28,10 +27,7 @@ describe('requestWithRetry', () => {
   it('passes through with no retry policy', async () => {
     const calls = vi.fn(() => HttpResponse.json({ value: [] }))
     server.use(http.get(`${base}/Catalog_X`, calls))
-    await requestWithRetry(
-      { method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header } },
-      { retry: noRetry },
-    )
+    await requestWithRetry({ method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header } }, {})
     expect(calls).toHaveBeenCalledOnce()
   })
 

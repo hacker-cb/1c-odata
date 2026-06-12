@@ -9,7 +9,7 @@
     },
     "typecheck": {
       "dependsOn": ["^build"],
-      "inputs": ["src/**", "tsconfig.json", "../../tsconfig.base.json"],
+      "inputs": ["src/**", "test/**", "tsconfig.json", "tsconfig.test.json", "../../tsconfig.base.json"],
       "outputs": []
     },
     "test:unit": {

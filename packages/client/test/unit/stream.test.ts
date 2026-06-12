@@ -34,8 +34,8 @@ describe('stream() async iterator', () => {
       collected.push(item)
     }
     expect(collected).toHaveLength(25)
-    expect(collected[0].Code).toBe('C0')
-    expect(collected[24].Code).toBe('C24')
+    expect(collected[0]?.Code).toBe('C0')
+    expect(collected[24]?.Code).toBe('C24')
   })
 
   it('stops when page returns empty value', async () => {
@@ -161,8 +161,8 @@ describe('stream() async iterator', () => {
       collected.push(item)
     }
     expect(collected).toHaveLength(10)
-    expect(collected[0].Code).toBe('C7')
-    expect(collected[9].Code).toBe('C16')
+    expect(collected[0]?.Code).toBe('C7')
+    expect(collected[9]?.Code).toBe('C16')
     expect(seen).toEqual([
       { skip: 7, top: 5 },
       { skip: 12, top: 5 },
@@ -188,8 +188,8 @@ describe('stream() async iterator', () => {
       collected.push(item)
     }
     expect(collected).toHaveLength(7)
-    expect(collected[0].Code).toBe('C5')
-    expect(collected[6].Code).toBe('C11')
+    expect(collected[0]?.Code).toBe('C5')
+    expect(collected[6]?.Code).toBe('C11')
     expect(seen).toEqual([
       { skip: 5, top: 3 },
       { skip: 8, top: 3 },
@@ -234,7 +234,7 @@ describe('stream() async iterator', () => {
       collected.push(item)
     }
     expect(collected).toHaveLength(7)
-    expect(collected[0].Code).toBe('C0')
-    expect(collected[6].Code).toBe('C6')
+    expect(collected[0]?.Code).toBe('C0')
+    expect(collected[6]?.Code).toBe('C6')
   })
 })

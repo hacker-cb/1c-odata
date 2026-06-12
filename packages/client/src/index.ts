@@ -35,7 +35,7 @@ export type { RequestEvent, RequestHooks, ResponseEvent } from './hooks/types.js
 export { loadMetadataIndex, parseMetadataIndex } from './load-metadata-index.js'
 export type { QueryState } from './query/builder.js'
 export { QueryBuilder } from './query/builder.js'
-export type { FieldExpr, FieldExprMap, FilterExpression } from './query/filter-internal.js'
+export type { ChainedFieldExpr, FieldExpr, FieldExprMap, FilterExpression } from './query/filter-internal.js'
 export {
   type BalanceArgs,
   type DrCrTurnoversArgs,

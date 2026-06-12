@@ -127,6 +127,20 @@ beforeEach(() => server.resetHandlers())
 const baseUrl = 'http://example.test/odata'
 const auth = BasicAuth({ username: 'u', password: 'p' })
 
+// Codegen-style Functions shape: write FIs return Promise<void> (and gain
+// `ref` via WithInstanceRef), read FIs return Promise<unknown>. Tests that
+// exercise the untyped default keep constructing the client without it.
+interface TestFunctions {
+  Document_РТУ: { Post(args: { PostingModeOperational: boolean }): Promise<void> }
+  AccumulationRegister_X: { Balance(args: Record<string, unknown>): Promise<unknown> }
+  InformationRegister_X: { SliceLast(args: Record<string, unknown>): Promise<unknown> }
+  InformationRegister_Y: { SliceLast(args: Record<string, unknown>): Promise<unknown> }
+}
+
+function makeTypedClient(): ODataV3Client<TestFunctions> {
+  return new ODataV3Client<TestFunctions>({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+}
+
 describe('client.functions runtime Proxy', () => {
   it('write FI: POST <set>(<ref>)/<func>() with args as query string, returns void', async () => {
     const REF = '11111111-2222-3333-4444-555555555555'
@@ -141,7 +155,7 @@ describe('client.functions runtime Proxy', () => {
         return HttpResponse.json({})
       }),
     )
-    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    const c = makeTypedClient()
     const r = await c.functions.Document_РТУ.Post({ ref: REF, PostingModeOperational: false })
     expect(receivedMethod).toBe('POST')
     // undici encodes Cyrillic but leaves `'` unescaped.
@@ -159,7 +173,7 @@ describe('client.functions runtime Proxy', () => {
         }),
       ),
     )
-    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    const c = makeTypedClient()
     const r = await c.functions.AccumulationRegister_X.Balance({ Period: new Date(2025, 0, 1) })
     expect(r).toEqual([{ Количество: 5 }, { Количество: 7 }])
   })
@@ -172,7 +186,7 @@ describe('client.functions runtime Proxy', () => {
         return HttpResponse.json({ 'odata.metadata': '#X', value: [] })
       }),
     )
-    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    const c = makeTypedClient()
     await c.functions.InformationRegister_X.SliceLast({ Period: new Date(2025, 0, 1) })
     expect(url).toContain('InformationRegister_X/SliceLast()')
     expect(url).not.toContain('(guid')
@@ -215,7 +229,7 @@ describe('client.functions Proxy — date mapping for read FIs', () => {
         }),
       ),
     )
-    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    const c = makeTypedClient()
     const result = await c.functions.AccumulationRegister_X.Balance({})
     expect(result).toHaveLength(1)
     expect((result as { Period: Date }[])[0]?.Period).toBeInstanceOf(Date)
@@ -230,7 +244,7 @@ describe('client.functions Proxy — date mapping for read FIs', () => {
         }),
       ),
     )
-    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    const c = makeTypedClient()
     const result = await c.functions.InformationRegister_Y.SliceLast({})
     expect((result as { Period: Date | null }[])[0]?.Period).toBe(null)
   })

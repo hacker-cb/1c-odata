@@ -73,12 +73,24 @@ function formatLiteral(v: unknown, ctx: CompileContext, argument: string): strin
 }
 
 /**
- * Map of typed field-expression proxies for entity `T`. Property access yields
- * a `FieldExpr<V>` whose method surface is narrowed by `V` via `FieldExprFor`.
+ * A chainable field expression: the branded `FieldExpr<V>` PLUS the operator
+ * surface for `V`. This is what every chaining DSL method returns (e.g.
+ * `f.Date.year()`, `f.Сумма.add(5)`) and what `FieldExprMap` property access
+ * yields — so chains keep their operators and any expression can be passed
+ * where a branded `FieldExpr<V>` is expected (`any`/`all`, operator args).
  *
  * @public
  */
-export type FieldExprMap<T> = { [K in keyof T]-?: FieldExprFor<T[K]> }
+export type ChainedFieldExpr<V> = FieldExpr<V> & FieldExprFor<V>
+
+/**
+ * Map of typed field-expression proxies for entity `T`. Property access yields
+ * a branded, chainable expression whose method surface is narrowed by the
+ * field's value type via `FieldExprFor`.
+ *
+ * @public
+ */
+export type FieldExprMap<T> = { [K in keyof T]-?: ChainedFieldExpr<T[K]> }
 
 /**
  * Type-level operator surface for a field of value type `V`. Uses conditional
@@ -104,11 +116,11 @@ interface NumberOps {
   ge(v: number | FieldExpr<number>): FilterExpression
   lt(v: number | FieldExpr<number>): FilterExpression
   le(v: number | FieldExpr<number>): FilterExpression
-  add(v: number | FieldExpr<number>): FieldExpr<number>
-  sub(v: number | FieldExpr<number>): FieldExpr<number>
-  mul(v: number | FieldExpr<number>): FieldExpr<number>
-  div(v: number | FieldExpr<number>): FieldExpr<number>
-  round(): FieldExpr<number>
+  add(v: number | FieldExpr<number>): ChainedFieldExpr<number>
+  sub(v: number | FieldExpr<number>): ChainedFieldExpr<number>
+  mul(v: number | FieldExpr<number>): ChainedFieldExpr<number>
+  div(v: number | FieldExpr<number>): ChainedFieldExpr<number>
+  round(): ChainedFieldExpr<number>
 }
 
 interface StringOps {
@@ -120,8 +132,8 @@ interface StringOps {
   endsWith(v: string): FilterExpression
   substringof(v: string): FilterExpression
   like(pattern: string): FilterExpression
-  concat(other: string | FieldExpr<string>): FieldExpr<string>
-  substring(start: number, length?: number): FieldExpr<string>
+  concat(other: string | FieldExpr<string>): ChainedFieldExpr<string>
+  substring(start: number, length?: number): ChainedFieldExpr<string>
 }
 
 interface DateOps {
@@ -129,20 +141,23 @@ interface DateOps {
   ge(v: Date | FieldExpr<Date>): FilterExpression
   lt(v: Date | FieldExpr<Date>): FilterExpression
   le(v: Date | FieldExpr<Date>): FilterExpression
-  year(): FieldExpr<number>
-  month(): FieldExpr<number>
-  day(): FieldExpr<number>
-  hour(): FieldExpr<number>
-  minute(): FieldExpr<number>
-  second(): FieldExpr<number>
-  dayofweek(): FieldExpr<number>
-  dayofyear(): FieldExpr<number>
-  quarter(): FieldExpr<number>
-  dateadd(unit: 'second' | 'minute' | 'hour' | 'day' | 'month' | 'quarter' | 'year', amount: number): FieldExpr<Date>
+  year(): ChainedFieldExpr<number>
+  month(): ChainedFieldExpr<number>
+  day(): ChainedFieldExpr<number>
+  hour(): ChainedFieldExpr<number>
+  minute(): ChainedFieldExpr<number>
+  second(): ChainedFieldExpr<number>
+  dayofweek(): ChainedFieldExpr<number>
+  dayofyear(): ChainedFieldExpr<number>
+  quarter(): ChainedFieldExpr<number>
+  dateadd(
+    unit: 'second' | 'minute' | 'hour' | 'day' | 'month' | 'quarter' | 'year',
+    amount: number,
+  ): ChainedFieldExpr<Date>
   datedifference(
     other: Date | FieldExpr<Date>,
     unit: 'second' | 'minute' | 'hour' | 'day' | 'month' | 'quarter' | 'year',
-  ): FieldExpr<number>
+  ): ChainedFieldExpr<number>
 }
 
 // biome-ignore lint/suspicious/noEmptyInterface: BaseOps eq/ne suffice
@@ -167,7 +182,7 @@ interface BooleanOps {}
  */
 interface RefOps {
   isof(typeName: string): FilterExpression
-  cast(typeName: string): FieldExpr<string>
+  cast(typeName: string): ChainedFieldExpr<string>
 }
 
 /**
