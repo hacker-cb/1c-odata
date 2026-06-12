@@ -36,18 +36,26 @@ jobs:
     # downstream job that depends on it. Live/write tests run against private
     # 1С bases — secrets must never be exposed off the canonical repo.
     #
-    # Two-part gate:
+    # Three-part gate:
     #   1. `repository_owner == 'hacker-cb'` excludes runs in other-owner
     #      mirrors entirely.
-    #   2. For `pull_request` events `repository_owner` reflects the BASE
+    #   2. Dependabot-triggered runs receive Dependabot secrets, NOT Actions
+    #      secrets, so the 5-secret check below would fail red on every
+    #      Dependabot PR. Skipping here cascades to the live/write/example
+    #      jobs via their `needs` edges — the same degraded-but-green
+    #      treatment fork PRs get. A human pushing to the bot's branch
+    #      re-enables the full pipeline (the actor becomes the human, and
+    #      Actions secrets are available again).
+    #   3. For `pull_request` events `repository_owner` reflects the BASE
     #      repo (hacker-cb), not the fork — so part 1 alone would still
     #      run on fork PRs. Comparing `head.repo.full_name` to
     #      `github.repository` is the canonical pattern for skipping
     #      fork PRs while keeping owner-internal PRs covered.
-    #   The second predicate short-circuits to TRUE on non-PR triggers
+    #   The third predicate short-circuits to TRUE on non-PR triggers
     #   (push to dev/master), which have no `head.repo` to compare.
     if: |
       github.repository_owner == 'hacker-cb' &&
+      github.actor != 'dependabot[bot]' &&
       (github.event_name != 'pull_request' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     outputs:
