@@ -70,6 +70,22 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  examples/dynamic:
+    dependencies:
+      '@1c-odata/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@1c-odata/metadata':
+        specifier: workspace:*
+        version: link:../../packages/metadata
+    devDependencies:
+      tsx:
+        specifier: ^4.20.0
+        version: 4.21.0
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/cli:
     dependencies:
       '@1c-odata/client':

@@ -1,6 +1,6 @@
 # 1c-odata
 
-TypeScript library for the REST/OData interface of 1С:Enterprise 8 (V3 only — the only version 1С ships as of 2026). Codegen-driven type safety, ergonomic filter API, single source of truth between schema and runtime.
+TypeScript library for the REST/OData interface of 1С:Enterprise 8 (V3 only — the only version 1С ships as of 2026). Ergonomic filter API, schema-driven date / Int64 / ValueStorage handling, and a single source of truth between schema and runtime. Codegen is the optional DX layer on top: generate types for full IDE completion, or [run against any base with zero generated files](#usage-without-codegen).
 
 > **Server-side only.** Uses Node 22+ APIs (`globalThis.fetch`, `Buffer`, `fs`). Minimum Node: **22.21.0**. Pure ESM.
 >
@@ -11,6 +11,7 @@ TypeScript library for the REST/OData interface of 1С:Enterprise 8 (V3 only —
 | Package | Role |
 |---|---|
 | [`@1c-odata/client`](./packages/client/src) | Typed runtime — `ODataV3Client`, query builder, filter, value-storage, register helpers |
+| [`@1c-odata/metadata`](./packages/metadata/src) | Schema toolkit — parse `$metadata` (EDMX), build a runtime `MetadataIndex`, `createDynamicClient` for any base without codegen |
 | [`@1c-odata/cli`](./packages/cli/src) | `1c-odata fetch` + `1c-odata generate` binaries; codegen lib at [`@1c-odata/cli/codegen`](./packages/cli/src/codegen) |
 
 JSDoc on the public API is the canonical reference. Hover anything imported from `@1c-odata/client` in your IDE.
@@ -67,6 +68,73 @@ const { value: docs } = await trade
 ```
 
 See [`examples/basic`](./examples/basic) for a runnable end-to-end consumer.
+
+## Usage without codegen
+
+Codegen gives you TypeScript types — but every schema-driven runtime feature works from a `MetadataIndex` that can also be built **at runtime**. Two modes below, both runnable in [`examples/dynamic`](./examples/dynamic).
+
+### Runtime metadata (recommended): any base, zero generated files
+
+```bash
+pnpm add @1c-odata/client @1c-odata/metadata
+```
+
+```ts
+import { createDynamicClient } from '@1c-odata/metadata'
+
+const client = await createDynamicClient(
+  {
+    baseUrl: 'http://1c.example.com/base/odata/standard.odata',
+    auth: { username: 'user', password: 'pass' },
+    serverTimezone: 'Europe/Moscow',
+  },
+  { validateOnWrite: true },
+)
+
+const { value } = await client.query('Catalog_Валюты').top(5).get()
+```
+
+`createDynamicClient` downloads `$metadata` (10+ MB on real bases, seconds), builds the index, and returns a ready `ODataV3Client` — full DateTime / Int64 / ValueStorage handling and write validation, exactly like the codegen path (same code builds `__metadata.json`). For multi-tenant servers cache the index instead of re-downloading:
+
+```ts
+import { ODataV3Client, clientOptionsFromConnection, parseMetadataIndex } from '@1c-odata/client'
+import { fetchMetadataIndex } from '@1c-odata/metadata'
+
+const cached = await cache.get(key)
+const metadataIndex = cached ? parseMetadataIndex(JSON.parse(cached), key) : await fetchMetadataIndex(conn)
+if (!cached) await cache.set(key, JSON.stringify(metadataIndex)) // ~1 MB JSON per base
+
+const client = new ODataV3Client({ ...clientOptionsFromConnection(conn), metadataIndex })
+```
+
+Middle ground: `1c-odata generate --metadata-only` emits just `__metadata.json` (no TS files) — a pinned schema loaded via `loadMetadataIndex`, with no fetch at process startup.
+
+### Fully schema-less: just a URL and credentials
+
+```ts
+import { BasicAuth, ODataV3Client, type UntypedEntity } from '@1c-odata/client'
+
+const client = new ODataV3Client({
+  baseUrl: 'http://1c.example.com/base/odata/standard.odata',
+  auth: BasicAuth({ username: 'user', password: 'pass' }),
+  serverTimezone: 'Europe/Moscow',
+})
+
+const { value } = await client.query<UntypedEntity>('Catalog_Номенклатура').top(10).get()
+await client.entity('Document_Заказ', key).patch({ Дата: new Date() }) // → naive ISO in serverTimezone
+```
+
+Everything URL-shaped works without a schema: query builder + filter DSL, CRUD, registers, function imports, ValueStorage streams, retries/hooks. Dates are handled by value: reads recognize `Edm.DateTime` strings heuristically (sentinel → `null`), writes convert `Date` instances to naive ISO in `serverTimezone` and serialize `bigint` as the wire string. What you give up without a schema:
+
+| Capability | With a `MetadataIndex` | Schema-less |
+|---|---|---|
+| IDE completion / field-name safety | with codegen types | `UntypedEntity` (open index signature) |
+| `Edm.Int64` on read | `number` / `bigint` per `int64Mode` | stays a wire **string** |
+| ValueStorage triples on read | grouped into `{ contentType, base64Data }` | flat `<X>_Base64Data` + `<X>_Type` fields |
+| Clearing a date on write | `null` → sentinel automatically | pass `ONEC_EMPTY_DATE` explicitly (`null` stays `null`) |
+| `validateOnWrite` | ✅ | ❌ (throws at construction) |
+
+Recipes: opt out of all date handling with `shape: { dateMode: 'string' }` and convert manually via `parseInZone` / `formatInZone`. With a runtime index (previous section) you can also introspect the base: `Object.keys(client.metadataIndex.entitySetToType)` lists every entity set.
 
 ## Network configuration
 

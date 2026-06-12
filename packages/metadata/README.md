@@ -21,17 +21,20 @@ pnpm add @1c-odata/client @1c-odata/metadata
 ## Quick start
 
 ```ts
-import { ODataV3Client, clientOptionsFromConnection } from '@1c-odata/client'
-import { buildMetadataIndex, parseEdmx } from '@1c-odata/metadata'
+import { createDynamicClient } from '@1c-odata/metadata'
 
-const xml = '…$metadata EDMX…'
-const metadataIndex = buildMetadataIndex(parseEdmx(xml))
-
-const client = new ODataV3Client({
-  ...clientOptionsFromConnection(connection),
-  metadataIndex,
-})
+const client = await createDynamicClient(
+  {
+    baseUrl: 'http://1c.example.com/base/odata/standard.odata',
+    auth: { username: 'user', password: 'pass' },
+    serverTimezone: 'Europe/Moscow',
+  },
+  { validateOnWrite: true },
+)
+const { value } = await client.query('Catalog_Валюты').top(5).get()
 ```
+
+Lower-level building blocks: `fetchMetadataXml` (download), `parseEdmx` (XML → model), `buildMetadataIndex` (model → index), `fetchMetadataIndex` (all three in one step). The index is plain JSON — cache it with `JSON.stringify` and revive with `parseMetadataIndex` from `@1c-odata/client`.
 
 See the [repository README](https://github.com/hacker-cb/1c-odata#readme) for the full picture (typed codegen workflow, untyped mode, limitations).
 

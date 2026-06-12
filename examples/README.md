@@ -4,7 +4,8 @@ Working example projects in this workspace. Each example is a separate pnpm pack
 
 | Directory | Status | Demonstrates |
 |---|---|---|
-| [`basic/`](./basic) | landed | Read-only operations, query builder, pagination |
+| [`basic/`](./basic) | landed | Codegen workflow: typed client, query builder, pagination |
+| [`dynamic/`](./dynamic) | landed | No-codegen mode: `createDynamicClient` against a live base, untyped queries, runtime date handling, registers |
 
 More examples may follow if user demand surfaces — open an issue with your use case.
 
