@@ -13,3 +13,16 @@ updates:
     groups:
       github-actions:
         patterns: ['*']
+
+  # `npm` also covers pnpm (v7–v10): the workspace is resolved from the root
+  # pnpm-lock.yaml + pnpm-workspace.yaml, so this single entry reaches
+  # packages/* and examples/*. Minor + patch bumps land as one weekly PR;
+  # majors fall outside the group and arrive as individual PRs for review.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        patterns: ['*']
+        update-types: [minor, patch]
