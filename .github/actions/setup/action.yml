@@ -6,6 +6,9 @@ description: Install pnpm, set up Node 22 with pnpm cache, and run `pnpm install
 # config in one place. Callers still need `actions/checkout@v6` as their FIRST
 # step (the workflow checkout must produce this action's file on disk before
 # `uses: ./.github/actions/setup` can resolve).
+#
+# Since setup-node v6, automatic caching covers npm only — the explicit
+# `cache: pnpm` below is load-bearing, don't drop it.
 
 runs:
   using: composite

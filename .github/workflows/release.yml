@@ -25,18 +25,13 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-          # registry-url intentionally omitted: setup-node only uses it to
-          # write a placeholder .npmrc with `_authToken=${NODE_AUTH_TOKEN}`,
-          # which is the legacy NPM_TOKEN path. With Trusted Publishing the
-          # OIDC token is fetched directly by `npm publish` via the
-          # `id-token: write` permission — no .npmrc auth needed.
-      - name: Install
-        run: pnpm install --frozen-lockfile
+      # Same pnpm/Node/install boilerplate as every ci.yml job. The action
+      # sets no registry-url, which is what Trusted Publishing needs here:
+      # setup-node only uses registry-url to write a placeholder .npmrc with
+      # `_authToken=${NODE_AUTH_TOKEN}` (the legacy NPM_TOKEN path), while the
+      # OIDC token is fetched directly by `npm publish` via the
+      # `id-token: write` permission — no .npmrc auth needed.
+      - uses: ./.github/actions/setup
       # CI gates split into separate turbo invocations (mirrors ci.yml).
       # A combined `pnpm turbo typecheck test:unit ...` lets turbo run those
       # tasks in parallel under one `^build` barrier; the parallel
