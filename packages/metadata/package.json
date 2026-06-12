@@ -58,7 +58,7 @@
   },
   "dependencies": {
     "@1c-odata/client": "workspace:*",
-    "fast-xml-parser": "^5.7.3"
+    "fast-xml-parser": "^5.8.0"
   },
   "devDependencies": {
     "msw": "^2.14.3",
