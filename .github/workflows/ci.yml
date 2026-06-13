@@ -5,9 +5,10 @@ on:
     branches: [master]
 
 # CI validates pull requests only. Pushes to master are handled by release.yml,
-# which re-runs the same gates before any publish — running this workflow on the
-# master push too would just duplicate that work. The changesets release PR is a
-# normal PR, so it is covered here like any other.
+# which re-runs typecheck plus the core build/test gates (Ubuntu only) before any
+# publish — not the full PR matrix here (no Biome lint, no Windows leg, no live
+# tests), since every change reaches master through a PR that already ran this
+# workflow in full. The changesets release PR is a normal PR, covered here too.
 
 # One in-flight run per PR ref: a new push to a PR branch (arriving as
 # `pull_request: synchronize`) cancels the previous run for that PR. Different
