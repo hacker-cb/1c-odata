@@ -84,7 +84,7 @@ function expandPeriod(args: TurnoversArgs): Record<string, unknown> {
   // unintended all-periods turnovers query. Fail loudly instead.
   if (args.Period instanceof Date) {
     throw new InvalidArgumentError(
-      'turnovers()/balanceAndTurnovers() take a { from?, to? } range, not a point Date — 1С AccumulationRegister turnovers tables have no single-point form. Use { from } or { from, to }.',
+      'turnovers()/balanceAndTurnovers() take a { from?, to? } range (use { from } or { from, to }), not a point Date — 1С AccumulationRegister turnovers tables have no single-point form',
       { argument: 'Period', received: args.Period },
     )
   }
