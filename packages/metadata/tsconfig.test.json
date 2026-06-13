@@ -9,6 +9,7 @@
       "@1c-odata/metadata": ["./src/index.ts"]
     }
   },
+  "// lib": "DOM is required for the TEST typecheck only — msw / @mswjs/interceptors / rettime .d.ts reference DOM globals (MessageEvent<T>, RequestMode, BodyInit, ResponseType…). The production src tsconfig.json stays DOM-free on purpose to enforce the server-only contract; do not add DOM there.",
   "//": "Typechecks ALL test files (the main tsconfig.json excludes test/ for build). Wired into `pnpm typecheck`. Self-package imports resolve to src via `paths`; cross-package imports (@1c-odata/client) resolve to its dist (built via turbo ^build).",
   "include": ["src/**/*", "test/**/*"]
 }

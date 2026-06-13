@@ -1,0 +1,38 @@
+name: Build & test gates
+description: Shared turbo gate sequence — unit tests, offline integration, build, package lint. Consumed by ci.yml and release.yml so the sequence lives in one place. Run AFTER lint + typecheck; callers must run `actions/checkout` + `./.github/actions/setup` first.
+
+# Each gate is a SEPARATE turbo invocation on purpose. A combined
+# `pnpm turbo test:unit test:integration:offline ...` lets turbo run those tasks
+# in parallel under one `^build` barrier; the parallel @1c-odata/cli vitest runs
+# (test:unit + test:integration:offline) then race on shared global state — msw
+# setupServer interception, process.env, OS tmpdir — producing flake that this
+# one-task-per-step structure avoids.
+
+inputs:
+  coverage:
+    description: >-
+      Pass the string 'true' to run unit tests with V8 coverage (each package emits coverage/ for the artifact
+      upload); any other value runs plain unit tests. Callers pass a rendered GitHub expression (e.g. a
+      matrix-OS equality check) that resolves to the string 'true' or 'false' — see ci.yml.
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Unit tests
+      shell: bash
+      run: |
+        if [ "${{ inputs.coverage }}" = "true" ]; then
+          pnpm turbo test:coverage --filter='./packages/*'
+        else
+          pnpm turbo test:unit --filter='./packages/*'
+        fi
+    - name: Offline integration tests
+      shell: bash
+      run: pnpm turbo test:integration:offline --filter='./packages/*'
+    - name: Build
+      shell: bash
+      run: pnpm turbo build --filter='./packages/*'
+    - name: Package lint
+      shell: bash
+      run: pnpm turbo package:lint --filter='./packages/*'

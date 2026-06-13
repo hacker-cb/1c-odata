@@ -49,6 +49,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:unit": "vitest run --exclude \"test/integration/**\"",
+    "test:coverage": "vitest run --exclude \"test/integration/**\" --coverage",
     "test:integration:offline": "vitest run test/integration --exclude \"test/integration/live/**\"",
     "test:integration:live": "vitest run test/integration/live",
     "test:integration:write": "echo 'no write integration in metadata' && exit 0",

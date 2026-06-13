@@ -51,6 +51,7 @@
     "prepare": "pnpm build",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "test:unit": "vitest run --exclude \"test/integration/**\" --exclude \"test/e2e/**\"",
+    "test:coverage": "vitest run --exclude \"test/integration/**\" --exclude \"test/e2e/**\" --coverage",
     "test:integration:offline": "vitest run test/codegen/integration",
     "test:integration:live": "echo no live integration in cli && exit 0",
     "test:integration:write": "echo no write integration in cli && exit 0",

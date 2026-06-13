@@ -1,13 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2023", "DOM"],
+    "lib": ["ES2023"],
     "types": ["node"],
     "rootDir": "src",
     "outDir": "dist",
-    "composite": true,
-    "stripInternal": true,
-    "tsBuildInfoFile": "dist/.tsbuildinfo"
+    "stripInternal": true
   },
   "include": ["src/**/*"],
   "exclude": ["dist", "node_modules", "test"]

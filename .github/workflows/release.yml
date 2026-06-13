@@ -32,23 +32,13 @@ jobs:
       # OIDC token is fetched directly by `npm publish` via the
       # `id-token: write` permission — no .npmrc auth needed.
       - uses: ./.github/actions/setup
-      # CI gates split into separate turbo invocations (mirrors ci.yml).
-      # A combined `pnpm turbo typecheck test:unit ...` lets turbo run those
-      # tasks in parallel under one `^build` barrier; the parallel
-      # @1c-odata/cli vitest runs (test:unit + test:integration:offline)
-      # then race on shared global state — msw setupServer interception,
-      # process.env, OS tmpdir — producing flake that ci.yml's
-      # one-task-per-step structure avoids.
+      # Same gate sequence as ci.yml, shared via ./.github/actions/gates (each
+      # gate is a separate turbo invocation — the action documents why). Typecheck
+      # stays inline here because ci.yml runs it in a separate matrix job.
       - name: Typecheck (gate 1)
         run: pnpm turbo typecheck --filter='./packages/*'
-      - name: Unit tests (gate 2)
-        run: pnpm turbo test:unit --filter='./packages/*'
-      - name: Offline integration tests (gate 3)
-        run: pnpm turbo test:integration:offline --filter='./packages/*'
-      - name: Build (gate 4)
-        run: pnpm turbo build --filter='./packages/*'
-      - name: Package lint (gate 5)
-        run: pnpm turbo package:lint --filter='./packages/*'
+      - name: Build & test gates (2-5)
+        uses: ./.github/actions/gates
       # npm Trusted Publishing (OIDC) requires npm >= 11.5.1. Node 22 LTS
       # ships with npm 10.9.x, which falls back to legacy auth and fails with
       # ENEEDAUTH on `npm publish`.
