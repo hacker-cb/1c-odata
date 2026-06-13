@@ -168,18 +168,19 @@ export class SecretStore {
   // ── plaintext-file backend (0600, modelled on ~/.pgpass) ──
 
   private fileRead(name: string): string | null {
-    const pwd = this.readFileSecrets()[name]
-    return pwd !== undefined && pwd !== '' ? pwd : null
+    const pwd = this.readFileSecrets(true)[name]
+    return typeof pwd === 'string' && pwd !== '' ? pwd : null
   }
 
   private fileWrite(name: string, password: string): void {
-    const secrets = this.readFileSecrets()
+    // About to overwrite with 0600 — tolerate a pre-existing too-open/malformed file.
+    const secrets = this.readFileSecrets(false)
     secrets[name] = password
     this.writeFileSecrets(secrets)
   }
 
   private fileDelete(name: string): void {
-    const secrets = this.readFileSecrets()
+    const secrets = this.readFileSecrets(false)
     if (!(name in secrets)) return
     delete secrets[name]
     if (Object.keys(secrets).length === 0) {
@@ -193,23 +194,41 @@ export class SecretStore {
     this.writeFileSecrets(secrets)
   }
 
-  private readFileSecrets(): FileSecrets {
-    let raw: string
+  /**
+   * Load the credentials file. With `enforcePermissions` it checks the 0600 rule
+   * BEFORE reading (a too-open file's plaintext is never loaded) and rejects
+   * malformed JSON — use it for reads. Write/delete pass `false`: they overwrite
+   * with 0600, so they tolerate a too-open or corrupt existing file. Only string
+   * values are kept (a hand-edited file may contain other types).
+   */
+  private readFileSecrets(enforcePermissions: boolean): FileSecrets {
+    let mode: number
     try {
-      raw = readFileSync(this.credentialsPath, 'utf8')
+      mode = statSync(this.credentialsPath).mode & 0o777
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
       throw err
     }
-    this.assertSecurePermissions()
+    if (enforcePermissions && process.platform !== 'win32' && (mode & 0o077) !== 0) {
+      throw new Error(
+        `Credentials file ${this.credentialsPath} has insecure permissions ${mode.toString(8).padStart(4, '0')} ` +
+          `(expected 0600). Run: chmod 600 ${this.credentialsPath}`,
+      )
+    }
+    const raw = readFileSync(this.credentialsPath, 'utf8')
     let parsed: unknown
     try {
       parsed = JSON.parse(raw)
     } catch {
-      throw new Error(`Malformed JSON in ${this.credentialsPath} — fix or delete the file.`)
+      if (enforcePermissions) throw new Error(`Malformed JSON in ${this.credentialsPath} — fix or delete the file.`)
+      return {}
     }
     if (parsed === null || typeof parsed !== 'object') return {}
-    return parsed as FileSecrets
+    const result: FileSecrets = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'string') result[key] = value
+    }
+    return result
   }
 
   private writeFileSecrets(secrets: FileSecrets): void {
@@ -231,18 +250,6 @@ export class SecretStore {
         // best effort — surface the original error
       }
       throw err
-    }
-  }
-
-  /** Refuse to read a credentials file that other users can access (~/.pgpass rule). */
-  private assertSecurePermissions(): void {
-    if (process.platform === 'win32') return
-    const mode = statSync(this.credentialsPath).mode & 0o777
-    if ((mode & 0o077) !== 0) {
-      throw new Error(
-        `Credentials file ${this.credentialsPath} has insecure permissions ${mode.toString(8).padStart(4, '0')} ` +
-          `(expected 0600). Run: chmod 600 ${this.credentialsPath}`,
-      )
     }
   }
 }

@@ -66,14 +66,20 @@ function normalizeConfig(data: unknown): McpConfig {
   if (data === null || typeof data !== 'object') return { connections: {} }
   const connections = (data as { connections?: unknown }).connections
   if (connections === null || typeof connections !== 'object') return { connections: {} }
-  // Defense in depth: strip any userinfo a hand-edited/migrated config might carry
-  // in baseUrl, so it can never reach memory, requests, or tool output.
+  // Drop structurally-invalid entries (a hand-edited config may have non-objects
+  // or miss required string fields — keeping them would crash later paths). For
+  // valid ones, strip any userinfo the baseUrl might carry (defense in depth).
   const sanitized: Record<string, StoredConnection> = {}
-  for (const [name, conn] of Object.entries(connections as Record<string, StoredConnection>)) {
-    sanitized[name] =
-      conn !== null && typeof conn === 'object' && typeof conn.baseUrl === 'string'
-        ? { ...conn, baseUrl: stripUrlUserinfo(conn.baseUrl) }
-        : conn
+  for (const [name, conn] of Object.entries(connections as Record<string, unknown>)) {
+    if (conn === null || typeof conn !== 'object') continue
+    const c = conn as Partial<StoredConnection>
+    if (typeof c.baseUrl !== 'string' || typeof c.login !== 'string' || typeof c.serverTimezone !== 'string') continue
+    sanitized[name] = {
+      baseUrl: stripUrlUserinfo(c.baseUrl),
+      login: c.login,
+      serverTimezone: c.serverTimezone,
+      ...(c.shape !== undefined ? { shape: c.shape } : {}),
+    }
   }
   return { connections: sanitized }
 }
@@ -89,7 +95,7 @@ function normalizeConfig(data: unknown): McpConfig {
 export function assertValidConnectionName(name: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name)) {
     throw new InvalidArgumentError(
-      `Invalid connection name "${name}". Use ASCII letters, digits, hyphens and underscores (e.g. "test_tvip_trade"); it maps to a ONEC_<NAME>_PASSWORD env var.`,
+      `Invalid connection name "${name}": use ASCII letters, digits, hyphens and underscores (e.g. "test_tvip_trade"); it maps to a ONEC_<NAME>_PASSWORD env var`,
       { argument: 'name' },
     )
   }

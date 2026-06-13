@@ -64,6 +64,20 @@ describe('loadConfig / saveConfig', () => {
     )
     expect(loadConfig(dir).connections.c?.baseUrl).toBe('http://host/odata')
   })
+
+  it('drops structurally-invalid connection entries on load', () => {
+    writeFileSync(
+      configPath(dir),
+      JSON.stringify({
+        connections: {
+          good: { baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow' },
+          notObject: 'oops',
+          missingFields: { baseUrl: 'http://h/odata' },
+        },
+      }),
+    )
+    expect(Object.keys(loadConfig(dir).connections)).toEqual(['good'])
+  })
 })
 
 describe('assertValidConnectionName', () => {

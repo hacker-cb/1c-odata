@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -85,5 +85,24 @@ describe('SecretStore', () => {
     await store.remove('trade')
     expect(await store.read('trade')).toBeNull()
     expect(await store.read('bp')).toEqual({ password: 'b', source: 'file' })
+  })
+
+  it('re-secures and preserves entries when writing over a too-open file', async () => {
+    if (process.platform === 'win32') return
+    const store = fileStore()
+    await store.write('a', 'pw-a')
+    chmodSync(join(dir, 'credentials.json'), 0o644)
+    await store.write('b', 'pw-b') // must not throw despite the too-open file
+    expect(statSync(join(dir, 'credentials.json')).mode & 0o777).toBe(0o600)
+    expect(await store.read('a')).toEqual({ password: 'pw-a', source: 'file' })
+    expect(await store.read('b')).toEqual({ password: 'pw-b', source: 'file' })
+  })
+
+  it('ignores non-string values in a hand-edited credentials file', async () => {
+    const store = fileStore()
+    await store.write('a', 'pw')
+    writeFileSync(join(dir, 'credentials.json'), JSON.stringify({ a: 'pw', b: 123 }), { mode: 0o600 })
+    expect(await store.read('b')).toBeNull()
+    expect(await store.read('a')).toEqual({ password: 'pw', source: 'file' })
   })
 })
