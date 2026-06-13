@@ -1,0 +1,72 @@
+import { stdin, stdout } from 'node:process'
+import { createInterface } from 'node:readline/promises'
+
+/** Ask for a line of input. Returns `opts.default` when the user enters nothing. */
+export async function promptLine(label: string, opts: { default?: string } = {}): Promise<string> {
+  const rl = createInterface({ input: stdin, output: stdout })
+  try {
+    const answer = (await rl.question(label)).trim()
+    if (answer === '' && opts.default !== undefined) return opts.default
+    return answer
+  } finally {
+    rl.close()
+  }
+}
+
+/**
+ * Ask for a secret with no echo (raw-mode TTY, like `sudo` / `gh auth login`).
+ * The typed characters never reach the screen, shell history, or `ps`. Requires
+ * an interactive terminal — headless callers must use the env var instead.
+ */
+export async function promptHidden(label: string): Promise<string> {
+  if (stdin.isTTY !== true) {
+    throw new Error(
+      'A password prompt requires an interactive terminal (TTY). Provide the password via the ONEC_<NAME>_PASSWORD env var instead.',
+    )
+  }
+  return new Promise<string>((resolve, reject) => {
+    stdout.write(label)
+    stdin.setRawMode(true)
+    stdin.resume()
+    stdin.setEncoding('utf8')
+    let buffer = ''
+    const cleanup = (): void => {
+      stdin.setRawMode(false)
+      stdin.pause()
+      stdin.removeListener('data', onData)
+    }
+    const onData = (chunk: string): void => {
+      for (const ch of chunk) {
+        const code = ch.charCodeAt(0)
+        if (code === 13 || code === 10 || code === 4) {
+          // Enter (CR / LF) or Ctrl-D
+          cleanup()
+          stdout.write('\n')
+          resolve(buffer)
+          return
+        }
+        if (code === 3) {
+          // Ctrl-C
+          cleanup()
+          stdout.write('\n')
+          reject(new Error('Aborted'))
+          return
+        }
+        if (code === 127 || code === 8) {
+          // Backspace / Delete
+          buffer = buffer.slice(0, -1)
+          continue
+        }
+        buffer += ch
+      }
+    }
+    stdin.on('data', onData)
+  })
+}
+
+/** Yes/no confirmation. */
+export async function promptConfirm(label: string, defaultYes = false): Promise<boolean> {
+  const answer = (await promptLine(`${label} ${defaultYes ? '[Y/n]' : '[y/N]'} `)).toLowerCase()
+  if (answer === '') return defaultYes
+  return answer === 'y' || answer === 'yes'
+}

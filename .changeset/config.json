@@ -2,7 +2,7 @@
   "$schema": "https://unpkg.com/@changesets/config@3.0.0/schema.json",
   "changelog": ["@changesets/changelog-github", { "repo": "hacker-cb/1c-odata" }],
   "commit": false,
-  "fixed": [["@1c-odata/client", "@1c-odata/metadata", "@1c-odata/cli"]],
+  "fixed": [["@1c-odata/client", "@1c-odata/metadata", "@1c-odata/cli", "@1c-odata/mcp"]],
   "linked": [],
   "access": "public",
   "baseBranch": "master",

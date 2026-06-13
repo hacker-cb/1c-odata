@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"],
+    "rootDir": ".",
+    "noEmit": true,
+    "paths": {
+      "@1c-odata/mcp": ["./src/index.ts"]
+    }
+  },
+  "// lib": "DOM is required for the TEST typecheck only — msw / @mswjs/interceptors .d.ts reference DOM globals. The production src tsconfig.json stays DOM-free to enforce the server-only contract; do not add DOM there.",
+  "//": "Typechecks ALL test files (the main tsconfig.json excludes test/ for build). Self-package imports resolve to src via `paths`; cross-package imports resolve to their dist (built via turbo ^build).",
+  "include": ["src/**/*", "test/**/*"]
+}

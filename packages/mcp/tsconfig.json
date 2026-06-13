@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "lib": ["ES2023", "DOM"],
+    "types": ["node"]
+  },
+  "// lib": "DOM is needed because @modelcontextprotocol/sdk's transport .d.ts references fetch globals (HeadersInit). The MCP server itself is server-only at runtime (stdio transport, no browser APIs).",
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules", "test"]
+}
