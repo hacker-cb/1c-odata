@@ -3,11 +3,8 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "composite": true,
-    "tsBuildInfoFile": "dist/.tsbuildinfo",
     "types": ["node"]
   },
   "include": ["src/**/*"],
-  "exclude": ["dist", "node_modules", "test"],
-  "references": [{ "path": "../client" }, { "path": "../metadata" }]
+  "exclude": ["dist", "node_modules", "test"]
 }

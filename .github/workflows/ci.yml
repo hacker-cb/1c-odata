@@ -128,14 +128,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
-      - name: Unit tests (gate 3)
-        run: pnpm turbo test:unit --filter='./packages/*'
-      - name: Offline integration tests (gate 4)
-        run: pnpm turbo test:integration:offline --filter='./packages/*'
-      - name: Build (gate 5)
-        run: pnpm turbo build --filter='./packages/*'
-      - name: Package lint (gate 6)
-        run: pnpm turbo package:lint --filter='./packages/*'
+      - name: Build & test gates (3-6)
+        uses: ./.github/actions/gates
+        with:
+          # Coverage only on Linux — the upload step below is ubuntu-only, so
+          # instrumenting on Windows would be wasted work. Renders to the
+          # string 'true'/'false' the composite compares against.
+          coverage: ${{ matrix.os == 'ubuntu-latest' }}
       - name: E2E tests (gate 8)
         run: pnpm turbo test:e2e --filter='./packages/*'
       - name: Upload coverage
@@ -144,6 +143,9 @@ jobs:
         with:
           name: coverage
           path: packages/*/coverage/
+          # Fail loudly if coverage vanished — a silent empty upload previously
+          # masked the fact that coverage was never generated at all.
+          if-no-files-found: error
 
   test-example:
     runs-on: ubuntu-latest

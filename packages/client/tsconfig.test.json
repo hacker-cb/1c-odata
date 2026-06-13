@@ -11,6 +11,7 @@
       "@1c-odata/client/internal": ["./src/internal.ts"]
     }
   },
+  "// lib": "DOM is required for the TEST typecheck only — msw / @mswjs/interceptors / rettime .d.ts reference DOM globals (MessageEvent<T>, RequestMode, BodyInit, ResponseType…). The production src tsconfig.json stays DOM-free on purpose to enforce the server-only contract; do not add DOM there.",
   "//": "Typechecks ALL test files (the main tsconfig.json excludes test/ for build). Wired into `pnpm typecheck`. Self-package imports resolve to src via `paths` so the check never depends on a stale own dist; cross-package imports resolve to the dependency's dist (built via turbo ^build).",
   "include": ["src/**/*", "test/**/*"]
 }

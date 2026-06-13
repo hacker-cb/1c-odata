@@ -23,7 +23,7 @@
       "recommended": true,
       "suspicious": {
         "noExplicitAny": "error",
-        "noConsole": "warn"
+        "noConsole": "error"
       },
       "correctness": {
         "noUnusedImports": "error",
@@ -60,6 +60,10 @@
       "linter": { "enabled": false },
       "formatter": { "enabled": false },
       "assist": { "actions": { "source": { "organizeImports": "off" } } }
+    },
+    {
+      "includes": ["**/test/**"],
+      "linter": { "rules": { "suspicious": { "noConsole": "off" } } }
     }
   ]
 }

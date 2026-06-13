@@ -1,6 +1,7 @@
 {
   "$schema": "https://turborepo.com/schema.json",
   "ui": "tui",
+  "globalDependencies": ["tsconfig.base.json"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -9,28 +10,18 @@
     },
     "typecheck": {
       "dependsOn": ["^build"],
-      "inputs": ["src/**", "test/**", "tsconfig.json", "tsconfig.test.json", "../../tsconfig.base.json"],
+      "inputs": ["src/**", "test/**", "tsconfig.json", "tsconfig.test.json"],
       "outputs": []
     },
     "test:unit": {
-      "dependsOn": ["^build"],
-      "inputs": ["src/**", "test/**", "vitest.config.ts"],
-      "outputs": []
-    },
-    "@1c-odata/cli#test:unit": {
       "dependsOn": ["^build", "build"],
       "inputs": ["src/**", "test/**", "vitest.config.ts"],
       "outputs": []
     },
-    "@1c-odata/client#test:unit": {
+    "test:coverage": {
       "dependsOn": ["^build", "build"],
       "inputs": ["src/**", "test/**", "vitest.config.ts"],
-      "outputs": []
-    },
-    "@1c-odata/metadata#test:unit": {
-      "dependsOn": ["^build", "build"],
-      "inputs": ["src/**", "test/**", "vitest.config.ts"],
-      "outputs": []
+      "outputs": ["coverage/**"]
     },
     "test:integration:offline": {
       "dependsOn": ["^build"],
