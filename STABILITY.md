@@ -17,7 +17,7 @@ Semver-applicable:
 
 NOT covered:
 
-- `@1c-odata/client/internal` — namespaced escape hatch for `@1c-odata/cli`, `@1c-odata/metadata`, and integration tests; MAY break in minor releases. Safe because all `@1c-odata/*` packages are in one changesets `linked` group and always release in lock-step — published versions cannot drift against each other.
+- `@1c-odata/client/internal` — namespaced escape hatch for `@1c-odata/cli`, `@1c-odata/metadata`, and integration tests; MAY break in minor releases. Safe because all `@1c-odata/*` packages are in one changesets `fixed` group and always release in lock-step — published versions cannot drift against each other.
 - Files under `src/internal.ts` or `src/internal/**`
 - Identifiers tagged `@internal` (stripped from emitted `.d.ts` via `stripInternal`)
 - Deep imports bypassing `exports` (e.g. `@1c-odata/client/dist/<file>.js`)

@@ -26,7 +26,7 @@ Server-side only. Pure ESM. Node ≥ 22.21.0, pnpm ≥ 10.
 **Three-tier API boundary** (enforced by `package.json#exports`):
 - `@1c-odata/client` — stable surface (semver-protected per STABILITY.md)
 - `@1c-odata/client/filter` — separate entrypoint for the filter DSL (`and`, `or`, `any`, `all`, `not`, `raw`)
-- `@1c-odata/client/internal` — escape hatch consumed by `@1c-odata/cli`, `@1c-odata/metadata`, and integration tests; MAY break in minor versions (safe: all packages are changesets-`linked` and release in lock-step)
+- `@1c-odata/client/internal` — escape hatch consumed by `@1c-odata/cli`, `@1c-odata/metadata`, and integration tests; MAY break in minor versions (safe: all packages are a changesets-`fixed` group and release in lock-step)
 
 **Workspace deps via `workspace:*`.** `prepare` hook on `pnpm install` builds all packages' `dist/` automatically (topological order client → metadata → cli) — running tests / typecheck on a fresh clone "just works" without an explicit build step. Don't manually run `pnpm build` unless investigating dist output.
 
