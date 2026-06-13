@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { DataShape } from '@1c-odata/client'
+import { type DataShape, InvalidArgumentError } from '@1c-odata/client'
 import envPaths from 'env-paths'
 
 /**
@@ -51,7 +51,13 @@ export function loadConfig(dataDir: string): McpConfig {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { connections: {} }
     throw err
   }
-  return normalizeConfig(JSON.parse(raw))
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error(`Malformed JSON in ${configPath(dataDir)} — fix or delete the file.`)
+  }
+  return normalizeConfig(parsed)
 }
 
 /** Coerce parsed JSON into a well-formed {@link McpConfig} (shallow). */
@@ -60,6 +66,21 @@ function normalizeConfig(data: unknown): McpConfig {
   const connections = (data as { connections?: unknown }).connections
   if (connections === null || typeof connections !== 'object') return { connections: {} }
   return { connections: connections as Record<string, StoredConnection> }
+}
+
+/**
+ * Connection names map to an `ONEC_<NAME>_PASSWORD` env var (hyphens → underscores),
+ * so they must be ASCII letters/digits/hyphens to keep that mapping injective and
+ * expressible as an env var. The name is a user-chosen alias, not the (often
+ * Cyrillic) 1С base name.
+ */
+export function assertValidConnectionName(name: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(name)) {
+    throw new InvalidArgumentError(
+      `Invalid connection name "${name}". Use ASCII letters, digits and hyphens (e.g. "tvip-trade"); it maps to an ONEC_<NAME>_PASSWORD env var.`,
+      { argument: 'name' },
+    )
+  }
 }
 
 /** Persist `config.json` atomically (tmp + rename), creating `dataDir` if needed. */

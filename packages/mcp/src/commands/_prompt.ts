@@ -34,6 +34,14 @@ export async function promptHidden(label: string): Promise<string> {
       stdin.setRawMode(false)
       stdin.pause()
       stdin.removeListener('data', onData)
+      stdin.removeListener('end', onEnd)
+    }
+    const onEnd = (): void => {
+      // stdin closed (EOF) without a terminating keystroke — restore the
+      // terminal and fail instead of hanging in raw mode forever.
+      cleanup()
+      stdout.write('\n')
+      reject(new Error('Input closed before a password was entered'))
     }
     const onData = (chunk: string): void => {
       for (const ch of chunk) {
@@ -61,6 +69,7 @@ export async function promptHidden(label: string): Promise<string> {
       }
     }
     stdin.on('data', onData)
+    stdin.once('end', onEnd)
   })
 }
 

@@ -13,6 +13,10 @@ describe('redactSecrets', () => {
   it('masks every URL in the string', () => {
     expect(redactSecrets('a https://u:pw@h1 b http://x:y@h2')).toBe('a https://***@h1 b http://***@h2')
   })
+
+  it('masks a password that itself contains @', () => {
+    expect(redactSecrets('connect http://user:p@ss@host/odata failed')).toBe('connect http://***@host/odata failed')
+  })
 })
 
 describe('errorText', () => {

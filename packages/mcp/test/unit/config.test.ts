@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { configPath, loadConfig, resolveDataDir, saveConfig } from '../../src/config.js'
+import { assertValidConnectionName, configPath, loadConfig, resolveDataDir, saveConfig } from '../../src/config.js'
 
 let dir: string
 beforeEach(() => {
@@ -45,8 +45,27 @@ describe('loadConfig / saveConfig', () => {
     }
   })
 
-  it('normalizes malformed JSON to an empty config', () => {
+  it('normalizes structurally-invalid JSON to an empty config', () => {
     writeFileSync(configPath(dir), '{"connections": 42}')
     expect(loadConfig(dir)).toEqual({ connections: {} })
+  })
+
+  it('throws a clear error on syntactically malformed JSON', () => {
+    writeFileSync(configPath(dir), '{ not json')
+    expect(() => loadConfig(dir)).toThrow(/Malformed JSON/)
+  })
+})
+
+describe('assertValidConnectionName', () => {
+  it('accepts ASCII names with letters, digits and hyphens', () => {
+    expect(() => assertValidConnectionName('tvip-trade')).not.toThrow()
+    expect(() => assertValidConnectionName('bp30')).not.toThrow()
+  })
+
+  it('rejects Cyrillic, separators-only, and collision-prone names', () => {
+    expect(() => assertValidConnectionName('Валюты')).toThrow(/Invalid connection name/)
+    expect(() => assertValidConnectionName('a_b')).toThrow(/Invalid connection name/)
+    expect(() => assertValidConnectionName('--')).toThrow(/Invalid connection name/)
+    expect(() => assertValidConnectionName('')).toThrow(/Invalid connection name/)
   })
 })

@@ -62,20 +62,18 @@ export class ConnectionPool {
   /** Configured connections (no secrets), each annotated with its password source. */
   async list(): Promise<ConnectionSummary[]> {
     const config = loadConfig(this.dataDir)
-    const summaries: ConnectionSummary[] = []
-    for (const name of Object.keys(config.connections).sort()) {
-      const c = config.connections[name]
-      if (c === undefined) continue
-      summaries.push({
+    const entries = Object.entries(config.connections).sort(([a], [b]) => a.localeCompare(b))
+    // Each password source may hit the keychain independently — fan out.
+    return Promise.all(
+      entries.map(async ([name, c]) => ({
         name,
         baseUrl: c.baseUrl,
         login: c.login,
         serverTimezone: c.serverTimezone,
         passwordSource: await this.store.source(name),
         loaded: this.cache.has(name),
-      })
-    }
-    return summaries
+      })),
+    )
   }
 
   /** Resolve a ready entry, fetching + building the schema on first access. */
@@ -104,6 +102,9 @@ export class ConnectionPool {
       ...(stored.shape !== undefined ? { shape: stored.shape } : {}),
     }
 
+    // Inline fetch→parse→build (rather than metadata's fetchMetadataIndex) so we
+    // keep the intermediate EdmxModel for describe_entity (keys/navigation) —
+    // fetchMetadataIndex discards it, and reusing it would force a second parse.
     const xml = await fetchMetadataXml({
       baseUrl: connection.baseUrl,
       auth: connectionAuth(connection),

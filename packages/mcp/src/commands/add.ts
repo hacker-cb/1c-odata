@@ -1,13 +1,6 @@
-import {
-  type Connection,
-  connectionAuth,
-  InvalidArgumentError,
-  normalizeBaseUrl,
-  parseConnectionUrl,
-  validateConnection,
-} from '@1c-odata/client'
+import { type Connection, connectionAuth, normalizeBaseUrl, validateConnection } from '@1c-odata/client'
 import { fetchMetadataXml } from '@1c-odata/metadata'
-import { loadConfig, type StoredConnection, saveConfig } from '../config.js'
+import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfig } from '../config.js'
 import { errorText } from '../redact.js'
 import { passwordEnvVar, SecretStore } from '../secret-store.js'
 import { promptConfirm, promptHidden, promptLine } from './_prompt.js'
@@ -20,38 +13,39 @@ export interface AddOptions {
   insecure?: boolean
 }
 
+/** Strip any `user:password@` userinfo from a URL; the password is collected via the no-echo prompt instead. */
+function baseUrlWithoutUserinfo(input: string): string {
+  try {
+    const url = new URL(input)
+    if (url.username !== '' || url.password !== '') {
+      process.stderr.write('Note: credentials in the URL are ignored — enter the password at the prompt below.\n')
+      url.username = ''
+      url.password = ''
+    }
+    return normalizeBaseUrl(`${url.protocol}//${url.host}${url.pathname}${url.search}`)
+  } catch {
+    return normalizeBaseUrl(input)
+  }
+}
+
 /**
- * Interactively add (or overwrite) a connection. The password is read with a
- * no-echo prompt and stored via {@link SecretStore} — it never touches argv,
- * env, or the persisted `config.json`.
+ * Interactively add (or overwrite) a connection. The password is ALWAYS read
+ * with a no-echo prompt and stored via {@link SecretStore} — it never touches
+ * argv, env, the echoed URL prompt, or the persisted `config.json`.
  */
 export async function runAdd(opts: AddOptions): Promise<void> {
   const config = loadConfig(opts.dataDir)
 
   const name = (opts.name ?? (await promptLine('Connection name: '))).trim()
-  if (name === '') throw new InvalidArgumentError('Connection name is required', { argument: 'name' })
+  assertValidConnectionName(name)
   if (config.connections[name] !== undefined && !(await promptConfirm(`Connection "${name}" exists. Overwrite?`))) {
     process.stdout.write('Aborted.\n')
     return
   }
 
-  const urlInput = (await promptLine('Base URL (you may include user:password@): ')).trim()
-  let baseUrl: string
-  let username: string
-  let password: string
-  try {
-    // URL carries userinfo — split it into baseUrl + credentials.
-    const parsed = parseConnectionUrl(urlInput)
-    baseUrl = parsed.baseUrl
-    username = parsed.auth.username
-    password = parsed.auth.password
-  } catch {
-    // No userinfo — ask for login and password separately.
-    baseUrl = normalizeBaseUrl(urlInput)
-    username = (await promptLine('Login: ')).trim()
-    password = await promptHidden('Password: ')
-  }
-
+  const baseUrl = baseUrlWithoutUserinfo((await promptLine('Base URL: ')).trim())
+  const username = (await promptLine('Login: ')).trim()
+  const password = await promptHidden('Password: ')
   const serverTimezone = await promptLine('Server timezone [Europe/Moscow]: ', { default: 'Europe/Moscow' })
 
   const connection: Connection = { baseUrl, auth: { username, password }, serverTimezone }

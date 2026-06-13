@@ -196,7 +196,12 @@ export class SecretStore {
       throw err
     }
     this.assertSecurePermissions()
-    const parsed = JSON.parse(raw) as unknown
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      throw new Error(`Malformed JSON in ${this.credentialsPath} — fix or delete the file.`)
+    }
     if (parsed === null || typeof parsed !== 'object') return {}
     return parsed as FileSecrets
   }
@@ -210,7 +215,17 @@ export class SecretStore {
     } catch {
       // best-effort on platforms without POSIX modes (Windows)
     }
-    renameSync(tmp, this.credentialsPath)
+    try {
+      renameSync(tmp, this.credentialsPath)
+    } catch (err) {
+      // Don't leave a temp file containing the password behind on failure.
+      try {
+        unlinkSync(tmp)
+      } catch {
+        // best effort — surface the original error
+      }
+      throw err
+    }
   }
 
   /** Refuse to read a credentials file that other users can access (~/.pgpass rule). */

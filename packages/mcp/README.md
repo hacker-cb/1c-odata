@@ -30,7 +30,7 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 ```console
 $ npx @1c-odata/mcp add my-base
 Connection name: my-base
-Base URL (you may include user:password@): https://your-1c-host/base/odata/standard.odata/
+Base URL: https://your-1c-host/base/odata/standard.odata/
 Login: your-user
 Password: ********            # typed with no echo — never stored in shell history or argv
 Server timezone [Europe/Moscow]: Europe/Moscow

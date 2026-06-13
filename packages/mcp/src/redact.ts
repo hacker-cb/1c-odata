@@ -4,7 +4,9 @@
  * request URL. Apply to every string shown to a human or returned to an LLM.
  */
 export function redactSecrets(text: string): string {
-  return text.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@\s]+@/g, '$1***@')
+  // Match up to the LAST `@` before a `/` or whitespace so a password that
+  // itself contains `@` is still fully masked.
+  return text.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/\s]+@/g, '$1***@')
 }
 
 /** Redacted message for any thrown value. */

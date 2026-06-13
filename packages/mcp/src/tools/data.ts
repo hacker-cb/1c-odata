@@ -203,7 +203,10 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool): void
 }
 
 function toDate(iso: string | undefined): Date | undefined {
-  return iso !== undefined ? new Date(iso) : undefined
+  if (iso === undefined) return undefined
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) throw new Error(`Invalid ISO date: "${iso}"`)
+  return date
 }
 
 function balanceArgs(args: RegisterQueryArgs): BalanceArgs {
