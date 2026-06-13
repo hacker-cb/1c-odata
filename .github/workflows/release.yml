@@ -96,12 +96,26 @@ jobs:
             echo "publishing $pkg@$ver"
             ( cd "$dir" && npm publish --provenance --access public )
           done
+          # Tag the release commit. The packages are a changesets `fixed` group
+          # (always identical versions), so a single `v<version>` tag is
+          # unambiguous. Create it whenever the current published version has no
+          # tag yet — idempotent and self-healing if an earlier push failed.
+          version=$(node -p "require('./packages/client/package.json').version")
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "tag v$version already exists — skipping"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "v$version" -m "v$version"
+            git push origin "v$version"
+            echo "tagged release v$version"
+          fi
       # changesets/action's `title` input is a static string evaluated before
       # `changeset version` runs, so the new version isn't yet known there.
       # Read it from the just-pushed release branch and rewrite the PR title.
       # Skipped on publish runs (no PR exists) and when there's nothing to release.
-      # @1c-odata/client and @1c-odata/cli are linked in .changeset/config.json,
-      # so reading the client version is sufficient.
+      # @1c-odata/client and @1c-odata/cli are a changesets `fixed` group in
+      # .changeset/config.json, so reading the client version is sufficient.
       - name: Rewrite Release PR title with version
         if: steps.changesets.outputs.hasChangesets == 'true' && steps.changesets.outputs.published != 'true'
         env:
