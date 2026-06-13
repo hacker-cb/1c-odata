@@ -12,8 +12,8 @@ inputs:
   coverage:
     description: >-
       Pass the string 'true' to run unit tests with V8 coverage (each package emits coverage/ for the artifact
-      upload); any other value runs plain unit tests. Callers pass a rendered GitHub expression, e.g.
-      `coverage: ${{ matrix.os == 'ubuntu-latest' }}` which renders to the strings 'true' / 'false'.
+      upload); any other value runs plain unit tests. Callers pass a rendered GitHub expression (e.g. a
+      matrix-OS equality check) that resolves to the string 'true' or 'false' — see ci.yml.
     default: 'false'
 
 runs:
