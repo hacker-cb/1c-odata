@@ -2,12 +2,13 @@ import { KIND_ORDER } from '@1c-odata/metadata'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { ConnectionPool } from '../connection-pool.js'
-import { clampTop } from '../limits.js'
+import { clampTop, type Limits } from '../limits.js'
+import { fitRows } from '../rows.js'
 import { toolResult } from './_result.js'
 import { describeEntity, selectEntities } from './schema-logic.js'
 
 /** Register the read-only schema-introspection tools. */
-export function registerSchemaTools(server: McpServer, pool: ConnectionPool): void {
+export function registerSchemaTools(server: McpServer, pool: ConnectionPool, limits: Limits): void {
   server.registerTool(
     'list_connections',
     {
@@ -60,7 +61,7 @@ export function registerSchemaTools(server: McpServer, pool: ConnectionPool): vo
           .optional()
           .describe(`Filter by 1С entity kind (one of: ${KIND_ORDER.join(', ')})`),
         name: z.string().optional().describe('Case-insensitive substring matched against the entity-set or short name'),
-        top: z.number().int().optional().describe('Page size (default 50, max 1000)'),
+        top: z.number().int().optional().describe('Max rows to return this page (server-capped; omit for the default)'),
         skip: z.number().int().min(0).optional().describe('Offset for pagination (default 0)'),
       },
     },
@@ -70,18 +71,20 @@ export function registerSchemaTools(server: McpServer, pool: ConnectionPool): vo
         const matched = selectEntities(entry.index, { kind, name })
 
         const offset = skip ?? 0
-        const limit = clampTop(top)
+        const limit = clampTop(top, limits)
         const page = matched.slice(offset, offset + limit)
+        const { rows: shown, truncated } = fitRows(page, limits.maxBytes)
         return {
-          summary: `${matched.length} entity set(s) matched; returning ${page.length} (skip ${offset}, top ${limit}).`,
+          summary: `${matched.length} entity set(s) matched; returning ${shown.length} (skip ${offset}, top ${limit})${truncated ? ' — truncated to the byte budget' : ''}.`,
           data: {
             connection,
             total: matched.length,
             skip: offset,
             top: limit,
-            returned: page.length,
-            hasMore: offset + page.length < matched.length,
-            entities: page,
+            returned: shown.length,
+            truncated,
+            hasMore: truncated || offset + page.length < matched.length,
+            entities: shown,
           },
         }
       }),
@@ -127,7 +130,11 @@ export function registerSchemaTools(server: McpServer, pool: ConnectionPool): vo
           .filter(([enumName]) => (needle === undefined ? true : enumName.toLowerCase().includes(needle)))
           .map(([enumName, def]) => ({ name: enumName, underlyingType: def.underlyingType, members: def.members }))
           .sort((a, b) => a.name.localeCompare(b.name))
-        return { summary: `${items.length} enum(s).`, data: { connection, total: items.length, enums: items } }
+        const { rows: shown, truncated } = fitRows(items, limits.maxBytes)
+        return {
+          summary: `${items.length} enum(s)${truncated ? `; returning ${shown.length} (truncated to the byte budget — filter by name)` : ''}.`,
+          data: { connection, total: items.length, returned: shown.length, truncated, enums: shown },
+        }
       }),
   )
 }

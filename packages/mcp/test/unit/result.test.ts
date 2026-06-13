@@ -11,7 +11,8 @@ describe('toolResult', () => {
     }))
     expect(r.isError).toBeUndefined()
     expect(r.structuredContent).toEqual({ lineNumber: '123', nested: [{ big: '9007199254740993' }] })
-    expect(text(r)).toContain('"lineNumber": "123"')
+    // Compact JSON (no spaces): the data block is machine-read.
+    expect(text(r)).toContain('"lineNumber":"123"')
   })
 
   it('serializes Date values as ISO strings', async () => {

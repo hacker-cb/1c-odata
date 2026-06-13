@@ -12,7 +12,8 @@ import { raw } from '@1c-odata/client/filter'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { ConnectionPool } from '../connection-pool.js'
-import { clampTop } from '../limits.js'
+import { clampTop, type Limits } from '../limits.js'
+import { capLongStrings, type FitResult, fitRows, stripNoise } from '../rows.js'
 import { toolResult } from './_result.js'
 
 /** Register virtual tables, keyed by RegisterHelper method name. */
@@ -63,14 +64,43 @@ function applyQueryOptions(builder: V3QueryBuilder<UntypedEntity>, opts: QueryOp
   return q
 }
 
+/**
+ * Shape rows for return: optionally strip annotation noise (`compact`), cap any
+ * oversized string field so a single fat row (e.g. a base64 ValueStorage) can't
+ * blow the budget, then truncate the array to the byte budget.
+ */
+function shapeRows<T>(rows: T[], compact: boolean | undefined, limits: Limits): FitResult<T> {
+  const cleaned = compact === true ? rows.map((r) => stripNoise(r)) : rows
+  const capped = cleaned.map((r) => capLongStrings(r, limits.maxBytes)) as T[]
+  return fitRows(capped, limits.maxBytes)
+}
+
+/** A `… of N fetched rows; narrow with …` note for the summary, or '' when nothing was dropped. */
+function truncationNote(truncated: boolean, shown: number, fetched: number, limits: Limits, narrow: string): string {
+  if (!truncated) return ''
+  return ` ⚠ Output truncated to ${shown} of ${fetched} fetched rows (~${limits.maxBytes}-byte budget); ${narrow}.`
+}
+
+/** Entity-set paths that are really register virtual tables / flat record sets — nudge toward register_query. */
+const REGISTER_VT =
+  /\/(Balance|Turnovers|BalanceAndTurnovers|SliceFirst|SliceLast|DrCrTurnovers|ExtDimensions|RecordsWithExtDimensions)\b/
+
+function registerHint(entitySet: string): string {
+  if (REGISTER_VT.test(entitySet))
+    return ' Tip: this is a register virtual table — register_query aggregates it server-side.'
+  if (entitySet.endsWith('_RecordType'))
+    return ' Tip: for totals/balances prefer register_query (server-side aggregation by dimensions) over raw _RecordType rows.'
+  return ''
+}
+
 /** Register the read-only data tools (queries, lookups, register virtual tables). */
-export function registerDataTools(server: McpServer, pool: ConnectionPool): void {
+export function registerDataTools(server: McpServer, pool: ConnectionPool, limits: Limits): void {
   server.registerTool(
     'query',
     {
       title: 'Query data',
       description:
-        'Read-only OData query against an entity set: raw $filter, $select, $expand, $orderby, $top/$skip, optional total count.',
+        'Read-only OData query against an entity set ($filter, $select, $expand, $orderby, $top/$skip, optional count). Large results are truncated to a byte budget — use select to keep them small. With expand, also include the navigation property in select (e.g. "Партнер/Description") or the expanded data is dropped. For register balances/turnovers/totals use register_query, not raw "*_RecordType" rows.',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         entitySet: z.string().describe('Entity set, e.g. Catalog_Валюты'),
@@ -78,21 +108,29 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool): void
         select: z
           .array(z.string())
           .optional()
-          .describe('Properties to return ("*" = all, "**" = all minus tabular parts)'),
+          .describe(
+            'Properties to return ("*" = all, "**" = all minus tabular parts). With expand, include the nav prop or "Nav/Field" too.',
+          ),
         expand: z.array(z.string()).optional().describe('Navigation properties to expand'),
         orderBy: z
           .array(z.object({ field: z.string(), dir: z.enum(['asc', 'desc']).optional() }))
           .optional()
           .describe('Sort specification (applied in order)'),
-        top: z.number().int().optional().describe('Page size (default 50, max 1000)'),
+        top: z.number().int().optional().describe('Max rows to return this page (server-capped; omit for the default)'),
         skip: z.number().int().min(0).optional().describe('Offset for pagination (default 0)'),
         count: z.boolean().optional().describe('Include the total row count (OData $inlinecount)'),
+        compact: z
+          .boolean()
+          .optional()
+          .describe(
+            'Drop 1С "*_Type" annotation companions and @odata noise to save space. Caveat: also removes composite-type discriminators like Value_Type/Ref_Type, so omit it when you need to know which entity a "*_Key" points to.',
+          ),
       },
     },
-    async ({ connection, entitySet, filter, select, expand, orderBy, top, skip, count }) =>
+    async ({ connection, entitySet, filter, select, expand, orderBy, top, skip, count, compact }) =>
       toolResult(async () => {
         const { client } = await pool.get(connection)
-        const limit = clampTop(top)
+        const limit = clampTop(top, limits)
         const offset = skip ?? 0
         let q = applyQueryOptions(client.query<UntypedEntity>(entitySet), {
           filter,
@@ -104,8 +142,17 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool): void
         if (offset > 0) q = q.skip(offset)
 
         const result = await q.get()
+        const fetched = result.value.length
+        const { rows, truncated } = shapeRows(result.value, compact, limits)
+        const note = truncationNote(
+          truncated,
+          rows.length,
+          fetched,
+          limits,
+          'narrow with select, set compact:true, or page with skip',
+        )
         return {
-          summary: `${result.value.length} row(s)${result.count !== undefined ? ` of ${result.count} total` : ''} from ${entitySet}.`,
+          summary: `${rows.length} row(s)${result.count !== undefined ? ` of ${result.count} total` : ''} from ${entitySet}.${note}${registerHint(entitySet)}`,
           data: {
             connection,
             entitySet,
@@ -113,14 +160,14 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool): void
             pagination: {
               skip: offset,
               top: limit,
-              returned: result.value.length,
-              // With a total count, the last full page still has no more rows.
-              hasMore:
-                result.count !== undefined
-                  ? offset + result.value.length < result.count
-                  : result.value.length === limit,
+              fetched,
+              returned: rows.length,
+              truncated,
+              // More rows exist if we dropped some for size, or — by count when
+              // present, else by a full page — the server has a next page.
+              hasMore: truncated || (result.count !== undefined ? offset + fetched < result.count : fetched === limit),
             },
-            value: result.value,
+            value: rows,
           },
         }
       }),
@@ -136,13 +183,23 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool): void
         connection: z.string().describe('Connection name'),
         entitySet: z.string().describe('Entity set, e.g. Catalog_Валюты'),
         key: z.string().describe('Entity key — usually the Ref_Key GUID'),
+        compact: z
+          .boolean()
+          .optional()
+          .describe(
+            'Drop 1С "*_Type" annotation companions and @odata noise to save space. Caveat: also removes composite-type discriminators like Value_Type/Ref_Type.',
+          ),
       },
     },
-    async ({ connection, entitySet, key }) =>
+    async ({ connection, entitySet, key, compact }) =>
       toolResult(async () => {
         const { client } = await pool.get(connection)
         const entity = await client.entity<UntypedEntity>(entitySet, key).get()
-        return { summary: `Fetched ${entitySet}(${key}).`, data: { connection, entitySet, key, entity } }
+        const cleaned = compact === true ? stripNoise(entity) : entity
+        // Cap oversized fields (e.g. a base64 ValueStorage) so a single entity
+        // can't exceed the budget; there are no rows here to drop.
+        const shaped = capLongStrings(cleaned, limits.maxBytes)
+        return { summary: `Fetched ${entitySet}(${key}).`, data: { connection, entitySet, key, entity: shaped } }
       }),
   )
 
@@ -171,7 +228,7 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool): void
     {
       title: 'Query register virtual table',
       description:
-        'Query a 1С register virtual table (read-only analytics): balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601 strings.',
+        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Use dimensions (comma-separated) to control grouping. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601. Paginated via top/skip.',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         register: z.string().describe('Register entity set, e.g. AccumulationRegister_ТоварыНаСкладах'),
@@ -186,19 +243,48 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool): void
         accountKey: z.string().optional().describe('Account Ref_Key for extDimensions'),
         accountDr: z.string().optional().describe('Debit account binding (entity-set path) for drCrTurnovers'),
         accountCr: z.string().optional().describe('Credit account binding (entity-set path) for drCrTurnovers'),
+        top: z.number().int().optional().describe('Max rows to return this page (server-capped; omit for the default)'),
+        skip: z.number().int().min(0).optional().describe('Offset for pagination (default 0)'),
+        compact: z
+          .boolean()
+          .optional()
+          .describe(
+            'Drop 1С "*_Type" annotation companions and @odata noise to save space. Caveat: also removes composite-type discriminators like Value_Type/Ref_Type, so omit it when you need to know which entity a "*_Key" points to.',
+          ),
       },
     },
     async (args) =>
       toolResult(async () => {
         const { client } = await pool.get(args.connection)
-        const rows = await runRegisterTable(client.register(args.register), args)
+        // The FI returns the whole virtual table; paginate client-side (no $top
+        // on FI URLs) so `total` is exact and the row array stays bounded.
+        const allRows = await runRegisterTable(client.register(args.register), args)
+        const total = allRows.length
+        const offset = args.skip ?? 0
+        const limit = clampTop(args.top, limits)
+        const page = allRows.slice(offset, offset + limit)
+        const { rows, truncated } = shapeRows(page, args.compact, limits)
+        const note = truncationNote(
+          truncated,
+          rows.length,
+          page.length,
+          limits,
+          'narrow with dimensions/condition, set compact:true, or page with skip',
+        )
         return {
-          summary: `${rows.length} row(s) from ${args.register}.${args.table}.`,
+          summary: `${rows.length} row(s) of ${total} total from ${args.register}.${args.table}.${note}`,
           data: {
             connection: args.connection,
             register: args.register,
             table: args.table,
-            returned: rows.length,
+            total,
+            pagination: {
+              skip: offset,
+              top: limit,
+              returned: rows.length,
+              truncated,
+              hasMore: truncated || offset + page.length < total,
+            },
             rows,
           },
         }

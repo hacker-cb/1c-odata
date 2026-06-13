@@ -1,14 +1,49 @@
-/** Default page size for `query`/`list_entities` when the caller omits `top`. */
-export const DEFAULT_TOP = 50
+/**
+ * Tunable response limits, resolved once from the environment at server start
+ * and threaded into the read tools. Keeps tool responses bounded regardless of
+ * what the LLM requests.
+ */
+export interface Limits {
+  /** Page size when the caller omits `top`. */
+  defaultTop: number
+  /** Hard ceiling on a single page's `top`. */
+  maxTop: number
+  /** Byte budget (UTF-8) for a result's row array; rows beyond it are truncated. */
+  maxBytes: number
+}
 
-/** Hard cap on a single page — guards against dumping a whole table into context. */
-export const MAX_TOP = 1000
+/** Built-in defaults; each is overridable via an `ONEC_MCP_*` env var (see {@link resolveLimits}). */
+export const DEFAULT_LIMITS: Limits = { defaultTop: 50, maxTop: 1000, maxBytes: 24_000 }
+
+function intEnv(raw: string | undefined, fallback: number, min: number): number {
+  // Strict decimal only — reject hex ("0x10"), exponential ("1e9"), floats and
+  // blanks so a typo can't silently raise a cap to an unintended value.
+  if (raw === undefined || !/^\d+$/.test(raw.trim())) return fallback
+  const n = Number(raw.trim())
+  return Number.isInteger(n) && n >= min ? n : fallback
+}
 
 /**
- * Clamp a caller-supplied `top` into `[1, MAX_TOP]`, defaulting when absent or
- * invalid. Keeps tool responses bounded regardless of what the LLM requests.
+ * Resolve {@link Limits} from the environment, falling back to
+ * {@link DEFAULT_LIMITS} for unset/invalid values:
+ * - `ONEC_MCP_DEFAULT_TOP` — default page size (≥ 1)
+ * - `ONEC_MCP_MAX_TOP` — page-size ceiling (≥ 1)
+ * - `ONEC_MCP_MAX_BYTES` — per-result row-array byte budget (≥ 1024)
+ *
+ * `defaultTop` is clamped to `maxTop` so a misconfiguration can't exceed the cap.
  */
-export function clampTop(top: number | undefined): number {
-  if (top === undefined || !Number.isInteger(top) || top < 1) return DEFAULT_TOP
-  return Math.min(top, MAX_TOP)
+export function resolveLimits(env: NodeJS.ProcessEnv = process.env): Limits {
+  const maxTop = intEnv(env.ONEC_MCP_MAX_TOP, DEFAULT_LIMITS.maxTop, 1)
+  const defaultTop = Math.min(intEnv(env.ONEC_MCP_DEFAULT_TOP, DEFAULT_LIMITS.defaultTop, 1), maxTop)
+  const maxBytes = intEnv(env.ONEC_MCP_MAX_BYTES, DEFAULT_LIMITS.maxBytes, 1024)
+  return { defaultTop, maxTop, maxBytes }
+}
+
+/**
+ * Clamp a caller-supplied `top` into `[1, limits.maxTop]`, defaulting to
+ * `limits.defaultTop` when absent or invalid (non-integer / < 1).
+ */
+export function clampTop(top: number | undefined, limits: Limits): number {
+  if (top === undefined || !Number.isInteger(top) || top < 1) return limits.defaultTop
+  return Math.min(top, limits.maxTop)
 }

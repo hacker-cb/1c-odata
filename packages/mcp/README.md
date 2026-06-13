@@ -81,6 +81,24 @@ Then ask the assistant to `list_connections`, explore the schema, and query data
 Both files live in the data directory: `$ONEC_MCP_DATA_DIR` if set, otherwise the per-OS user config dir
 (`~/.config/1c-odata`, `~/Library/Application Support/1c-odata`, `%APPDATA%\1c-odata`).
 
+## Output size
+
+Every read tool keeps its result within a byte budget so a large query can't overflow the model's context:
+row sets are truncated to a usable sample (the response carries `truncated` / `hasMore` and a hint to narrow
+the request), and an oversized individual field (e.g. a base64 `ValueStorage`) is capped with a marker. Tune
+it with env vars (all optional):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ONEC_MCP_DEFAULT_TOP` | `50` | Page size when a call omits `top`. |
+| `ONEC_MCP_MAX_TOP` | `1000` | Hard ceiling on a call's `top`. |
+| `ONEC_MCP_MAX_BYTES` | `24000` | Per-result byte budget for the returned rows. |
+
+Pass `compact: true` to `query` / `get_entity` / `register_query` to also drop 1С `*_Type` annotation
+companions (and `@odata` noise) and fit more rows per response. Caveat: that also removes composite-type
+discriminators such as `Value_Type` / `Ref_Type`, so omit it when you need to know which entity a `*_Key`
+references.
+
 ## Security
 
 - **No tool ever returns a stored password.** `list_connections` shows only where each password lives.
