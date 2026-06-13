@@ -111,6 +111,15 @@ export default defineCodegenConfig({
     await expect(loadConfig({ cwd: tmp })).rejects.toThrow(/auth\.password.*non-empty/)
   })
 
+  it('throws a clear error when a target has no connection', async () => {
+    // The #1 migration mistake: writing the old flat shape under a target
+    // instead of nesting it under `connection:`. The error must name `connection`.
+    writeFileSync(join(tmp, '1c-odata.config.ts'), `export default { targets: { trade: { include: ['Catalog_*'] } } }`)
+    const err = await rejection(loadConfig({ cwd: tmp }))
+    expect(err).toBeInstanceOf(InvalidArgumentError)
+    expect(err.message).toMatch(/Target "trade" must declare a "connection"/)
+  })
+
   it('throws when auth object is missing entirely', async () => {
     writeFileSync(
       join(tmp, '1c-odata.config.ts'),

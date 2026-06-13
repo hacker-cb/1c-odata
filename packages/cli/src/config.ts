@@ -77,6 +77,32 @@ export interface LoadResult {
 }
 
 /**
+ * Validate one codegen target's connection, re-throwing as a prefixed
+ * `InvalidArgumentError` so CLI output names the bad record and callers keep
+ * the typed class identity (C-4 contract).
+ */
+function validateTarget(name: string, target: CodegenTarget): void {
+  // Name the missing `connection` explicitly — the most likely migration
+  // mistake is writing the old flat shape under a target instead of nesting it
+  // under `connection:`. A bare validateConnection(undefined) would only say
+  // "Connection must be an object", which doesn't point at the fix.
+  if (!target || typeof target !== 'object' || target.connection === undefined) {
+    throw new InvalidArgumentError(`Target "${name}" must declare a "connection"`, { argument: 'connection' })
+  }
+  try {
+    validateConnection(target.connection)
+  } catch (e) {
+    if (e instanceof InvalidArgumentError) {
+      const opts: ConstructorParameters<typeof InvalidArgumentError>[1] = { cause: e }
+      if (e.argument !== undefined) opts.argument = e.argument
+      if (e.received !== undefined) opts.received = e.received
+      throw new InvalidArgumentError(`Target "${name}": ${e.message}`, opts)
+    }
+    throw e
+  }
+}
+
+/**
  * Load `1c-odata.config.ts` from the project root using c12.
  *
  * Auto-sources `.env` then `.env.local` (relative to `cwd`) before evaluating
@@ -112,23 +138,10 @@ export async function loadConfig(opts: { cwd: string; configFile?: string }): Pr
   if (!config || !config.targets || Object.keys(config.targets).length === 0) {
     throw new Error(`Config at ${result.configFile} must declare at least one target`)
   }
-  // Delegate per-target validation to validateConnection. On failure,
-  // re-throw as InvalidArgumentError so callers can catch via the typed
-  // class identity (C-4 contract). The target name gets prefixed into the
-  // message so the CLI output names the bad record; structured
-  // argument/received fields propagate from the inner failure.
+  // Validate each target's connection — per-target so CLI output names the
+  // bad record (see validateTarget).
   for (const [name, target] of Object.entries(config.targets)) {
-    try {
-      validateConnection(target?.connection)
-    } catch (e) {
-      if (e instanceof InvalidArgumentError) {
-        const opts: ConstructorParameters<typeof InvalidArgumentError>[1] = { cause: e }
-        if (e.argument !== undefined) opts.argument = e.argument
-        if (e.received !== undefined) opts.received = e.received
-        throw new InvalidArgumentError(`Target "${name}": ${e.message}`, opts)
-      }
-      throw e
-    }
+    validateTarget(name, target)
   }
   return {
     config,
