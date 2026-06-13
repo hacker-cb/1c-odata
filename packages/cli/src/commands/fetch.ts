@@ -1,6 +1,7 @@
 import { join, resolve } from 'node:path'
 import { connectionAuth } from '@1c-odata/client'
 import { fetchMetadataXml } from '@1c-odata/metadata'
+import { mapWithConcurrency } from '../concurrency.js'
 import type { CodegenConfig } from '../config.js'
 import { writeOneFile } from '../writer.js'
 import { pickTargets } from './_shared.js'
@@ -66,26 +67,4 @@ function prefixTargetError(name: string, e: unknown): unknown {
     return e
   }
   return new Error(`fetch failed for target "${name}": ${String(e)}`, { cause: e })
-}
-
-/**
- * Run `fn` over `items` with at most `limit` invocations in flight at once.
- *
- * Workers share one array iterator, so each pulls the next item as it frees up
- * — no manual index bookkeeping, no double-processing. `fn` MUST handle its own
- * errors (never reject): a rejecting worker would abandon its siblings mid-flight
- * and surface as an unhandled rejection.
- */
-async function mapWithConcurrency<T>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<void>,
-): Promise<void> {
-  const iterator = items.entries()
-  async function worker(): Promise<void> {
-    for (const [index, item] of iterator) {
-      await fn(item, index)
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()))
 }

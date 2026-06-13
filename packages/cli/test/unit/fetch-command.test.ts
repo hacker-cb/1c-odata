@@ -141,9 +141,9 @@ describe('runFetch', () => {
     ).rejects.toThrow(/target "x".*500/i)
   })
 
-  it('attempts every target and surfaces the first failure by target order', async () => {
+  it('attempts every target even when one fails (best-effort)', async () => {
     // x fails (500), y succeeds. Best-effort: y must still be written even
-    // though x failed, and the thrown error names the first failing target.
+    // though x failed, and the thrown error names the failing target.
     server.use(
       http.get('http://example.test/odata/$metadata', () => HttpResponse.text('Server Error', { status: 500 })),
       http.get('http://other.test/odata/$metadata', () =>
@@ -223,6 +223,45 @@ describe('runFetch', () => {
     expect(yRequested).toBe(true)
     expect(readFileSync(join(tmp, 'metadata/x.xml'), 'utf8')).toBe('X')
     expect(readFileSync(join(tmp, 'metadata/y.xml'), 'utf8')).toBe('Y')
+  })
+
+  it('rethrows the first failure in target order when multiple targets fail', async () => {
+    // x (first) → 500, y (second) → 503. Both fail, but the surfaced error must
+    // be x's (lowest target index), not whichever download settled first.
+    let yRequested = false
+    server.use(
+      http.get('http://example.test/odata/$metadata', () => HttpResponse.text('boom', { status: 500 })),
+      http.get('http://other.test/odata/$metadata', () => {
+        yRequested = true
+        return HttpResponse.text('boom', { status: 503 })
+      }),
+    )
+    const err = await rejection(
+      runFetch({
+        cwd: tmp,
+        config: {
+          targets: {
+            x: {
+              connection: {
+                baseUrl: 'http://example.test/odata',
+                auth: { username: 'u', password: 'p' },
+                serverTimezone: 'Europe/Moscow',
+              },
+            },
+            y: {
+              connection: {
+                baseUrl: 'http://other.test/odata',
+                auth: { username: 'u2', password: 'p2' },
+                serverTimezone: 'Europe/Moscow',
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(err.message).toMatch(/target "x".*500/i)
+    expect(err.message).not.toMatch(/503/) // y's later failure must not mask x's
+    expect(yRequested).toBe(true) // y still attempted despite x failing
   })
 
   it('preserves typed-error identity when prepending the target name (STABILITY.md contract)', async () => {
