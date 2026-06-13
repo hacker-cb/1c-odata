@@ -2,7 +2,7 @@ import { connectionAuth } from '@1c-odata/client'
 import { fetchMetadataXml } from '@1c-odata/metadata'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import type { ConnectionPool } from '../connection-pool.js'
+import { type ConnectionPool, DEFAULT_METADATA_TIMEOUT_MS } from '../connection-pool.js'
 import { removeConnection, upsertConnection } from '../connections.js'
 import { stripUrlUserinfo } from '../redact.js'
 import { toolResult } from './_result.js'
@@ -44,7 +44,7 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
           await fetchMetadataXml({
             baseUrl: stripUrlUserinfo(baseUrl.trim()),
             auth: connectionAuth({ auth: { username: login.trim(), password: (password as string).trim() } }),
-            timeout: 30_000,
+            timeout: DEFAULT_METADATA_TIMEOUT_MS,
           })
         }
         const result = await upsertConnection({

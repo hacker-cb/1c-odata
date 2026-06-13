@@ -1,6 +1,7 @@
 import { connectionAuth, InvalidArgumentError } from '@1c-odata/client'
 import { fetchMetadataXml } from '@1c-odata/metadata'
 import { assertValidConnectionName, loadConfig } from '../config.js'
+import { DEFAULT_METADATA_TIMEOUT_MS } from '../connection-pool.js'
 import { upsertConnection } from '../connections.js'
 import { errorText, stripUrlUserinfo } from '../redact.js'
 import { passwordEnvVar } from '../secret-store.js'
@@ -120,7 +121,7 @@ async function verifyOrConfirm(fields: ResolvedFields, opts: AddOptions): Promis
     await fetchMetadataXml({
       baseUrl: stripUrlUserinfo(fields.baseUrl.trim()),
       auth: connectionAuth({ auth: { username: fields.login, password: fields.password } }),
-      timeout: 30_000,
+      timeout: DEFAULT_METADATA_TIMEOUT_MS,
     })
     process.stdout.write('OK\n')
     return true

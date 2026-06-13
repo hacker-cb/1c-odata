@@ -59,10 +59,11 @@ export function capLongStrings(value: unknown, capBytes: number): unknown {
   if (typeof value === 'string') {
     const total = Buffer.byteLength(value, 'utf8')
     if (total <= capBytes) return value
-    // Keep a small head (never larger than the cap) plus a marker, so capping a
-    // field always shrinks it.
-    const head = value.slice(0, Math.min(120, capBytes))
-    return `${head}…(${total} bytes, truncated — fetch via query with $select or readStream)`
+    // Head trimmed by UTF-8 bytes (never larger than the cap) so capping always
+    // shrinks the field, even for multi-byte Cyrillic. No retrieval hint — the
+    // MCP server exposes no way to fetch the full blob.
+    const head = sliceUtf8(value, Math.min(120, capBytes))
+    return `${head}…(truncated, ${total} bytes)`
   }
   if (value instanceof Date) return value
   if (Array.isArray(value)) return value.map((v) => capLongStrings(v, capBytes))
@@ -72,6 +73,19 @@ export function capLongStrings(value: unknown, capBytes: number): unknown {
     return out
   }
   return value
+}
+
+/** Longest prefix of `s` whose UTF-8 encoding fits in `maxBytes`, never splitting a code point. */
+function sliceUtf8(s: string, maxBytes: number): string {
+  let bytes = 0
+  let end = 0
+  for (const ch of s) {
+    const chBytes = Buffer.byteLength(ch, 'utf8')
+    if (bytes + chBytes > maxBytes) break
+    bytes += chBytes
+    end += ch.length
+  }
+  return s.slice(0, end)
 }
 
 /** Outcome of {@link fitRows}: the rows that fit, and whether any were dropped. */

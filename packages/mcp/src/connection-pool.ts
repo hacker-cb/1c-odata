@@ -33,6 +33,9 @@ export interface ConnectionSummary {
   loaded: boolean
 }
 
+/** Default `$metadata` download timeout (ms). 1С EDMX is 10+ MB on real bases. */
+export const DEFAULT_METADATA_TIMEOUT_MS = 120_000
+
 export interface ConnectionPoolOptions {
   dataDir: string
   insecure?: boolean
@@ -56,7 +59,7 @@ export class ConnectionPool {
   constructor(opts: ConnectionPoolOptions) {
     this.dataDir = opts.dataDir
     this.store = new SecretStore({ dataDir: opts.dataDir, insecure: opts.insecure ?? false })
-    this.fetchTimeout = opts.fetchTimeout ?? 120_000
+    this.fetchTimeout = opts.fetchTimeout ?? DEFAULT_METADATA_TIMEOUT_MS
   }
 
   /** Configured connections (no secrets), each annotated with its password source. */
