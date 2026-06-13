@@ -22,7 +22,9 @@ import { clientOptionsFromConnection, defineConnection, ODataV3Client, parseConn
 import { and, any } from '@1c-odata/client/filter'
 import type { Document_РТУ } from '../generated/trade/index.js'
 
-const conn = defineConnection({ ...parseConnectionUrl(process.env.ONEC_URL!), serverTimezone: 'Europe/Moscow' })
+const url = process.env.ONEC_URL
+if (!url) throw new Error('Set ONEC_URL')
+const conn = defineConnection({ ...parseConnectionUrl(url), serverTimezone: 'Europe/Moscow' })
 const trade = new ODataV3Client(clientOptionsFromConnection(conn))
 
 const { value: docs } = await trade

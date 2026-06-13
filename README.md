@@ -61,11 +61,12 @@ import { and, any } from '@1c-odata/client/filter'
 import type { Document_РТУ } from '../generated/trade/index.js'
 
 // The runtime builds its own Connection (from env, DB, vault, …) — it does NOT
-// import 1c-odata.config.ts, which exists only for the CLI. `shape` is baked
-// into the generated __metadata.json, so it isn't repeated here.
+// import 1c-odata.config.ts, which exists only for the CLI.
+const url = process.env.ONEC_URL
+if (!url) throw new Error('Set ONEC_URL')
 const trade = new ODataV3Client(
   clientOptionsFromConnection(
-    defineConnection({ ...parseConnectionUrl(process.env.ONEC_URL!), serverTimezone: 'Europe/Moscow' }),
+    defineConnection({ ...parseConnectionUrl(url), serverTimezone: 'Europe/Moscow' }),
   ),
 )
 
