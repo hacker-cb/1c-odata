@@ -67,15 +67,16 @@ describe('loadConfig / saveConfig', () => {
 })
 
 describe('assertValidConnectionName', () => {
-  it('accepts ASCII names with letters, digits and hyphens', () => {
+  it('accepts ASCII names with letters, digits, hyphens and underscores', () => {
     expect(() => assertValidConnectionName('tvip-trade')).not.toThrow()
+    expect(() => assertValidConnectionName('test_tvip_trade')).not.toThrow()
     expect(() => assertValidConnectionName('bp30')).not.toThrow()
   })
 
-  it('rejects Cyrillic, separators-only, and collision-prone names', () => {
+  it('rejects non-ASCII names, leading separators, and empty', () => {
     expect(() => assertValidConnectionName('Валюты')).toThrow(/Invalid connection name/)
-    expect(() => assertValidConnectionName('a_b')).toThrow(/Invalid connection name/)
-    expect(() => assertValidConnectionName('--')).toThrow(/Invalid connection name/)
+    expect(() => assertValidConnectionName('-leading')).toThrow(/Invalid connection name/)
+    expect(() => assertValidConnectionName('_leading')).toThrow(/Invalid connection name/)
     expect(() => assertValidConnectionName('')).toThrow(/Invalid connection name/)
   })
 })

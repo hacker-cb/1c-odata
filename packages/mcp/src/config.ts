@@ -79,15 +79,17 @@ function normalizeConfig(data: unknown): McpConfig {
 }
 
 /**
- * Connection names map to an `ONEC_<NAME>_PASSWORD` env var (hyphens → underscores),
- * so they must be ASCII letters/digits/hyphens to keep that mapping injective and
- * expressible as an env var. The name is a user-chosen alias, not the (often
- * Cyrillic) 1С base name.
+ * Connection names must be ASCII so they map to an `ONEC_<NAME>_PASSWORD` env
+ * var (a non-ASCII name like a Cyrillic 1С base name would slug to an empty,
+ * colliding `ONEC__PASSWORD`). Letters, digits, `-` and `_` are allowed; both
+ * `-` and `_` become `_` in the env var, so names differing only in that
+ * separator share one override env var (keychain/file storage keys on the exact
+ * name and never collide). The name is a user-chosen alias.
  */
 export function assertValidConnectionName(name: string): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(name)) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name)) {
     throw new InvalidArgumentError(
-      `Invalid connection name "${name}". Use ASCII letters, digits and hyphens (e.g. "tvip-trade"); it maps to a ONEC_<NAME>_PASSWORD env var.`,
+      `Invalid connection name "${name}". Use ASCII letters, digits, hyphens and underscores (e.g. "test_tvip_trade"); it maps to a ONEC_<NAME>_PASSWORD env var.`,
       { argument: 'name' },
     )
   }
