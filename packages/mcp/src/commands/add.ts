@@ -45,14 +45,9 @@ export async function runAdd(opts: AddOptions): Promise<void> {
 
   const baseUrl = baseUrlWithoutUserinfo((await promptLine('Base URL: ')).trim())
   const username = (await promptLine('Login: ')).trim()
-  // The password is intentionally NOT trimmed — surrounding spaces may be part
-  // of it — but a stray space from a paste is a likely mistake, so flag it.
-  const password = await promptHidden('Password: ')
-  if (password !== password.trim()) {
-    process.stderr.write(
-      'Note: the password has leading/trailing whitespace — kept as-is. If that came from a paste, re-run and re-enter it.\n',
-    )
-  }
+  // Trim the password too: 1С passwords never carry surrounding whitespace, so a
+  // leading/trailing space is always a paste artifact.
+  const password = (await promptHidden('Password: ')).trim()
   const serverTimezone = await promptLine('Server timezone [Europe/Moscow]: ', { default: 'Europe/Moscow' })
 
   const connection: Connection = { baseUrl, auth: { username, password }, serverTimezone }
