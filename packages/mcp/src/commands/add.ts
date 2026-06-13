@@ -55,11 +55,21 @@ async function resolveNonInteractivePassword(
   opts: AddOptions,
   name: string,
 ): Promise<{ value: string; persist: boolean } | undefined> {
-  if (opts.passwordStdin === true) return { value: (await readStdin()).trim(), persist: true }
-  if (opts.password !== undefined) return { value: opts.password.trim(), persist: true }
+  if (opts.passwordStdin === true) {
+    const value = (await readStdin()).trim()
+    if (value === '') {
+      throw new InvalidArgumentError('--password-stdin received an empty password', { argument: 'password' })
+    }
+    return { value, persist: true }
+  }
+  if (opts.password !== undefined) {
+    const value = opts.password.trim()
+    if (value === '') throw new InvalidArgumentError('--password must not be empty', { argument: 'password' })
+    return { value, persist: true }
+  }
+  // No explicit password — fall back to the env var if present. Env passwords
+  // already resolve at runtime, so verify with them but don't copy to storage.
   const fromEnv = process.env[passwordEnvVar(name)]
-  // Env passwords already resolve at runtime — verify with them, but don't copy
-  // them into the keychain/file.
   if (fromEnv !== undefined && fromEnv !== '') return { value: fromEnv.trim(), persist: false }
   return undefined
 }
@@ -134,7 +144,7 @@ function reportSaved(
   if (result.passwordBackend !== undefined) {
     const where = result.passwordBackend === 'keychain' ? 'OS keychain' : `${opts.dataDir}/credentials.json (0600)`
     process.stdout.write(`  password: ${where}\n`)
-  } else if (fields.password !== undefined) {
+  } else if (fields.password !== undefined && !fields.persistPassword) {
     process.stdout.write(`  password: ${passwordEnvVar(fields.name)} env var (not copied to storage)\n`)
   } else {
     process.stdout.write(`  password: not set — provide ${passwordEnvVar(fields.name)} or re-run with a password\n`)

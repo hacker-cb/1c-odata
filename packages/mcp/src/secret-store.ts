@@ -114,6 +114,7 @@ export class SecretStore {
       if (mod !== null) {
         try {
           new mod.Entry(KEYCHAIN_SERVICE, name).setPassword(password)
+          this.fileDelete(name) // drop any stale plaintext copy from a prior fallback
           return { backend: 'keychain' }
         } catch (err) {
           this.warn(
@@ -128,22 +129,17 @@ export class SecretStore {
         )
       }
     }
+    // File backend — also drop any stale keychain copy so a later read can't pick it up.
+    await this.keychainDelete(name)
     this.fileWrite(name, password)
     return { backend: 'file' }
   }
 
-  /** Remove a password from every backend (file + keychain). */
+  /** Remove a password from every backend (file + keychain), regardless of preference. */
   async remove(name: string): Promise<void> {
-    if (!this.insecure) {
-      const mod = await this.keyringModule()
-      if (mod !== null) {
-        try {
-          new mod.Entry(KEYCHAIN_SERVICE, name).deletePassword()
-        } catch {
-          // no entry / keychain unreachable — nothing to delete
-        }
-      }
-    }
+    // Best-effort delete from BOTH backends — a secret may have been written to
+    // either on an earlier run (e.g. keychain then later `--insecure-storage`).
+    await this.keychainDelete(name)
     this.fileDelete(name)
   }
 
@@ -156,6 +152,16 @@ export class SecretStore {
     } catch {
       // NoEntry or keychain unreachable — treat as "not found"
       return null
+    }
+  }
+
+  private async keychainDelete(name: string): Promise<void> {
+    const mod = await this.keyringModule()
+    if (mod === null) return
+    try {
+      new mod.Entry(KEYCHAIN_SERVICE, name).deletePassword()
+    } catch {
+      // no entry / keychain unreachable — nothing to delete
     }
   }
 

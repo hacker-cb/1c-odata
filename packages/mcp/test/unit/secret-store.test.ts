@@ -1,8 +1,22 @@
 import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { passwordEnvVar, SecretStore } from '../../src/secret-store.js'
+
+// Isolate from the real OS keychain: best-effort keychain deletes (write/remove)
+// must not touch the developer's actual keychain during unit tests.
+vi.mock('@napi-rs/keyring', () => ({
+  Entry: class {
+    getPassword(): string | null {
+      return null
+    }
+    setPassword(): void {}
+    deletePassword(): boolean {
+      return false
+    }
+  },
+}))
 
 let dir: string
 beforeEach(() => {
