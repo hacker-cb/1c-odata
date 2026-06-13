@@ -2,21 +2,19 @@ name: CI
 
 on:
   pull_request:
-    branches: [dev, master]
-  push:
-    branches: [dev, master]
+    branches: [master]
 
-# Per-ref concurrency: at most one run per branch ref at a time.
-#   - PR updates (new commits pushed to a PR's head branch, arriving as
-#     `pull_request: synchronize`) CANCEL the in-flight run for that PR.
-#   - Pushes to `dev`/`master` instead QUEUE (do not cancel) — those runs
-#     produce artifacts and trigger publish workflows and must run to
-#     completion.
-# Different refs (e.g. dev vs master, or different PR branches) are always
-# independent because `github.ref` is part of the group.
+# CI validates pull requests only. Pushes to master are handled by release.yml,
+# which re-runs the same gates before any publish — running this workflow on the
+# master push too would just duplicate that work. The changesets release PR is a
+# normal PR, so it is covered here like any other.
+
+# One in-flight run per PR ref: a new push to a PR branch (arriving as
+# `pull_request: synchronize`) cancels the previous run for that PR. Different
+# PRs stay independent because `github.ref` is part of the group.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/dev' && github.ref != 'refs/heads/master' }}
+  cancel-in-progress: true
 
 # Workflow-default permissions — read-only. No job here writes via the
 # GITHUB_TOKEN (no PR comments, no releases, no push). Tighten the default
@@ -50,14 +48,12 @@ jobs:
     #      repo (hacker-cb), not the fork — so part 1 alone would still
     #      run on fork PRs. Comparing `head.repo.full_name` to
     #      `github.repository` is the canonical pattern for skipping
-    #      fork PRs while keeping owner-internal PRs covered.
-    #   The third predicate short-circuits to TRUE on non-PR triggers
-    #   (push to dev/master), which have no `head.repo` to compare.
+    #      fork PRs while keeping owner-internal PRs covered. This workflow
+    #      only runs on `pull_request`, so the comparison is always defined.
     if: |
       github.repository_owner == 'hacker-cb' &&
       github.actor != 'dependabot[bot]' &&
-      (github.event_name != 'pull_request' ||
-       github.event.pull_request.head.repo.full_name == github.repository)
+      github.event.pull_request.head.repo.full_name == github.repository
     outputs:
       allow-writes: ${{ steps.check.outputs.allow-writes }}
     steps:

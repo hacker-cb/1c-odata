@@ -70,6 +70,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Publish unpublished packages to npm (OIDC Trusted Publishing)
+        # hasChangesets=='false' covers BOTH "the release PR was just merged"
+        # (versions bumped → publish) and "this master push had no pending
+        # changesets at all" (e.g. a docs/chore merge). The per-package `npm view`
+        # check below keeps the step idempotent: only versions not already on npm
+        # are published, so the no-release case is a safe no-op.
         if: steps.changesets.outputs.hasChangesets == 'false'
         env:
           NPM_CONFIG_PROVENANCE: 'true'
