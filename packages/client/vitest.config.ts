@@ -16,9 +16,9 @@ export default defineConfig(({ mode }) => {
       // Self-imports → src (see vitest.shared.ts). Subpath entries MUST precede
       // the bare name: a bare alias prefix-matches '@1c-odata/client/<subpath>'.
       alias: {
-        '@1c-odata/client/filter': new URL('./src/filter.ts', import.meta.url).pathname,
-        '@1c-odata/client/internal': new URL('./src/internal.ts', import.meta.url).pathname,
-        '@1c-odata/client': new URL('./src/index.ts', import.meta.url).pathname,
+        '@1c-odata/client/filter': fileURLToPath(new URL('./src/filter.ts', import.meta.url)),
+        '@1c-odata/client/internal': fileURLToPath(new URL('./src/internal.ts', import.meta.url)),
+        '@1c-odata/client': fileURLToPath(new URL('./src/index.ts', import.meta.url)),
       },
     },
     test: {
