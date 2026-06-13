@@ -23,20 +23,23 @@ pnpm add @1c-odata/client
 pnpm add -D @1c-odata/cli
 ```
 
-`1c-odata.config.ts`:
+`1c-odata.config.ts` — build-time config, read only by the `1c-odata` CLI:
 
 ```ts
-import { defineConfig, parseConnectionUrl } from '@1c-odata/client'
+import { parseConnectionUrl } from '@1c-odata/client'
+import { defineCodegenConfig } from '@1c-odata/cli'
 
 const url = process.env.ONEC_URL
 if (!url) throw new Error('Set ONEC_URL (format: http://user:pwd@host/path)')
 
-export default defineConfig({
-  connections: {
+export default defineCodegenConfig({
+  targets: {
     trade: {
-      ...parseConnectionUrl(url),
-      serverTimezone: 'Europe/Moscow', // REQUIRED IANA timezone; no default
-      codegen: { include: ['Catalog_*', 'Document_*'] },
+      connection: {
+        ...parseConnectionUrl(url),
+        serverTimezone: 'Europe/Moscow', // REQUIRED IANA timezone; no default
+      },
+      include: ['Catalog_*', 'Document_*'],
     },
   },
 })
@@ -53,12 +56,18 @@ pnpm 1c-odata generate
 Use the typed client:
 
 ```ts
-import { clientOptionsFromConnection, ODataV3Client } from '@1c-odata/client'
+import { clientOptionsFromConnection, defineConnection, ODataV3Client, parseConnectionUrl } from '@1c-odata/client'
 import { and, any } from '@1c-odata/client/filter'
 import type { Document_РТУ } from '../generated/trade/index.js'
-import config from '../1c-odata.config.js'
 
-const trade = new ODataV3Client(clientOptionsFromConnection(config.connections.trade!))
+// The runtime builds its own Connection (from env, DB, vault, …) — it does NOT
+// import 1c-odata.config.ts, which exists only for the CLI. `shape` is baked
+// into the generated __metadata.json, so it isn't repeated here.
+const trade = new ODataV3Client(
+  clientOptionsFromConnection(
+    defineConnection({ ...parseConnectionUrl(process.env.ONEC_URL!), serverTimezone: 'Europe/Moscow' }),
+  ),
+)
 
 const { value: docs } = await trade
   .query<Document_РТУ>('Document_РТУ')

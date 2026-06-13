@@ -27,8 +27,9 @@ pnpm --filter basic-example demo
 
 ## Files
 
-- `1c-odata.config.ts` — connection config consumed by `@1c-odata/cli` and the demo runtime
-- `src/client.ts` — `createClient()` builds an `ODataV3Client` from the config
+- `1c-odata.config.ts` — build-time codegen config, read only by `@1c-odata/cli` (`fetch`/`generate`)
+- `src/connections.ts` — runtime `Connection` (built from `ONEC_EXAMPLE_BASIC_URL`); the app uses this, not the config file
+- `src/client.ts` — `createClient()` builds an `ODataV3Client` from `src/connections.ts`
 - `src/main.ts` — entrypoint: builds client, runs each demo, handles errors
 - `src/demos/currencies.ts` — top 5 currencies by Code (`.get()`)
 - `src/demos/items.ts` — top 10 items, `.filter() + .select() + .orderBy()`
@@ -38,8 +39,8 @@ pnpm --filter basic-example demo
 
 ## Filtering
 
-The config restricts codegen to `Catalog_*` and `Document_*` via
-`connection.codegen.include`. The `include` filter does dependency-closure
+The config restricts codegen to `Catalog_*` and `Document_*` via the target's
+`include`. The `include` filter does dependency-closure
 expansion — referenced ComplexTypes / Registers / FunctionImports are pulled
 in automatically so the emitted TypeScript compiles.
 

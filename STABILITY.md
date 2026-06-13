@@ -10,10 +10,10 @@ Semver-applicable:
 
 - Exports from each `package.json#exports` entrypoint and their exact signatures
 - Public fields and methods on exported classes
-- Option shapes: `ClientOptions`, `Connection`, `DataShape`, `RequestOptions`, `MutationOptions`, `RetryPolicy`, `RequestHooks`, `CliConfig`
-- Top-level helpers: `parseConnectionUrl`, `validateConnection`, `clientOptionsFromConnection`, `defineConfig`
+- Option shapes: `ClientOptions`, `Connection`, `DataShape`, `RequestOptions`, `MutationOptions`, `RetryPolicy`, `RequestHooks`, `CodegenConfig`, `CodegenTarget`
+- Top-level helpers: `parseConnectionUrl`, `validateConnection`, `clientOptionsFromConnection`, `defineConnection` (`@1c-odata/client`), `defineCodegenConfig` (`@1c-odata/cli`)
 - Runtime metadata API of `@1c-odata/metadata`: `parseEdmx`, `buildMetadataIndex`, `fetchMetadataXml`, `fetchMetadataIndex`, `createDynamicClient` and their option shapes
-- Layout and identifier names in `generated/<connection>/<kind>/` produced by `@1c-odata/cli/codegen`
+- Layout and identifier names in `generated/<target>/<kind>/` produced by `@1c-odata/cli/codegen`
 
 NOT covered:
 
@@ -69,9 +69,9 @@ Guaranteed:
 
 `generated/` is a derived artifact in the consumer's repo. We promise:
 
-- Stable layout: `generated/<connection>/<kind>/<Name>.ts`
+- Stable layout: `generated/<target>/<kind>/<Name>.ts`
 - Stable exported type names (1:1 with 1С metadata identifiers)
-- Per-connection root files: `index.ts` (master reexport), `__metadata.json`, `client.ts`, and `enums.ts` (when EDMX declares any `EnumType`). Optional: `complex-types.ts`, `function-imports.ts`.
+- Per-target root files: `index.ts` (master reexport), `__metadata.json`, `client.ts`, and `enums.ts` (when EDMX declares any `EnumType`). Optional: `complex-types.ts`, `function-imports.ts`.
 - `enums.ts`: one `as const` object + literal-union type alias per `EnumType`. Names and member sets track the EDMX verbatim. Consumers cast property values explicitly because 1С V3 EDMX does not link `Edm.String` fields to their `EnumType`.
 
 Layout / naming changes in `@1c-odata/cli/codegen` bump major. Consumer re-runs `1c-odata generate` and gets a diff in their repo.

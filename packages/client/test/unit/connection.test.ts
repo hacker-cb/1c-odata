@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  type CliConfig,
-  type Connection,
-  type DataShape,
-  defineConfig,
-  parseConnectionUrl,
-} from '../../src/connection.js'
+import { type Connection, type DataShape, parseConnectionUrl } from '../../src/connection.js'
 
 describe('DataShape', () => {
   it('allows all shape options as optional', () => {
@@ -19,34 +13,20 @@ describe('DataShape', () => {
   })
 })
 
-describe('Connection + defineConfig', () => {
-  it('defineConfig is identity', () => {
-    const c: CliConfig = {
-      connections: {
-        x: {
-          baseUrl: 'http://x.test/odata',
-          auth: { username: 'u', password: 'p' },
-          serverTimezone: 'Europe/Moscow',
-        },
-      },
-    }
-    expect(defineConfig(c)).toBe(c)
-  })
-
-  it('Connection allows codegen sub-object with include', () => {
+describe('Connection', () => {
+  it('allows an optional shape', () => {
     const conn: Connection = {
       baseUrl: 'http://x.test/odata',
       auth: { username: 'u', password: 'p' },
       serverTimezone: 'Europe/Moscow',
       shape: { int64Mode: 'bigint' },
-      codegen: { include: ['Catalog_*'] },
     }
-    expect(conn.codegen?.include).toEqual(['Catalog_*'])
+    expect(conn.shape?.int64Mode).toBe('bigint')
   })
 
   it('Connection.auth is required (compile-time check)', () => {
     // @ts-expect-error — auth is required
-    const _conn: Connection = { baseUrl: 'http://x' }
+    const _conn: Connection = { baseUrl: 'http://x', serverTimezone: 'Europe/Moscow' }
     expect(_conn).toBeDefined()
   })
 

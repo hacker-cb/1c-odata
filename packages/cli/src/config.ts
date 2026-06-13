@@ -1,8 +1,77 @@
-import { type CliConfig, InvalidArgumentError, validateConnection } from '@1c-odata/client'
+import { type Connection, InvalidArgumentError, validateConnection } from '@1c-odata/client'
 import { loadConfig as c12Load } from 'c12'
 
+/**
+ * A single codegen target — a {@link Connection} plus build-only options. The
+ * connection is the same runtime descriptor the application uses; the target
+ * *wraps* it with codegen settings rather than dissolving its fields, so
+ * runtime/secret config and build config stay separable.
+ *
+ * @public
+ */
+export interface CodegenTarget {
+  /**
+   * Runtime connection descriptor for this base. Used by `1c-odata fetch` to
+   * download `$metadata`; its `shape` is baked into the emitted
+   * `__metadata.json` by `1c-odata generate`.
+   */
+  connection: Connection
+  /** Whitelist of entity-type names. Globs supported (`Catalog_*`). Closure auto-expands. */
+  include?: string[]
+  /** Per-target override of `fetchTimeout` (ms) for `1c-odata fetch`. */
+  fetchTimeout?: number
+}
+
+/**
+ * Top-level codegen config — what `1c-odata.config.ts` exports. Consumed only
+ * by the `1c-odata` CLI (`fetch` + `generate`). The application runtime builds
+ * its {@link Connection}s directly (e.g. via `defineConnection`) and never
+ * imports this file, so build-time settings and secrets stay out of the
+ * runtime graph.
+ *
+ * @public
+ */
+export interface CodegenConfig {
+  /** Directory for `<target>.xml` snapshots. Default: `./metadata`. */
+  metadataDir?: string
+  /** Directory for generated TS files. Default: `./generated`. */
+  generatedDir?: string
+  /** Default timeout for `1c-odata fetch` (ms). Default: `120_000`. */
+  fetchTimeout?: number
+  /** Map of target name → codegen target. */
+  targets: Record<string, CodegenTarget>
+}
+
+/**
+ * Identity helper for a type-safe `1c-odata.config.ts`. Preserves literal
+ * types via `const` inference, so `targets` keeps its keys narrow.
+ *
+ * @example
+ * ```ts
+ * import { defineCodegenConfig } from '@1c-odata/cli'
+ * import { parseConnectionUrl } from '@1c-odata/client'
+ *
+ * const url = process.env.ONEC_URL
+ * if (!url) throw new Error('Set ONEC_URL env var')
+ *
+ * export default defineCodegenConfig({
+ *   targets: {
+ *     trade: {
+ *       connection: { ...parseConnectionUrl(url), serverTimezone: 'Europe/Moscow' },
+ *       include: ['Catalog_*', 'Document_*'],
+ *     },
+ *   },
+ * })
+ * ```
+ *
+ * @public
+ */
+export function defineCodegenConfig<const C extends CodegenConfig>(c: C): C {
+  return c
+}
+
 export interface LoadResult {
-  config: CliConfig
+  config: CodegenConfig
   configFile: string
   cwd: string
 }
@@ -16,9 +85,9 @@ export interface LoadResult {
  *
  * Validates that:
  *   - a config file is present
- *   - `connections` is a non-empty object
- *   - each connection passes `validateConnection` (baseUrl without userinfo,
- *     non-empty auth, valid IANA serverTimezone)
+ *   - `targets` is a non-empty object
+ *   - each `target.connection` passes `validateConnection` (baseUrl without
+ *     userinfo, non-empty auth, valid IANA serverTimezone)
  *
  * Connection.serverTimezone is required (no default applied). Wrong timezone
  * produces silent DateTime parse drift, so the library forces an explicit
@@ -30,7 +99,7 @@ export async function loadConfig(opts: { cwd: string; configFile?: string }): Pr
   // Drizzle Kit, Prisma, etc. Vars become available via `process.env` for
   // the `1c-odata.config.ts` evaluation step. CLI code itself does not read
   // any auth env var — this only sets up the user-config edge.
-  const result = await c12Load<CliConfig>({
+  const result = await c12Load<CodegenConfig>({
     cwd: opts.cwd,
     name: '1c-odata',
     dotenv: { fileName: ['.env', '.env.local'] },
@@ -40,23 +109,23 @@ export async function loadConfig(opts: { cwd: string; configFile?: string }): Pr
     throw new Error(`No 1c-odata.config.{ts,js,mjs} found in ${opts.cwd}`)
   }
   const config = result.config
-  if (!config || !config.connections || Object.keys(config.connections).length === 0) {
-    throw new Error(`Config at ${result.configFile} must declare at least one connection`)
+  if (!config || !config.targets || Object.keys(config.targets).length === 0) {
+    throw new Error(`Config at ${result.configFile} must declare at least one target`)
   }
-  // Delegate per-connection validation to validateConnection. On failure,
+  // Delegate per-target validation to validateConnection. On failure,
   // re-throw as InvalidArgumentError so callers can catch via the typed
-  // class identity (C-4 contract). The connection name gets prefixed into
-  // the message so the CLI output names the bad record; structured
+  // class identity (C-4 contract). The target name gets prefixed into the
+  // message so the CLI output names the bad record; structured
   // argument/received fields propagate from the inner failure.
-  for (const [name, conn] of Object.entries(config.connections)) {
+  for (const [name, target] of Object.entries(config.targets)) {
     try {
-      validateConnection(conn)
+      validateConnection(target?.connection)
     } catch (e) {
       if (e instanceof InvalidArgumentError) {
         const opts: ConstructorParameters<typeof InvalidArgumentError>[1] = { cause: e }
         if (e.argument !== undefined) opts.argument = e.argument
         if (e.received !== undefined) opts.received = e.received
-        throw new InvalidArgumentError(`Connection "${name}": ${e.message}`, opts)
+        throw new InvalidArgumentError(`Target "${name}": ${e.message}`, opts)
       }
       throw e
     }

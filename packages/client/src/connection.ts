@@ -35,9 +35,11 @@ export interface DataShape {
 }
 
 /**
- * Project-level connection config — what `1c-odata.config.ts` exports per
- * connection. `baseUrl` MUST NOT contain userinfo — use `parseConnectionUrl`
- * to split a URL with credentials into `baseUrl` + `auth`.
+ * Runtime connection descriptor — the clean value-object passed to
+ * `ODataV3Client` (via `clientOptionsFromConnection`), `createDynamicClient`,
+ * and `fetchMetadataIndex`. Built from any source (env, DB, vault); a codegen
+ * target references one of these. `baseUrl` MUST NOT contain userinfo — use
+ * `parseConnectionUrl` to split a URL with credentials into `baseUrl` + `auth`.
  *
  * @public
  */
@@ -59,56 +61,37 @@ export interface Connection {
    * choice rather than guessing.
    */
   serverTimezone: string
-  /** Data-shape decisions (must match codegen output for the same connection). */
+  /**
+   * Data-mapping contract for this base — how `Edm.*` types and 1С composites
+   * map onto JS values. The single home for `shape` across all paths: codegen
+   * bakes it into `__metadata.json`, `fetchMetadataIndex` bakes it into the
+   * runtime index, and `clientOptionsFromConnection` forwards it as the
+   * client-level (schema-less) override.
+   */
   shape?: DataShape
-  /** Per-connection override of `fetchTimeout` (ms) for `1c-odata fetch`. */
-  fetchTimeout?: number
-  /** Codegen-only options. */
-  codegen?: {
-    /** Whitelist of entity-type names. Globs supported (`Catalog_*`). Closure auto-expands. */
-    include?: string[]
-  }
 }
 
 /**
- * Top-level project config — what `1c-odata.config.ts` exports.
- *
- * @public
- */
-export interface CliConfig {
-  /** Directory for `<connection>.xml` snapshots. Default: `./metadata`. */
-  metadataDir?: string
-  /** Directory for generated TS files. Default: `./generated`. */
-  generatedDir?: string
-  /** Default timeout for `1c-odata fetch` (ms). Default: `120_000`. */
-  fetchTimeout?: number
-  /** Map of connection name → connection config. */
-  connections: Record<string, Connection>
-}
-
-/**
- * Identity helper for type-safe config files.
+ * Identity helper for type-safe runtime connection descriptors. Preserves
+ * literal types via `const` inference, so a `Record` of connections keeps its
+ * keys narrow.
  *
  * @example
  * ```ts
- * import { defineConfig, parseConnectionUrl } from '@1c-odata/client'
+ * import { defineConnection, parseConnectionUrl } from '@1c-odata/client'
  *
  * const url = process.env.ONEC_URL
  * if (!url) throw new Error('Set ONEC_URL env var')
  *
- * export default defineConfig({
- *   connections: {
- *     trade: {
- *       ...parseConnectionUrl(url),
- *       serverTimezone: 'Europe/Moscow',
- *     },
- *   },
+ * export const trade = defineConnection({
+ *   ...parseConnectionUrl(url),
+ *   serverTimezone: 'Europe/Moscow',
  * })
  * ```
  *
  * @public
  */
-export function defineConfig<const C extends CliConfig>(c: C): C {
+export function defineConnection<const C extends Connection>(c: C): C {
   return c
 }
 

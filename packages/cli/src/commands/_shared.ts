@@ -1,18 +1,18 @@
-import type { Connection } from '@1c-odata/client'
+import type { CodegenTarget } from '../config.js'
 
 /**
- * Filter the connections map to a single connection (when `filter` is set)
- * or return all entries. Throws when `filter` targets an unknown connection.
+ * Filter the targets map to a single target (when `filter` is set) or return
+ * all entries. Throws when `filter` names an unknown target.
  */
-export function pickConnections(
-  connections: Record<string, Connection>,
+export function pickTargets(
+  targets: Record<string, CodegenTarget>,
   filter: string | undefined,
-): [string, Connection][] {
-  const all = Object.entries(connections)
+): [string, CodegenTarget][] {
+  const all = Object.entries(targets)
   if (filter === undefined) return all
   const found = all.find(([name]) => name === filter)
   if (!found) {
-    throw new Error(`connection "${filter}" not found in config`)
+    throw new Error(`target "${filter}" not found in config`)
   }
   return [found]
 }

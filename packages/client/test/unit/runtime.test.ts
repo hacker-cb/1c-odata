@@ -9,7 +9,6 @@ describe('clientOptionsFromConnection', () => {
       auth: { username: 'u', password: 'p' },
       serverTimezone: 'Europe/Moscow',
       shape: { int64Mode: 'bigint' },
-      codegen: { include: ['Catalog_*'] },
     }
     const opts = clientOptionsFromConnection(conn)
     expect(opts.baseUrl).toBe('http://x.test/odata')
@@ -19,7 +18,6 @@ describe('clientOptionsFromConnection', () => {
     expect((opts as unknown as Record<string, unknown>).shape).toEqual({ int64Mode: 'bigint' })
     expect(opts.auth.scheme).toBe('basic')
     expect(opts.auth.header).toBe(`Basic ${Buffer.from('u:p').toString('base64')}`)
-    expect((opts as unknown as Record<string, unknown>).codegen).toBeUndefined()
   })
 
   it('does NOT read process.env (pure)', () => {

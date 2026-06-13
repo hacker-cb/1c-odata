@@ -24,7 +24,7 @@ afterEach(() => {
 })
 
 describe('runFetch', () => {
-  it('writes <metadataDir>/<connection>.xml for each connection', async () => {
+  it('writes <metadataDir>/<target>.xml for each target', async () => {
     server.use(
       http.get('http://example.test/odata/$metadata', () =>
         HttpResponse.text('<edmx:Edmx>X</edmx:Edmx>', { status: 200 }),
@@ -38,16 +38,20 @@ describe('runFetch', () => {
       config: {
         metadataDir: './metadata',
         fetchTimeout: 30_000,
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
           y: {
-            baseUrl: 'http://other.test/odata',
-            auth: { username: 'u2', password: 'p2' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://other.test/odata',
+              auth: { username: 'u2', password: 'p2' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -56,7 +60,7 @@ describe('runFetch', () => {
     expect(readFileSync(join(tmp, 'metadata/y.xml'), 'utf8')).toBe('<edmx:Edmx>Y</edmx:Edmx>')
   })
 
-  it('filters to a single connection when "connection" option is set', async () => {
+  it('filters to a single target when "target" option is set', async () => {
     let xCalled = 0
     let yCalled = 0
     server.use(
@@ -71,18 +75,22 @@ describe('runFetch', () => {
     )
     await runFetch({
       cwd: tmp,
-      connection: 'x',
+      target: 'x',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
           y: {
-            baseUrl: 'http://other.test/odata',
-            auth: { username: 'u2', password: 'p2' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://other.test/odata',
+              auth: { username: 'u2', password: 'p2' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -91,25 +99,27 @@ describe('runFetch', () => {
     expect(yCalled).toBe(0)
   })
 
-  it('throws when filter targets an unknown connection', async () => {
+  it('throws when filter names an unknown target', async () => {
     await expect(
       runFetch({
         cwd: tmp,
-        connection: 'nope',
+        target: 'nope',
         config: {
-          connections: {
+          targets: {
             x: {
-              baseUrl: 'http://example.test/odata',
-              auth: { username: 'u', password: 'p' },
-              serverTimezone: 'Europe/Moscow',
+              connection: {
+                baseUrl: 'http://example.test/odata',
+                auth: { username: 'u', password: 'p' },
+                serverTimezone: 'Europe/Moscow',
+              },
             },
           },
         },
       }),
-    ).rejects.toThrow(/connection "nope" not found/i)
+    ).rejects.toThrow(/target "nope" not found/i)
   })
 
-  it('wraps HTTP errors with the connection name', async () => {
+  it('wraps HTTP errors with the target name', async () => {
     server.use(
       http.get('http://example.test/odata/$metadata', () => HttpResponse.text('Server Error', { status: 500 })),
     )
@@ -117,19 +127,21 @@ describe('runFetch', () => {
       runFetch({
         cwd: tmp,
         config: {
-          connections: {
+          targets: {
             x: {
-              baseUrl: 'http://example.test/odata',
-              auth: { username: 'u', password: 'p' },
-              serverTimezone: 'Europe/Moscow',
+              connection: {
+                baseUrl: 'http://example.test/odata',
+                auth: { username: 'u', password: 'p' },
+                serverTimezone: 'Europe/Moscow',
+              },
             },
           },
         },
       }),
-    ).rejects.toThrow(/connection "x".*500/i)
+    ).rejects.toThrow(/target "x".*500/i)
   })
 
-  it('preserves typed-error identity when prepending the connection name (STABILITY.md contract)', async () => {
+  it('preserves typed-error identity when prepending the target name (STABILITY.md contract)', async () => {
     // Real 1С error shape: status 4xx/5xx + JSON `odata.error` body — that's
     // what triggers `mapResponseToError` to produce a typed `HTTPError` rather
     // than a `ParseError` fallback. Use 400 here so the `code: '0'` doesn't
@@ -146,11 +158,13 @@ describe('runFetch', () => {
       runFetch({
         cwd: tmp,
         config: {
-          connections: {
+          targets: {
             x: {
-              baseUrl: 'http://example.test/odata',
-              auth: { username: 'u', password: 'p' },
-              serverTimezone: 'Europe/Moscow',
+              connection: {
+                baseUrl: 'http://example.test/odata',
+                auth: { username: 'u', password: 'p' },
+                serverTimezone: 'Europe/Moscow',
+              },
             },
           },
         },
@@ -158,21 +172,23 @@ describe('runFetch', () => {
     )
     expect(err).toBeInstanceOf(HTTPError)
     expect(err).toBeInstanceOf(ODataError)
-    expect(err.message).toMatch(/connection "x"/)
+    expect(err.message).toMatch(/target "x"/)
     expect((err as HTTPError).status).toBe(400)
   })
 
-  it('passes per-connection fetchTimeout to fetchMetadataXml (override beats config default)', async () => {
+  it('passes per-target fetchTimeout to fetchMetadataXml (override beats config default)', async () => {
     const spy = vi.spyOn(metadata, 'fetchMetadataXml').mockResolvedValueOnce('<edmx:Edmx/>')
     await runFetch({
       cwd: tmp,
       config: {
         fetchTimeout: 10_000,
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
             fetchTimeout: 60_000,
           },
         },
@@ -183,17 +199,19 @@ describe('runFetch', () => {
     spy.mockRestore()
   })
 
-  it('falls back to config-level fetchTimeout when no per-connection override is set', async () => {
+  it('falls back to config-level fetchTimeout when no per-target override is set', async () => {
     const spy = vi.spyOn(metadata, 'fetchMetadataXml').mockResolvedValueOnce('<edmx:Edmx/>')
     await runFetch({
       cwd: tmp,
       config: {
         fetchTimeout: 10_000,
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },

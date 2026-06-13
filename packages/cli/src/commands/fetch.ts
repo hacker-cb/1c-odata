@@ -1,33 +1,33 @@
 import { join, resolve } from 'node:path'
-import type { CliConfig } from '@1c-odata/client'
 import { connectionAuth } from '@1c-odata/client'
 import { fetchMetadataXml } from '@1c-odata/metadata'
+import type { CodegenConfig } from '../config.js'
 import { writeOneFile } from '../writer.js'
-import { pickConnections } from './_shared.js'
+import { pickTargets } from './_shared.js'
 
 export interface RunFetchOptions {
   cwd: string
-  config: CliConfig
-  connection?: string
+  config: CodegenConfig
+  target?: string
 }
 
-/** Run `1c-odata fetch` — download `$metadata` for one or all connections, writing each to `<metadataDir>/<connection>.xml`. */
+/** Run `1c-odata fetch` — download `$metadata` for one or all targets, writing each to `<metadataDir>/<target>.xml`. */
 export async function runFetch(opts: RunFetchOptions): Promise<void> {
   const metadataDir = resolve(opts.cwd, opts.config.metadataDir ?? './metadata')
   const defaultTimeout = opts.config.fetchTimeout ?? 120_000
-  const connections = pickConnections(opts.config.connections, opts.connection)
+  const targets = pickTargets(opts.config.targets, opts.target)
 
-  for (const [name, conn] of connections) {
+  for (const [name, target] of targets) {
     try {
-      const timeout = conn.fetchTimeout ?? defaultTimeout
+      const timeout = target.fetchTimeout ?? defaultTimeout
       const xml = await fetchMetadataXml({
-        baseUrl: conn.baseUrl,
-        auth: connectionAuth(conn),
+        baseUrl: target.connection.baseUrl,
+        auth: connectionAuth(target.connection),
         timeout,
       })
       await writeOneFile(join(metadataDir, `${name}.xml`), xml)
     } catch (e) {
-      // Prepend the connection name in-place rather than wrapping in a new
+      // Prepend the target name in-place rather than wrapping in a new
       // Error — wrapping would lose `instanceof HTTPError`/`PermissionError`/
       // etc., breaking the STABILITY.md guarantee that library-originated
       // errors stay typed up the stack. `Error.prototype.message` is writable,
@@ -35,13 +35,13 @@ export async function runFetch(opts: RunFetchOptions): Promise<void> {
       // plain Error since there's no class to preserve.
       if (e instanceof Error) {
         if (!e.message.includes(`"${name}"`)) {
-          e.message = `fetch failed for connection "${name}": ${e.message}`
+          e.message = `fetch failed for target "${name}": ${e.message}`
         }
         throw e
       }
       // Non-Error throw — no class identity to preserve, but keep the original
       // value as `cause` so debuggers / stack-trace tooling can still reach it.
-      throw new Error(`fetch failed for connection "${name}": ${String(e)}`, { cause: e })
+      throw new Error(`fetch failed for target "${name}": ${String(e)}`, { cause: e })
     }
   }
 }

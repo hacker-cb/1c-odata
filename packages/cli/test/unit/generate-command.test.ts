@@ -28,7 +28,7 @@ afterEach(() => {
 })
 
 describe('runGenerate', () => {
-  it('reads <metadataDir>/<conn>.xml and writes generated/<conn>/<files>', async () => {
+  it('reads <metadataDir>/<target>.xml and writes generated/<target>/<files>', async () => {
     await writeOneFile(join(tmp, 'metadata/x.xml'), MIN_EDMX)
     await runGenerate({
       cwd: tmp,
@@ -36,11 +36,13 @@ describe('runGenerate', () => {
       config: {
         metadataDir: './metadata',
         generatedDir: './generated',
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -52,18 +54,20 @@ describe('runGenerate', () => {
     expect(file).toContain('export interface Catalog_Валюты extends Entity {')
   })
 
-  it('passes per-connection codegen options through (shape.int64Mode)', async () => {
+  it('passes per-target codegen options through (shape.int64Mode)', async () => {
     await writeOneFile(join(tmp, 'metadata/x.xml'), MIN_EDMX)
     await runGenerate({
       cwd: tmp,
       cliVersion: '0.0.0-test',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
-            shape: { int64Mode: 'bigint' },
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+              shape: { int64Mode: 'bigint' },
+            },
           },
         },
       },
@@ -77,11 +81,13 @@ describe('runGenerate', () => {
         cwd: tmp,
         cliVersion: '0.0.0-test',
         config: {
-          connections: {
+          targets: {
             x: {
-              baseUrl: 'http://example.test/odata',
-              auth: { username: 'u', password: 'p' },
-              serverTimezone: 'Europe/Moscow',
+              connection: {
+                baseUrl: 'http://example.test/odata',
+                auth: { username: 'u', password: 'p' },
+                serverTimezone: 'Europe/Moscow',
+              },
             },
           },
         },
@@ -89,43 +95,49 @@ describe('runGenerate', () => {
     ).rejects.toThrow(/metadata[/\\]x\.xml/)
   })
 
-  it('wraps codegen errors with the connection name (when XML is malformed)', async () => {
+  it('wraps codegen errors with the target name (when XML is malformed)', async () => {
     await writeOneFile(join(tmp, 'metadata/x.xml'), '<not valid edmx>')
     await expect(
       runGenerate({
         cwd: tmp,
         cliVersion: '0.0.0-test',
         config: {
-          connections: {
+          targets: {
             x: {
-              baseUrl: 'http://example.test/odata',
-              auth: { username: 'u', password: 'p' },
-              serverTimezone: 'Europe/Moscow',
+              connection: {
+                baseUrl: 'http://example.test/odata',
+                auth: { username: 'u', password: 'p' },
+                serverTimezone: 'Europe/Moscow',
+              },
             },
           },
         },
       }),
-    ).rejects.toThrow(/connection "x"/i)
+    ).rejects.toThrow(/target "x"/i)
   })
 
-  it('filters to a single connection when "connection" is set', async () => {
+  it('filters to a single target when "target" is set', async () => {
     await writeOneFile(join(tmp, 'metadata/x.xml'), MIN_EDMX)
     await writeOneFile(join(tmp, 'metadata/y.xml'), MIN_EDMX)
     await runGenerate({
       cwd: tmp,
       cliVersion: '0.0.0-test',
-      connection: 'x',
+      target: 'x',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
           y: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -140,11 +152,13 @@ describe('runGenerate', () => {
       cwd: tmp,
       cliVersion: '9.9.9-test',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -164,11 +178,13 @@ describe('runGenerate', () => {
       cwd: tmp,
       cliVersion: '0.0.0-test',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -188,11 +204,13 @@ describe('runGenerate', () => {
       cwd: tmp,
       cliVersion: '0.0.0-test',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -215,11 +233,13 @@ describe('runGenerate', () => {
       cwd: tmp,
       cliVersion: '0.0.0-test',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -229,12 +249,14 @@ describe('runGenerate', () => {
       cwd: tmp,
       cliVersion: '0.0.0-test',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
-            shape: { int64Mode: 'bigint' },
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+              shape: { int64Mode: 'bigint' },
+            },
           },
         },
       },
@@ -246,11 +268,13 @@ describe('runGenerate', () => {
   it('regenerates when cliVersion changes', async () => {
     await writeOneFile(join(tmp, 'metadata/x.xml'), MIN_EDMX)
     const config = {
-      connections: {
+      targets: {
         x: {
-          baseUrl: 'http://example.test/odata',
-          auth: { username: 'u', password: 'p' },
-          serverTimezone: 'Europe/Moscow',
+          connection: {
+            baseUrl: 'http://example.test/odata',
+            auth: { username: 'u', password: 'p' },
+            serverTimezone: 'Europe/Moscow',
+          },
         },
       },
     }
@@ -273,11 +297,13 @@ describe('runGenerate', () => {
       cwd: tmp,
       cliVersion: '0.0.0-test',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -293,11 +319,13 @@ describe('runGenerate', () => {
       cwd: tmp,
       cliVersion: '0.0.0-test',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -315,11 +343,13 @@ describe('runGenerate', () => {
       cwd: tmp,
       cliVersion: '0.0.0-test',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -332,23 +362,27 @@ describe('runGenerate', () => {
     expect(after).toBeGreaterThan(before)
   })
 
-  it('per-connection: stale X regenerated, fresh Y skipped, in same run', async () => {
+  it('per-target: stale X regenerated, fresh Y skipped, in same run', async () => {
     await writeOneFile(join(tmp, 'metadata/x.xml'), MIN_EDMX)
     await writeOneFile(join(tmp, 'metadata/y.xml'), MIN_EDMX)
     const optsBase = {
       cwd: tmp,
       cliVersion: '0.0.0-test',
       config: {
-        connections: {
+        targets: {
           x: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
           y: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
