@@ -28,11 +28,13 @@ describe('e2e: generate against committed snapshots/trade_v11.5.xml', () => {
       config: {
         metadataDir: './metadata',
         generatedDir: './generated',
-        connections: {
+        targets: {
           trade_v11_5: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -45,7 +47,7 @@ describe('e2e: generate against committed snapshots/trade_v11.5.xml', () => {
     expect(existsSync(`${project.tmp}/generated/trade_v11_5/function-imports.ts`)).toBe(true)
   }, 60_000)
 
-  it('respects per-connection codegen options (include filter)', async () => {
+  it('respects per-target codegen options (include filter)', async () => {
     mkdirSync(`${project.tmp}/metadata`, { recursive: true })
     copyFileSync(`${repoRoot}/snapshots/trade_v11.5.xml`, `${project.tmp}/metadata/trade.xml`)
 
@@ -53,12 +55,14 @@ describe('e2e: generate against committed snapshots/trade_v11.5.xml', () => {
       cwd: project.tmp,
       cliVersion: '0.0.0-test',
       config: {
-        connections: {
+        targets: {
           trade: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'u', password: 'p' },
-            serverTimezone: 'Europe/Moscow',
-            codegen: { include: ['Catalog_*'] },
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
+            include: ['Catalog_*'],
           },
         },
       },
@@ -77,12 +81,14 @@ describe('e2e: generate against committed snapshots/trade_v11.5.xml', () => {
     mkdirSync(`${project.tmp}/metadata`, { recursive: true })
     copyFileSync(`${repoRoot}/snapshots/trade_v11.5.xml`, `${project.tmp}/metadata/trade.xml`)
     const config = {
-      connections: {
+      targets: {
         trade: {
-          baseUrl: 'http://example.test/odata',
-          auth: { username: 'u', password: 'p' },
-          serverTimezone: 'Europe/Moscow',
-          codegen: { include: ['Catalog_Валюты'] },
+          connection: {
+            baseUrl: 'http://example.test/odata',
+            auth: { username: 'u', password: 'p' },
+            serverTimezone: 'Europe/Moscow',
+          },
+          include: ['Catalog_Валюты'],
         },
       },
     }

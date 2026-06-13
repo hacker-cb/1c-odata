@@ -61,7 +61,7 @@ export async function fetchMetadataXml(opts: FetchMetadataXmlOptions): Promise<s
  * @public
  */
 export interface FetchMetadataIndexOptions {
-  /** Download timeout (ms). Default: `conn.fetchTimeout`, then 120 000. */
+  /** Download timeout (ms). Default: 120 000. */
   timeout?: number
   /** Abort the download externally. */
   signal?: AbortSignal
@@ -91,7 +91,7 @@ export async function fetchMetadataIndex(
   const xml = await fetchMetadataXml({
     baseUrl: conn.baseUrl,
     auth: connectionAuth(conn),
-    timeout: opts.timeout ?? conn.fetchTimeout ?? DEFAULT_FETCH_TIMEOUT,
+    timeout: opts.timeout ?? DEFAULT_FETCH_TIMEOUT,
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   })
   const model = parseEdmx(xml)

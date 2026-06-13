@@ -28,7 +28,7 @@ describe('e2e: bin entry detection through pnpm-style symlink', () => {
         // (the symlink fix in cli.ts is the actual subject of this test).
         writeFileSync(
           join(tmp, '1c-odata.config.mjs'),
-          `export default { connections: { trade: { baseUrl: 'http://example.test/odata', auth: { username: 'u', password: '' }, serverTimezone: 'Europe/Moscow' } } }\n`,
+          `export default { targets: { trade: { connection: { baseUrl: 'http://example.test/odata', auth: { username: 'u', password: '' }, serverTimezone: 'Europe/Moscow' } } } }\n`,
         )
 
         const env = { ...process.env }

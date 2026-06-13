@@ -20,7 +20,7 @@ describe('e2e: fetch via MSW', () => {
     project.cleanup()
   })
 
-  it('downloads $metadata and writes to metadata/<conn>.xml', async () => {
+  it('downloads $metadata and writes to metadata/<target>.xml', async () => {
     server.use(
       http.get('http://example.test/odata/$metadata', ({ request }) => {
         const auth = request.headers.get('authorization')
@@ -35,11 +35,13 @@ describe('e2e: fetch via MSW', () => {
       cwd: project.tmp,
       config: {
         metadataDir: './metadata',
-        connections: {
+        targets: {
           trade_v11_5: {
-            baseUrl: 'http://example.test/odata',
-            auth: { username: 'user', password: 'secret' },
-            serverTimezone: 'Europe/Moscow',
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'user', password: 'secret' },
+              serverTimezone: 'Europe/Moscow',
+            },
           },
         },
       },
@@ -55,11 +57,13 @@ describe('e2e: fetch via MSW', () => {
       runFetch({
         cwd: project.tmp,
         config: {
-          connections: {
+          targets: {
             trade_v11_5: {
-              baseUrl: 'http://example.test/odata',
-              auth: { username: 'wrong', password: 'wrong' },
-              serverTimezone: 'Europe/Moscow',
+              connection: {
+                baseUrl: 'http://example.test/odata',
+                auth: { username: 'wrong', password: 'wrong' },
+                serverTimezone: 'Europe/Moscow',
+              },
             },
           },
         },

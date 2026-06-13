@@ -15,15 +15,17 @@ pnpm add -D @1c-odata/cli   # generates types from $metadata
 
 ## Quick start
 
-Assuming this file lives at `src/main.ts` (so `../generated/` and `../1c-odata.config.js` resolve to the sibling codegen output and project config):
+Assuming this file lives at `src/main.ts` (so `../generated/` resolves to the sibling codegen output). The runtime builds its own `Connection` — it does not import `1c-odata.config.ts` (that file is for the CLI):
 
 ```ts
-import { clientOptionsFromConnection, ODataV3Client } from '@1c-odata/client'
+import { clientOptionsFromConnection, defineConnection, ODataV3Client, parseConnectionUrl } from '@1c-odata/client'
 import { and, any } from '@1c-odata/client/filter'
 import type { Document_РТУ } from '../generated/trade/index.js'
-import config from '../1c-odata.config.js'
 
-const trade = new ODataV3Client(clientOptionsFromConnection(config.connections.trade!))
+const url = process.env.ONEC_URL
+if (!url) throw new Error('Set ONEC_URL')
+const conn = defineConnection({ ...parseConnectionUrl(url), serverTimezone: 'Europe/Moscow' })
+const trade = new ODataV3Client(clientOptionsFromConnection(conn))
 
 const { value: docs } = await trade
   .query<Document_РТУ>('Document_РТУ')

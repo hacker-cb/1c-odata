@@ -8,11 +8,11 @@ describe('buildProgram', () => {
     expect(names).toEqual(['fetch', 'generate'])
   })
 
-  it('fetch/generate each have --connection and --config options', () => {
+  it('fetch/generate each have --target and --config options', () => {
     const program = buildProgram()
     for (const cmd of program.commands) {
       const optNames = cmd.options.map((o) => o.long)
-      expect(optNames).toContain('--connection')
+      expect(optNames).toContain('--target')
       expect(optNames).toContain('--config')
     }
   })

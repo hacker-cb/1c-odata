@@ -55,10 +55,10 @@ function sha256(s: string): string {
 }
 
 /**
- * Compute the input-hash triple for one connection.
+ * Compute the input-hash triple for one target.
  *
  * `xml` is the metadata file content, `options` is the effective
- * `GenerateOptions` for the run (`shape` + `include` from the connection,
+ * `GenerateOptions` for the run (`shape` + `include` from the target,
  * plus run-level flags like `metadataOnly`), `cliVersion` is the cli
  * package version (read from `package.json` at the call site).
  */

@@ -8,7 +8,7 @@ import { runGenerate } from './commands/generate.js'
 import { loadConfig } from './config.js'
 
 interface CommandOptions {
-  connection?: string
+  target?: string
   config?: string
   force?: boolean
   metadataOnly?: boolean
@@ -45,8 +45,8 @@ export function buildProgram(): Command {
 
   program
     .command('fetch')
-    .description('Download $metadata for one or all connections')
-    .option('-c, --connection <name>', 'connection name (defaults to all)')
+    .description('Download $metadata for one or all targets')
+    .option('-t, --target <name>', 'target name (defaults to all)')
     .option('--config <path>', 'override config file path')
     .action(async (opts: CommandOptions) => {
       const cwd = process.cwd()
@@ -57,14 +57,14 @@ export function buildProgram(): Command {
       await runFetch({
         cwd: loaded.cwd,
         config: loaded.config,
-        ...(opts.connection !== undefined ? { connection: opts.connection } : {}),
+        ...(opts.target !== undefined ? { target: opts.target } : {}),
       })
     })
 
   program
     .command('generate')
     .description('Generate TypeScript types from local metadata')
-    .option('-c, --connection <name>', 'connection name (defaults to all)')
+    .option('-t, --target <name>', 'target name (defaults to all)')
     .option('--config <path>', 'override config file path')
     .option('-f, --force', 'regenerate even when inputs are unchanged', false)
     .option(
@@ -82,7 +82,7 @@ export function buildProgram(): Command {
         cwd: loaded.cwd,
         config: loaded.config,
         cliVersion,
-        ...(opts.connection !== undefined ? { connection: opts.connection } : {}),
+        ...(opts.target !== undefined ? { target: opts.target } : {}),
         ...(opts.force === true ? { force: true } : {}),
         ...(opts.metadataOnly === true ? { metadataOnly: true } : {}),
       })

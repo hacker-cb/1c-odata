@@ -6,8 +6,8 @@ export type { ClientOptions, MutationOptions, RequestOptions, RetryPolicy } from
 export { ODataV3Client, type ODataV3ClientOptions } from './client/v3-client.js'
 export { V3DocumentHandle, V3EntityHandle, V3EntitySetHandle } from './client/v3-handles.js'
 export { V3QueryBuilder } from './client/v3-query.js'
-export type { CliConfig, Connection, DataShape } from './connection.js'
-export { connectionAuth, defineConfig, parseConnectionUrl, validateConnection } from './connection.js'
+export type { Connection, DataShape } from './connection.js'
+export { connectionAuth, defineConnection, parseConnectionUrl, validateConnection } from './connection.js'
 export type {
   ErrorFormat,
   HTTPErrorOptions,

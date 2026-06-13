@@ -1,15 +1,15 @@
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import type { CliConfig, Connection } from '@1c-odata/client'
 import { type GenerateOptions, generate } from '../codegen/index.js'
+import type { CodegenConfig, CodegenTarget } from '../config.js'
 import { writeFiles } from '../writer.js'
 import { computeInputs, type InputHash } from './_input-hash.js'
-import { pickConnections } from './_shared.js'
+import { pickTargets } from './_shared.js'
 
 export interface RunGenerateOptions {
   cwd: string
-  config: CliConfig
-  connection?: string
+  config: CodegenConfig
+  target?: string
   /**
    * `@1c-odata/cli` package version. Embedded in `__metadata.json` as part
    * of the input-hash triple used by smart-skip — a version bump invalidates
@@ -17,7 +17,7 @@ export interface RunGenerateOptions {
    * through; programmatic callers must supply it.
    */
   cliVersion: string
-  /** Bypass the input-hash cache check; regenerate every selected connection. */
+  /** Bypass the input-hash cache check; regenerate every selected target. */
   force?: boolean
   /**
    * Emit only `__metadata.json` (no TypeScript files). Part of the
@@ -81,14 +81,14 @@ function reportClosure(name: string, meta: string | undefined): void {
   }
 }
 
-/** Run `1c-odata generate` — read metadata XML for one or all connections, call codegen, write the resulting files under `<generatedDir>/<connection>/`. */
+/** Run `1c-odata generate` — read metadata XML for one or all targets, call codegen, write the resulting files under `<generatedDir>/<target>/`. */
 export async function runGenerate(opts: RunGenerateOptions): Promise<void> {
   const metadataDir = resolve(opts.cwd, opts.config.metadataDir ?? './metadata')
   const generatedDir = resolve(opts.cwd, opts.config.generatedDir ?? './generated')
-  const connections = pickConnections(opts.config.connections, opts.connection)
+  const targets = pickTargets(opts.config.targets, opts.target)
   let skipHintShown = false
 
-  for (const [name, conn] of connections) {
+  for (const [name, target] of targets) {
     try {
       const xmlPath = join(metadataDir, `${name}.xml`)
       let xml: string
@@ -97,12 +97,12 @@ export async function runGenerate(opts: RunGenerateOptions): Promise<void> {
       } catch (e) {
         const err = e as NodeJS.ErrnoException
         if (err.code === 'ENOENT') {
-          throw new Error(`Metadata file not found: ${xmlPath}\n  Run "1c-odata fetch --connection ${name}" first.`)
+          throw new Error(`Metadata file not found: ${xmlPath}\n  Run "1c-odata fetch --target ${name}" first.`)
         }
         throw e
       }
       const codegenOptions: GenerateOptions = {
-        ...connectionToCodegenOptions(conn),
+        ...targetToCodegenOptions(target),
         ...(opts.metadataOnly === true ? { metadataOnly: true } : {}),
       }
       const inputs = computeInputs(xml, codegenOptions, opts.cliVersion)
@@ -122,19 +122,19 @@ export async function runGenerate(opts: RunGenerateOptions): Promise<void> {
       reportClosure(name, result.files.get('__metadata.json'))
       await writeFiles(join(generatedDir, name), result.files)
     } catch (e) {
-      // Re-throw without wrapping if the message already mentions this connection
+      // Re-throw without wrapping if the message already mentions this target
       // by name — avoids redundantly nested phrasing.
       if (e instanceof Error && e.message.includes(`"${name}"`)) throw e
-      if (e instanceof Error && e.message.includes(`--connection ${name}`)) throw e
+      if (e instanceof Error && e.message.includes(`--target ${name}`)) throw e
       const message = e instanceof Error ? e.message : String(e)
-      throw new Error(`generate failed for connection "${name}": ${message}`, { cause: e })
+      throw new Error(`generate failed for target "${name}": ${message}`, { cause: e })
     }
   }
 }
 
-function connectionToCodegenOptions(conn: Connection): GenerateOptions {
+function targetToCodegenOptions(target: CodegenTarget): GenerateOptions {
   return {
-    ...(conn.shape !== undefined ? conn.shape : {}),
-    ...(conn.codegen?.include !== undefined ? { include: conn.codegen.include } : {}),
+    ...(target.connection.shape !== undefined ? target.connection.shape : {}),
+    ...(target.include !== undefined ? { include: target.include } : {}),
   }
 }
