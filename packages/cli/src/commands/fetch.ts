@@ -28,11 +28,11 @@ export async function runFetch(opts: RunFetchOptions): Promise<void> {
   // Download targets concurrently (bounded). A base's `$metadata` is 10+ MB /
   // several seconds, so a serial loop would pay the sum of every base's
   // latency; overlapping cuts the wall-clock to ~the slowest single base.
-  // Every target is attempted — a worker records its own failure instead of
-  // rejecting, so one dead base neither skips the others nor orphans an
-  // in-flight sibling into an unhandled rejection. The first failure in target
-  // order is rethrown once the batch settles (matching the serial loop, which
-  // surfaced the earliest failure).
+  // Each worker records its own failure instead of rejecting: that keeps the
+  // run best-effort (a `Promise.all` rejection would fail-fast and skip targets
+  // still in flight) and lets us rethrow the first failure in *target* order
+  // rather than whichever download happened to settle first — matching the
+  // serial loop, which surfaced the earliest target's failure.
   const errors: unknown[] = []
   await mapWithConcurrency(targets, FETCH_CONCURRENCY, async ([name, target], index) => {
     try {
