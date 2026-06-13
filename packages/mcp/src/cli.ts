@@ -15,6 +15,17 @@ interface GlobalOptions {
   insecureStorage?: boolean
 }
 
+interface AddCommandOptions {
+  url?: string
+  login?: string
+  password?: string
+  passwordStdin?: boolean
+  timezone?: string
+  force?: boolean
+  /** commander sets this to `false` when --no-verify is passed. */
+  verify?: boolean
+}
+
 /**
  * Read this package's version from its `package.json`, resolved relative to the
  * compiled `dist/cli.js` (one level up) or the source `src/cli.ts` (two levels
@@ -60,10 +71,28 @@ export function buildProgram(): Command {
 
   program
     .command('add')
-    .description('Add or update a connection (interactive; password entered with no echo)')
-    .argument('[name]', 'connection name (prompted when omitted)')
-    .action(async (name?: string) => {
-      await runAdd({ dataDir: dataDir(), insecure: insecure(), ...(name !== undefined ? { name } : {}) })
+    .description('Add or update a connection (interactive, or non-interactive with --url)')
+    .argument('[name]', 'connection name (prompted when omitted; required with --url)')
+    .option('--url <url>', 'base URL — enables non-interactive mode')
+    .option('--login <login>', 'username (non-interactive)')
+    .option('--password <password>', 'password (non-interactive; visible in `ps` — prefer --password-stdin or env)')
+    .option('--password-stdin', 'read the password from stdin (non-interactive)')
+    .option('--timezone <tz>', 'IANA server timezone (default Europe/Moscow)')
+    .option('-f, --force', 'overwrite an existing connection without prompting', false)
+    .option('--no-verify', 'skip the connectivity check')
+    .action(async (name: string | undefined, cmdOpts: AddCommandOptions) => {
+      await runAdd({
+        dataDir: dataDir(),
+        insecure: insecure(),
+        ...(name !== undefined ? { name } : {}),
+        ...(cmdOpts.url !== undefined ? { url: cmdOpts.url } : {}),
+        ...(cmdOpts.login !== undefined ? { login: cmdOpts.login } : {}),
+        ...(cmdOpts.password !== undefined ? { password: cmdOpts.password } : {}),
+        ...(cmdOpts.passwordStdin === true ? { passwordStdin: true } : {}),
+        ...(cmdOpts.timezone !== undefined ? { timezone: cmdOpts.timezone } : {}),
+        ...(cmdOpts.force === true ? { force: true } : {}),
+        ...(cmdOpts.verify === false ? { noVerify: true } : {}),
+      })
     })
 
   program

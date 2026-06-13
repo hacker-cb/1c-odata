@@ -6,5 +6,5 @@ Add `@1c-odata/mcp` — a read-only MCP (Model Context Protocol) server for 1С:
 
 - **Schema tools**: `list_connections`, `list_entities` (filter by kind/name, paginated), `describe_entity` (properties, keys, navigation, value storages), `list_enums`, `refresh_metadata`.
 - **Data tools**: `query` (raw `$filter`/`$select`/`$expand`/`$orderby`, paging, optional count), `get_entity`, `count`, `register_query` (balance / turnovers / slices / accounting virtual tables).
-- **Connection management CLI** (`1c-odata-mcp add`/`list`/`remove`/`test`) with no-echo password entry. Secrets resolve env → OS keychain (`@napi-rs/keyring`, optional) → `0600` file; passwords never reach the LLM or `config.json`.
+- **Connection management** — CLI `1c-odata-mcp add`/`list`/`remove`/`test` (interactive no-echo password, or non-interactive via `--url`/`--login`/`--password-stdin`/env), plus MCP `add_connection`/`remove_connection` tools. Secrets resolve env → OS keychain (`@napi-rs/keyring`, optional) → `0600` file; no tool ever returns a password, and `config.json` carries none.
 - Works against any base at runtime via live `$metadata` (dynamic mode); read-only by design.

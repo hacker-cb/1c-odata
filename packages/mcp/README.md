@@ -3,9 +3,9 @@
 MCP ([Model Context Protocol](https://modelcontextprotocol.io)) server for [1С:Enterprise](https://1c.ru/)
 REST/OData V3 bases, built on [`@1c-odata/client`](../client) and [`@1c-odata/metadata`](../metadata).
 
-**Read-only by design.** It exposes schema introspection and data queries — no create / update / delete.
-Connections are managed from the CLI (where the password is typed with no echo); the LLM-facing tools never
-see a password and never write to disk.
+**Read-only data access.** It exposes schema introspection and data queries — no create / update / delete of
+1С data. Connections can be managed from the CLI (recommended — the password is typed with no echo) or via the
+`add_connection` / `remove_connection` tools. No tool ever returns a stored password.
 
 Works against any 1С base at runtime via the live `$metadata` (dynamic mode) — no code generation required.
 
@@ -22,6 +22,8 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 | `get_entity` | Fetch a single entity by `Ref_Key`. |
 | `count` | Count rows matching an optional `$filter`. |
 | `register_query` | Register virtual tables: balance / turnovers / slices / accounting (read-only analytics). |
+| `add_connection` | Add/update a connection (writes config; optional password stored securely, never returned). |
+| `remove_connection` | Remove a connection and delete its stored password. |
 
 ## Quick start
 
@@ -41,6 +43,15 @@ Verifying connection… OK
 ```
 
 Other commands: `list` (no passwords), `remove <name>`, `test <name>`.
+
+Non-interactive (scripts / CI) — pass `--url` to skip the prompts:
+
+```bash
+# password from stdin (not visible in `ps`):
+npx @1c-odata/mcp add my-base --url https://host/base/odata/standard.odata/ --login user --password-stdin <<<"$PW"
+# or store only the non-secret config and supply the password via env at runtime:
+ONEC_MY_BASE_PASSWORD=… npx @1c-odata/mcp add my-base --url https://host/base/odata/standard.odata/ --login user
+```
 
 ### 2. Register the server with your MCP client
 
@@ -72,7 +83,10 @@ Both files live in the data directory: `$ONEC_MCP_DATA_DIR` if set, otherwise th
 
 ## Security
 
-- The password is never a tool argument and never a CLI argument — only a no-echo prompt or an env var,
-  so it never reaches the model's context, the transcript, or `ps`.
-- Tools are read-only and never return or log a password; all output is redacted of URL userinfo.
-- `config.json` carries no secrets; the fallback credentials file is `0600` and lives outside the project.
+- **No tool ever returns a stored password.** `list_connections` shows only where each password lives.
+- Prefer the CLI for entering a password (no-echo prompt) or the `ONEC_<NAME>_PASSWORD` env var, so the secret
+  never reaches the model's context, the transcript, or `ps`.
+- The MCP `add_connection` tool accepts an optional `password`, but passing it there places it in the model
+  context/transcript — omit it (and use the CLI/env) unless you accept that trade-off.
+- All tool output and error text is redacted of URL userinfo; `config.json` carries no secrets; the fallback
+  credentials file is `0600` and lives outside the project.
