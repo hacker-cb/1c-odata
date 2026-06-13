@@ -114,8 +114,9 @@ jobs:
       # `changeset version` runs, so the new version isn't yet known there.
       # Read it from the just-pushed release branch and rewrite the PR title.
       # Skipped on publish runs (no PR exists) and when there's nothing to release.
-      # @1c-odata/client and @1c-odata/cli are a changesets `fixed` group in
-      # .changeset/config.json, so reading the client version is sufficient.
+      # @1c-odata/client, @1c-odata/metadata and @1c-odata/cli are a changesets
+      # `fixed` group in .changeset/config.json (one shared version), so reading
+      # the client version is sufficient.
       - name: Rewrite Release PR title with version
         if: steps.changesets.outputs.hasChangesets == 'true' && steps.changesets.outputs.published != 'true'
         env:
