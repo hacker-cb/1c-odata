@@ -5,6 +5,13 @@ import type { CodegenConfig } from '../config.js'
 import { writeOneFile } from '../writer.js'
 import { pickTargets } from './_shared.js'
 
+/**
+ * Max concurrent `$metadata` downloads. The downloads are independent network
+ * I/O, so overlap them; the cap keeps a config with many bases from opening
+ * dozens of 10+ MB transfers at once.
+ */
+const FETCH_CONCURRENCY = 4
+
 export interface RunFetchOptions {
   cwd: string
   config: CodegenConfig
@@ -17,31 +24,68 @@ export async function runFetch(opts: RunFetchOptions): Promise<void> {
   const defaultTimeout = opts.config.fetchTimeout ?? 120_000
   const targets = pickTargets(opts.config.targets, opts.target)
 
-  for (const [name, target] of targets) {
+  // Download targets concurrently (bounded). A base's `$metadata` is 10+ MB /
+  // several seconds, so a serial loop would pay the sum of every base's
+  // latency; overlapping cuts the wall-clock to ~the slowest single base.
+  // Every target is attempted — a worker records its own failure instead of
+  // rejecting, so one dead base neither skips the others nor orphans an
+  // in-flight sibling into an unhandled rejection. The first failure in target
+  // order is rethrown once the batch settles (matching the serial loop, which
+  // surfaced the earliest failure).
+  const errors: unknown[] = []
+  await mapWithConcurrency(targets, FETCH_CONCURRENCY, async ([name, target], index) => {
     try {
-      const timeout = target.fetchTimeout ?? defaultTimeout
       const xml = await fetchMetadataXml({
         baseUrl: target.connection.baseUrl,
         auth: connectionAuth(target.connection),
-        timeout,
+        timeout: target.fetchTimeout ?? defaultTimeout,
       })
       await writeOneFile(join(metadataDir, `${name}.xml`), xml)
     } catch (e) {
-      // Prepend the target name in-place rather than wrapping in a new
-      // Error — wrapping would lose `instanceof HTTPError`/`PermissionError`/
-      // etc., breaking the STABILITY.md guarantee that library-originated
-      // errors stay typed up the stack. `Error.prototype.message` is writable,
-      // so subclass identity survives. Non-Error throws fall through to a
-      // plain Error since there's no class to preserve.
-      if (e instanceof Error) {
-        if (!e.message.includes(`"${name}"`)) {
-          e.message = `fetch failed for target "${name}": ${e.message}`
-        }
-        throw e
-      }
-      // Non-Error throw — no class identity to preserve, but keep the original
-      // value as `cause` so debuggers / stack-trace tooling can still reach it.
-      throw new Error(`fetch failed for target "${name}": ${String(e)}`, { cause: e })
+      errors[index] = prefixTargetError(name, e)
+    }
+  })
+
+  const firstError = errors.find((e) => e !== undefined)
+  if (firstError !== undefined) throw firstError
+}
+
+/**
+ * Tag an error with the failing target's name. Mutates an `Error`'s message
+ * in-place rather than wrapping — wrapping would lose `instanceof HTTPError` /
+ * `PermissionError` / etc., breaking the STABILITY.md guarantee that
+ * library-originated errors stay typed up the stack (`Error.prototype.message`
+ * is writable, so subclass identity survives). A non-Error throw has no class
+ * identity to preserve, so it is wrapped with the original kept as `cause`.
+ */
+function prefixTargetError(name: string, e: unknown): unknown {
+  if (e instanceof Error) {
+    if (!e.message.includes(`"${name}"`)) {
+      e.message = `fetch failed for target "${name}": ${e.message}`
+    }
+    return e
+  }
+  return new Error(`fetch failed for target "${name}": ${String(e)}`, { cause: e })
+}
+
+/**
+ * Run `fn` over `items` with at most `limit` invocations in flight at once.
+ *
+ * Workers share one array iterator, so each pulls the next item as it frees up
+ * — no manual index bookkeeping, no double-processing. `fn` MUST handle its own
+ * errors (never reject): a rejecting worker would abandon its siblings mid-flight
+ * and surface as an unhandled rejection.
+ */
+async function mapWithConcurrency<T>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  const iterator = items.entries()
+  async function worker(): Promise<void> {
+    for (const [index, item] of iterator) {
+      await fn(item, index)
     }
   }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()))
 }

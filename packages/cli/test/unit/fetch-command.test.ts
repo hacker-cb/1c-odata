@@ -141,6 +141,90 @@ describe('runFetch', () => {
     ).rejects.toThrow(/target "x".*500/i)
   })
 
+  it('attempts every target and surfaces the first failure by target order', async () => {
+    // x fails (500), y succeeds. Best-effort: y must still be written even
+    // though x failed, and the thrown error names the first failing target.
+    server.use(
+      http.get('http://example.test/odata/$metadata', () => HttpResponse.text('Server Error', { status: 500 })),
+      http.get('http://other.test/odata/$metadata', () =>
+        HttpResponse.text('<edmx:Edmx>Y</edmx:Edmx>', { status: 200 }),
+      ),
+    )
+    const err = await rejection(
+      runFetch({
+        cwd: tmp,
+        config: {
+          metadataDir: './metadata',
+          targets: {
+            x: {
+              connection: {
+                baseUrl: 'http://example.test/odata',
+                auth: { username: 'u', password: 'p' },
+                serverTimezone: 'Europe/Moscow',
+              },
+            },
+            y: {
+              connection: {
+                baseUrl: 'http://other.test/odata',
+                auth: { username: 'u2', password: 'p2' },
+                serverTimezone: 'Europe/Moscow',
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(err.message).toMatch(/target "x".*500/i)
+    // y was still fetched despite x failing (best-effort, not fail-fast).
+    expect(readFileSync(join(tmp, 'metadata/y.xml'), 'utf8')).toBe('<edmx:Edmx>Y</edmx:Edmx>')
+  })
+
+  it('downloads targets concurrently rather than serially', async () => {
+    // Hold x's response until y's request lands — only possible if the two
+    // downloads overlap. A serial loop would await x before issuing y, so this
+    // would deadlock (and time out) instead of passing.
+    let releaseX: (() => void) | undefined
+    const xHeld = new Promise<void>((resolve) => {
+      releaseX = resolve
+    })
+    let yRequested = false
+    server.use(
+      http.get('http://example.test/odata/$metadata', async () => {
+        await xHeld
+        return HttpResponse.text('X', { status: 200 })
+      }),
+      http.get('http://other.test/odata/$metadata', () => {
+        yRequested = true
+        releaseX?.()
+        return HttpResponse.text('Y', { status: 200 })
+      }),
+    )
+    await runFetch({
+      cwd: tmp,
+      config: {
+        targets: {
+          x: {
+            connection: {
+              baseUrl: 'http://example.test/odata',
+              auth: { username: 'u', password: 'p' },
+              serverTimezone: 'Europe/Moscow',
+            },
+          },
+          y: {
+            connection: {
+              baseUrl: 'http://other.test/odata',
+              auth: { username: 'u2', password: 'p2' },
+              serverTimezone: 'Europe/Moscow',
+            },
+          },
+        },
+      },
+    })
+    expect(yRequested).toBe(true)
+    expect(readFileSync(join(tmp, 'metadata/x.xml'), 'utf8')).toBe('X')
+    expect(readFileSync(join(tmp, 'metadata/y.xml'), 'utf8')).toBe('Y')
+  })
+
   it('preserves typed-error identity when prepending the target name (STABILITY.md contract)', async () => {
     // Real 1С error shape: status 4xx/5xx + JSON `odata.error` body — that's
     // what triggers `mapResponseToError` to produce a typed `HTTPError` rather
