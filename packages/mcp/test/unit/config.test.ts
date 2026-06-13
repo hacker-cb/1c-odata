@@ -54,6 +54,16 @@ describe('loadConfig / saveConfig', () => {
     writeFileSync(configPath(dir), '{ not json')
     expect(() => loadConfig(dir)).toThrow(/Malformed JSON/)
   })
+
+  it('strips userinfo from a hand-edited baseUrl on load', () => {
+    writeFileSync(
+      configPath(dir),
+      JSON.stringify({
+        connections: { c: { baseUrl: 'http://u:p@host/odata', login: 'u', serverTimezone: 'Europe/Moscow' } },
+      }),
+    )
+    expect(loadConfig(dir).connections.c?.baseUrl).toBe('http://host/odata')
+  })
 })
 
 describe('assertValidConnectionName', () => {

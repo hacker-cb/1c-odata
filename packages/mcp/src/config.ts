@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type DataShape, InvalidArgumentError } from '@1c-odata/client'
 import envPaths from 'env-paths'
+import { stripUrlUserinfo } from './redact.js'
 
 /**
  * Non-secret connection descriptor as persisted in `config.json`. The password
@@ -65,7 +66,16 @@ function normalizeConfig(data: unknown): McpConfig {
   if (data === null || typeof data !== 'object') return { connections: {} }
   const connections = (data as { connections?: unknown }).connections
   if (connections === null || typeof connections !== 'object') return { connections: {} }
-  return { connections: connections as Record<string, StoredConnection> }
+  // Defense in depth: strip any userinfo a hand-edited/migrated config might carry
+  // in baseUrl, so it can never reach memory, requests, or tool output.
+  const sanitized: Record<string, StoredConnection> = {}
+  for (const [name, conn] of Object.entries(connections as Record<string, StoredConnection>)) {
+    sanitized[name] =
+      conn !== null && typeof conn === 'object' && typeof conn.baseUrl === 'string'
+        ? { ...conn, baseUrl: stripUrlUserinfo(conn.baseUrl) }
+        : conn
+  }
+  return { connections: sanitized }
 }
 
 /**
@@ -77,7 +87,7 @@ function normalizeConfig(data: unknown): McpConfig {
 export function assertValidConnectionName(name: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(name)) {
     throw new InvalidArgumentError(
-      `Invalid connection name "${name}". Use ASCII letters, digits and hyphens (e.g. "tvip-trade"); it maps to an ONEC_<NAME>_PASSWORD env var.`,
+      `Invalid connection name "${name}". Use ASCII letters, digits and hyphens (e.g. "tvip-trade"); it maps to a ONEC_<NAME>_PASSWORD env var.`,
       { argument: 'name' },
     )
   }

@@ -114,7 +114,11 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool): void
               skip: offset,
               top: limit,
               returned: result.value.length,
-              hasMore: result.value.length === limit,
+              // With a total count, the last full page still has no more rows.
+              hasMore:
+                result.count !== undefined
+                  ? offset + result.value.length < result.count
+                  : result.value.length === limit,
             },
             value: result.value,
           },

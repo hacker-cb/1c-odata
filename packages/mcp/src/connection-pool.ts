@@ -51,7 +51,7 @@ export class ConnectionPool {
   private readonly dataDir: string
   private readonly store: SecretStore
   private readonly fetchTimeout: number
-  private readonly cache = new Map<string, PoolEntry>()
+  private readonly cache = new Map<string, Promise<PoolEntry>>()
 
   constructor(opts: ConnectionPoolOptions) {
     this.dataDir = opts.dataDir
@@ -76,11 +76,27 @@ export class ConnectionPool {
     )
   }
 
-  /** Resolve a ready entry, fetching + building the schema on first access. */
+  /**
+   * Resolve a ready entry, fetching + building the schema on first access. The
+   * in-flight Promise is cached, so concurrent calls for the same uncached
+   * connection share ONE `$metadata` download instead of racing.
+   */
   async get(name: string): Promise<PoolEntry> {
     const cached = this.cache.get(name)
     if (cached !== undefined) return cached
 
+    const pending = this.build(name)
+    this.cache.set(name, pending)
+    try {
+      return await pending
+    } catch (err) {
+      // Never cache a failed build — let the next call retry.
+      if (this.cache.get(name) === pending) this.cache.delete(name)
+      throw err
+    }
+  }
+
+  private async build(name: string): Promise<PoolEntry> {
     const config = loadConfig(this.dataDir)
     const stored = config.connections[name]
     if (stored === undefined) {
@@ -114,9 +130,7 @@ export class ConnectionPool {
     const index = buildMetadataIndex(edmx, stored.shape !== undefined ? { shape: stored.shape } : {})
     const client = new ODataV3Client({ ...clientOptionsFromConnection(connection), metadataIndex: index })
 
-    const entry: PoolEntry = { name, connection, edmx, index, client }
-    this.cache.set(name, entry)
-    return entry
+    return { name, connection, edmx, index, client }
   }
 
   /** Drop a cached entry so the next {@link get} re-downloads `$metadata`. */

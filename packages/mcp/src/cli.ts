@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, realpathSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Command } from 'commander'
 import { runAdd } from './commands/add.js'
@@ -104,7 +104,12 @@ function realArgvUrl(): string | undefined {
   try {
     return pathToFileURL(realpathSync(raw)).href
   } catch {
-    return pathToFileURL(raw).href
+    // realpath failed — resolve to an absolute path (pathToFileURL requires one).
+    try {
+      return pathToFileURL(resolve(raw)).href
+    } catch {
+      return undefined
+    }
   }
 }
 

@@ -13,3 +13,20 @@ export function redactSecrets(text: string): string {
 export function errorText(err: unknown): string {
   return redactSecrets(err instanceof Error ? err.message : String(err))
 }
+
+/**
+ * Remove any `user:password@` userinfo from a URL, returning a clean base URL.
+ * Defense in depth for a `config.json` that was hand-edited or migrated with
+ * credentials in the URL — keeps them out of memory, requests, and tool output.
+ */
+export function stripUrlUserinfo(url: string): string {
+  try {
+    const parsed = new URL(url)
+    if (parsed.username === '' && parsed.password === '') return url
+    parsed.username = ''
+    parsed.password = ''
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}${parsed.search}`
+  } catch {
+    return url
+  }
+}

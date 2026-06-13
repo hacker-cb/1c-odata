@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { errorText, redactSecrets } from '../../src/redact.js'
+import { errorText, redactSecrets, stripUrlUserinfo } from '../../src/redact.js'
 
 describe('redactSecrets', () => {
   it('masks userinfo in a URL', () => {
@@ -26,5 +26,19 @@ describe('errorText', () => {
 
   it('stringifies and redacts non-errors', () => {
     expect(errorText('http://u:pw@h')).toBe('http://***@h')
+  })
+})
+
+describe('stripUrlUserinfo', () => {
+  it('removes userinfo from a URL', () => {
+    expect(stripUrlUserinfo('http://user:pass@host/odata/standard.odata')).toBe('http://host/odata/standard.odata')
+  })
+
+  it('leaves a credential-free URL unchanged', () => {
+    expect(stripUrlUserinfo('http://host/odata/')).toBe('http://host/odata/')
+  })
+
+  it('returns non-URL input unchanged', () => {
+    expect(stripUrlUserinfo('not a url')).toBe('not a url')
   })
 })
