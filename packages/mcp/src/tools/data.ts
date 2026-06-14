@@ -233,9 +233,12 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool, limit
         connection: z.string().describe('Connection name'),
         register: z.string().describe('Register entity set, e.g. AccumulationRegister_ТоварыНаСкладах'),
         table: z.enum(REGISTER_TABLES).describe('Virtual table to query'),
-        period: z.string().optional().describe('ISO date — point in time for balance/slice/turnovers'),
-        periodFrom: z.string().optional().describe('ISO date — range start for turnovers'),
-        periodTo: z.string().optional().describe('ISO date — range end for turnovers'),
+        period: z
+          .string()
+          .optional()
+          .describe('ISO date — point in time for balance/slice (turnovers: taken as range start)'),
+        periodFrom: z.string().optional().describe('ISO date — range start for turnovers (StartPeriod)'),
+        periodTo: z.string().optional().describe('ISO date — range end for turnovers (EndPeriod)'),
         startDate: z.string().optional().describe('ISO date — range start for accounting tables'),
         endDate: z.string().optional().describe('ISO date — range end for accounting tables'),
         condition: z.string().optional().describe('Raw OData condition expression'),
@@ -309,12 +312,17 @@ function balanceArgs(args: RegisterQueryArgs): BalanceArgs {
 }
 
 function turnoversArgs(args: RegisterQueryArgs): TurnoversArgs {
-  const a: TurnoversArgs = {}
-  const from = toDate(args.periodFrom)
+  // Turnovers is an interval (StartPeriod/EndPeriod) — no single-point form.
+  // Build a { from?, to? } range; a lone `period` is taken as the range start.
+  const from = toDate(args.periodFrom) ?? toDate(args.period)
   const to = toDate(args.periodTo)
-  const period = toDate(args.period)
-  if (from !== undefined && to !== undefined) a.Period = { from, to }
-  else if (period !== undefined) a.Period = period
+  const a: TurnoversArgs = {}
+  if (from !== undefined || to !== undefined) {
+    const period: { from?: Date; to?: Date } = {}
+    if (from !== undefined) period.from = from
+    if (to !== undefined) period.to = to
+    a.Period = period
+  }
   if (args.condition !== undefined) a.Condition = args.condition
   if (args.dimensions !== undefined) a.Dimensions = args.dimensions
   return a
