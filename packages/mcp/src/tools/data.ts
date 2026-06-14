@@ -35,13 +35,12 @@ interface RegisterQueryArgs {
   period?: string | undefined
   periodFrom?: string | undefined
   periodTo?: string | undefined
-  startDate?: string | undefined
-  endDate?: string | undefined
   condition?: string | undefined
   dimensions?: string | undefined
-  accountKey?: string | undefined
-  accountDr?: string | undefined
-  accountCr?: string | undefined
+  accountCondition?: string | undefined
+  balancedAccountCondition?: string | undefined
+  extraDimensions?: string | undefined
+  balancedExtraDimensions?: string | undefined
 }
 
 interface QueryOptions {
@@ -236,16 +235,27 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool, limit
         period: z
           .string()
           .optional()
-          .describe('ISO date — point in time for balance/slice (turnovers: taken as range start)'),
-        periodFrom: z.string().optional().describe('ISO date — range start for turnovers (StartPeriod)'),
-        periodTo: z.string().optional().describe('ISO date — range end for turnovers (EndPeriod)'),
-        startDate: z.string().optional().describe('ISO date — range start for accounting tables'),
-        endDate: z.string().optional().describe('ISO date — range end for accounting tables'),
-        condition: z.string().optional().describe('Raw OData condition expression'),
+          .describe('ISO date — point in time for balance/slice (range tables: taken as range start)'),
+        periodFrom: z
+          .string()
+          .optional()
+          .describe('ISO date — range start (StartPeriod) for turnovers/accounting tables'),
+        periodTo: z.string().optional().describe('ISO date — range end (EndPeriod) for turnovers/accounting tables'),
+        condition: z.string().optional().describe('Raw OData condition expression on the register records'),
         dimensions: z.string().optional().describe('Comma-separated dimension names'),
-        accountKey: z.string().optional().describe('Account Ref_Key for extDimensions'),
-        accountDr: z.string().optional().describe('Debit account binding (entity-set path) for drCrTurnovers'),
-        accountCr: z.string().optional().describe('Credit account binding (entity-set path) for drCrTurnovers'),
+        accountCondition: z
+          .string()
+          .optional()
+          .describe('AccountingRegister: condition on the (main) account, e.g. "Account_Key eq guid\'…\'"'),
+        balancedAccountCondition: z
+          .string()
+          .optional()
+          .describe('drCrTurnovers: condition on the corresponding/balanced account'),
+        extraDimensions: z.string().optional().describe('AccountingRegister: ext-dimension condition'),
+        balancedExtraDimensions: z
+          .string()
+          .optional()
+          .describe('drCrTurnovers: ext-dimension condition for the corresponding account'),
         top: z.number().int().optional().describe('Max rows to return this page (server-capped; omit for the default)'),
         skip: z.number().int().min(0).optional().describe('Offset for pagination (default 0)'),
         compact: z
@@ -302,29 +312,37 @@ function toDate(iso: string | undefined): Date | undefined {
   return date
 }
 
+/** Build a { from?, to? } range from periodFrom/periodTo; a lone `period` is the start. */
+function rangeFromArgs(args: RegisterQueryArgs): { from?: Date; to?: Date } | undefined {
+  const from = toDate(args.periodFrom) ?? toDate(args.period)
+  const to = toDate(args.periodTo)
+  if (from === undefined && to === undefined) return undefined
+  const range: { from?: Date; to?: Date } = {}
+  if (from !== undefined) range.from = from
+  if (to !== undefined) range.to = to
+  return range
+}
+
 function balanceArgs(args: RegisterQueryArgs): BalanceArgs {
   const a: BalanceArgs = {}
   const period = toDate(args.period)
   if (period !== undefined) a.Period = period
   if (args.condition !== undefined) a.Condition = args.condition
   if (args.dimensions !== undefined) a.Dimensions = args.dimensions
+  if (args.accountCondition !== undefined) a.AccountCondition = args.accountCondition
+  if (args.extraDimensions !== undefined) a.ExtraDimensions = args.extraDimensions
   return a
 }
 
 function turnoversArgs(args: RegisterQueryArgs): TurnoversArgs {
-  // Turnovers is an interval (StartPeriod/EndPeriod) — no single-point form.
-  // Build a { from?, to? } range; a lone `period` is taken as the range start.
-  const from = toDate(args.periodFrom) ?? toDate(args.period)
-  const to = toDate(args.periodTo)
+  // Turnovers/balanceAndTurnovers are intervals (StartPeriod/EndPeriod), no point form.
   const a: TurnoversArgs = {}
-  if (from !== undefined || to !== undefined) {
-    const period: { from?: Date; to?: Date } = {}
-    if (from !== undefined) period.from = from
-    if (to !== undefined) period.to = to
-    a.Period = period
-  }
+  const range = rangeFromArgs(args)
+  if (range !== undefined) a.Period = range
   if (args.condition !== undefined) a.Condition = args.condition
   if (args.dimensions !== undefined) a.Dimensions = args.dimensions
+  if (args.accountCondition !== undefined) a.AccountCondition = args.accountCondition
+  if (args.extraDimensions !== undefined) a.ExtraDimensions = args.extraDimensions
   return a
 }
 
@@ -338,21 +356,22 @@ function sliceArgs(args: RegisterQueryArgs): SliceArgs {
 
 function drCrTurnoversArgs(args: RegisterQueryArgs): DrCrTurnoversArgs {
   const a: DrCrTurnoversArgs = {}
-  const start = toDate(args.startDate)
-  const end = toDate(args.endDate)
-  if (start !== undefined) a.StartDate = start
-  if (end !== undefined) a.EndDate = end
-  if (args.accountDr !== undefined) a.AccountDr = { '@odata.bind': args.accountDr }
-  if (args.accountCr !== undefined) a.AccountCr = { '@odata.bind': args.accountCr }
+  const range = rangeFromArgs(args)
+  if (range !== undefined) a.Period = range
+  if (args.condition !== undefined) a.Condition = args.condition
+  if (args.accountCondition !== undefined) a.AccountCondition = args.accountCondition
+  if (args.balancedAccountCondition !== undefined) a.BalancedAccountCondition = args.balancedAccountCondition
+  if (args.dimensions !== undefined) a.Dimensions = args.dimensions
+  if (args.extraDimensions !== undefined) a.ExtraDimensions = args.extraDimensions
+  if (args.balancedExtraDimensions !== undefined) a.BalancedExtraDimensions = args.balancedExtraDimensions
   return a
 }
 
 function recordsWithExtDimensionsArgs(args: RegisterQueryArgs): RecordsWithExtDimensionsArgs {
   const a: RecordsWithExtDimensionsArgs = {}
-  const start = toDate(args.startDate)
-  const end = toDate(args.endDate)
-  if (start !== undefined) a.StartDate = start
-  if (end !== undefined) a.EndDate = end
+  const range = rangeFromArgs(args)
+  if (range !== undefined) a.Period = range
+  if (args.condition !== undefined) a.Condition = args.condition
   return a
 }
 
@@ -372,7 +391,7 @@ function runRegisterTable(reg: RegisterHelper<unknown>, args: RegisterQueryArgs)
     case 'drCrTurnovers':
       return reg.drCrTurnovers(drCrTurnoversArgs(args))
     case 'extDimensions':
-      return reg.extDimensions(args.accountKey !== undefined ? { Account_Key: args.accountKey } : {})
+      return reg.extDimensions()
     case 'recordsWithExtDimensions':
       return reg.recordsWithExtDimensions(recordsWithExtDimensionsArgs(args))
   }
