@@ -1,6 +1,13 @@
 import { InvalidArgumentError } from '../errors.js'
 import { parseOptsFor, parseV3Collection, parseV3Count } from '../parser.js'
-import { buildKeyFilter, chunkKeyValues, dedupeKeys, type KeyValue, mapBounded } from '../query/batch.js'
+import {
+  buildKeyFilter,
+  chunkKeyValues,
+  dedupeKeys,
+  type KeyValue,
+  type KeyValueFor,
+  mapBounded,
+} from '../query/batch.js'
 import { QueryBuilder } from '../query/builder.js'
 import { assertPositiveInt } from '../query/validate.js'
 import { buildV3CollectionUrl, buildV3CountUrl } from '../url-builder.js'
@@ -92,14 +99,14 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
    */
   async getByKeys<K extends keyof T & string>(
     field: K,
-    values: readonly KeyValue[],
+    values: readonly KeyValueFor<T, K>[],
     opts: GetByKeysOptions = {},
   ): Promise<T[]> {
     if (opts.batchSize !== undefined) assertPositiveInt(opts.batchSize, 'getByKeys({ batchSize })')
     if (opts.queryBudget !== undefined) assertPositiveInt(opts.queryBudget, 'getByKeys({ queryBudget })')
     if (opts.concurrency !== undefined) assertPositiveInt(opts.concurrency, 'getByKeys({ concurrency })')
 
-    const unique = dedupeKeys(values)
+    const unique = dedupeKeys(values as readonly KeyValue[])
     if (unique.length === 0) return []
 
     const batches =

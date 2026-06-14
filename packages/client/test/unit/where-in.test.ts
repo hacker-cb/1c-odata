@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { InvalidArgumentError } from '../../src/errors.js'
 import { QueryBuilder } from '../../src/query/builder.js'
+import type { Guid } from '../../src/types/core.js'
 
 const TZ = 'Europe/Moscow'
 const g1 = '818ed18b-76c9-11e4-8918-003048663bbb'
@@ -33,5 +34,14 @@ describe('QueryBuilder.whereIn', () => {
 
   it('throws on an empty value list', () => {
     expect(() => new QueryBuilder('Catalog_X', TZ).whereIn('Ref_Key', [])).toThrow(InvalidArgumentError)
+  })
+
+  it('constrains value types to the field at compile time', () => {
+    const q = new QueryBuilder<{ Code: string }>('Catalog_X', TZ)
+    // @ts-expect-error — a number is not assignable to the string `Code` field
+    q.whereIn('Code', [42])
+    // A branded `Guid` field still accepts plain string GUIDs (widened to string).
+    const ok = new QueryBuilder<{ Ref_Key: Guid }>('Catalog_X', TZ).whereIn('Ref_Key', [g1])
+    expect(ok.state.filter?._expr).toBe(`Ref_Key eq guid'${g1}'`)
   })
 })

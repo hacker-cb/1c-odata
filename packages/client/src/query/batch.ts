@@ -12,6 +12,16 @@ import { assertPositiveInt } from './validate.js'
 /** A value usable as a lookup key: GUID/string, number, or Int64 bigint. */
 export type KeyValue = string | number | bigint
 
+/**
+ * Values accepted for key field `K` of entity `T` by `whereIn` / `getByKeys`:
+ * the field's own type, except any `string` subtype (e.g. a branded `Guid`) is
+ * widened back to plain `string` so callers can pass ordinary string GUIDs.
+ * Non-key field types and untyped builders fall back to `KeyValue`. The effect:
+ * `whereIn('Code', [42])` is a compile error when `Code` is a string field,
+ * while `getByKeys('Ref_Key', stringGuids)` still type-checks.
+ */
+export type KeyValueFor<T, K extends keyof T> = T[K] extends string ? string : T[K] extends KeyValue ? T[K] : KeyValue
+
 export interface ChunkOptions {
   /**
    * Force a fixed maximum number of keys per batch. Deterministic batch count of
@@ -86,11 +96,14 @@ export function chunkKeyValues(values: readonly KeyValue[], opts: ChunkOptions =
   const out: KeyValue[][] = []
   let current: KeyValue[] = []
   for (const v of values) {
-    if (current.length > 0 && fits && !fits([...current, v])) {
+    // Push then test-and-rollback, so the candidate is the live array (no
+    // per-step `[...current, v]` copy → no O(n²) allocation / GC churn). `fits`
+    // reads the array synchronously and must not retain it (the measurer copies).
+    current.push(v)
+    if (current.length > 1 && fits && !fits(current)) {
+      current.pop()
       out.push(current)
       current = [v]
-    } else {
-      current.push(v)
     }
   }
   if (current.length > 0) out.push(current)
