@@ -67,6 +67,11 @@ describe('mapResponseToError', () => {
       expect(httpErr.message).toMatch(/over-long request URL|fewer OR terms/)
       // The opaque legacy phrasing must be gone.
       expect(httpErr.message).not.toContain('Unrecognized error content-type')
+      // body.message is the bare reason (no `HTTP …:` prefix), consistent with the
+      // OData-envelope path; error.message = that prefix + body.message.
+      expect(httpErr.body.message).not.toContain('HTTP ')
+      expect(httpErr.body.message).toMatch(/^Server returned a non-OData/)
+      expect(httpErr.message).toBe(`HTTP 404 Not Found: ${httpErr.body.message}`)
     })
 
     it('maps a 414 HTML body to HTTPError with the over-long-URL hint', async () => {

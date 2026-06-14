@@ -94,9 +94,13 @@ function nonODataError(status: number, statusText: string, contentType: string):
     status === 404 || status === 414
       ? 'for 404/414 this often means a wrong entity-set path or an over-long request URL — reduce the $filter (fewer OR terms), trim $select/$expand, lower the page size, or batch large key lists with getByKeys()'
       : 'the server did not return a parseable OData error body'
+  // `detail` is the bare reason stored in body.message — mirroring the OData path,
+  // where body.message is the wire message and error.message adds the
+  // `HTTP <status> …:` prefix. Sentence-cased, no trailing period (errors.ts §8).
+  const detail = `Server returned a non-OData ${ct} body — not an OData error envelope; ${hint}`
   const where = statusText ? ` ${statusText}` : ''
-  const message = `HTTP ${status}${where}: server returned a non-OData ${ct} body — not an OData error envelope; ${hint}`
-  const body: ODataErrorBody = { code: '0', message }
+  const message = `HTTP ${status}${where}: ${detail}`
+  const body: ODataErrorBody = { code: '0', message: detail }
   const opts: HTTPErrorOptions = { status, statusText, code: '0', errorFormat: 'none', body }
   return dispatchByStatus(status, message, opts)
 }
