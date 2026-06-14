@@ -141,9 +141,11 @@ async function translateAndFireError(
  *   TLS handshake, etc.). Wraps the underlying cause in `.cause`.
  * @throws {HTTPError} (and its subclasses `BusinessError`, `ConcurrencyError`,
  *   `PermissionError`) when the server returns HTTP ≥ 400. The exact subclass
- *   is decided by `mapResponseToError` based on status + `odata.error.code`.
- * @throws {ParseError} when the error response body is unparseable (invalid
- *   JSON, unrecognised content-type) — the original status is lost.
+ *   is decided by `mapResponseToError` based on status + `odata.error.code`. A
+ *   non-OData body (e.g. an IIS HTML error page) also maps here, with
+ *   `errorFormat: 'none'` and an actionable message that keeps the status.
+ * @throws {ParseError} when a body that CLAIMS to be JSON/XML is unparseable
+ *   (invalid JSON, or JSON missing the `odata.error` wrapper).
  * @throws {DOMException} `AbortError` (`error.name === 'AbortError'`) is
  *   rethrown unchanged when the user-issued `AbortSignal` fires.
  */
@@ -217,8 +219,9 @@ export async function request(
  *   TLS handshake, etc.).
  * @throws {HTTPError} (and subclasses) when the server returns HTTP ≥ 400.
  *   Note: for the error path the body IS consumed in order to map to the
- *   typed error; the caller never sees the body in that case.
- * @throws {ParseError} when the error response body is unparseable.
+ *   typed error; the caller never sees the body in that case. A non-OData body
+ *   (e.g. an HTML error page) maps to an `HTTPError` with `errorFormat: 'none'`.
+ * @throws {ParseError} when a JSON/XML-claimed error body is unparseable.
  * @throws {DOMException} `AbortError` (`error.name === 'AbortError'`) is
  *   rethrown unchanged when the user-issued `AbortSignal` fires.
  */

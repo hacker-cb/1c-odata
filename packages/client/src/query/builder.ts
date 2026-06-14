@@ -1,5 +1,7 @@
 import { InvalidArgumentError } from '../errors.js'
+import { buildKeyFilter, type KeyValue } from './batch.js'
 import { type FieldExprMap, type FilterExpression, makeFieldProxy } from './filter-internal.js'
+import { assertNonNegativeInt } from './validate.js'
 
 /**
  * Internal accumulated state of a query. Public for inspection by V3 url-builder
@@ -14,40 +16,6 @@ export interface QueryState {
   top?: number
   skip?: number
   inlineCount?: boolean
-}
-
-/**
- * Validate a non-negative integer setter argument. Throws `InvalidArgumentError`
- * with a clear message that names the parameter and shows the rejected value.
- *
- * Used by `.top()` and `.skip()` setters.
- *
- * @internal
- */
-export function assertNonNegativeInt(value: number, paramName: string): void {
-  if (!Number.isInteger(value) || value < 0) {
-    throw new InvalidArgumentError(`Invalid ${paramName}: must be a non-negative integer`, {
-      argument: paramName,
-      received: value,
-    })
-  }
-}
-
-/**
- * Validate a positive integer (>=1) argument. Same shape as
- * `assertNonNegativeInt` but rejects 0 too.
- *
- * Used by `stream({ pageSize })` to guard against infinite-loop pageSize=0.
- *
- * @internal
- */
-export function assertPositiveInt(value: number, paramName: string): void {
-  if (!Number.isInteger(value) || value < 1) {
-    throw new InvalidArgumentError(`Invalid ${paramName}: must be a positive integer`, {
-      argument: paramName,
-      received: value,
-    })
-  }
 }
 
 /**
@@ -88,6 +56,27 @@ export class QueryBuilder<T = Record<string, unknown>> {
     const ctx = { serverTimezone: this.serverTimezone, lambdaCounter: { value: 0 } }
     const f = makeFieldProxy<T>('', ctx)
     this.state.filter = fn(f)
+    return this
+  }
+
+  /**
+   * Set the `$filter` to a membership test: `field eq v1 or field eq v2 or …`.
+   * GUID-shaped string values are emitted as `guid'…'` (so `Ref_Key` and other
+   * reference fields work without `raw(...)`); other values use the normal
+   * literal rules. AND-combines with any filter already set.
+   *
+   * Pure sugar for small key sets — it builds ONE request and does NOT chunk, so
+   * a very long `values` list can blow past the server's URL/query-string limit
+   * (IIS rejects query strings over ~2048 bytes with an HTML 404). For large
+   * lists use the {@link V3QueryBuilder.getByKeys} terminal, which batches.
+   *
+   * @throws {InvalidArgumentError} if `values` is empty.
+   */
+  whereIn<K extends keyof T & string>(field: K, values: readonly KeyValue[]): this {
+    if (values.length === 0) {
+      throw new InvalidArgumentError('whereIn() requires at least one value', { argument: 'values', received: values })
+    }
+    this.state.filter = buildKeyFilter(this.state.filter, field, values, this.serverTimezone)
     return this
   }
 

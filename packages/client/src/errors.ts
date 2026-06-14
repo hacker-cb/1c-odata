@@ -23,11 +23,15 @@ export interface ODataErrorBody {
 }
 
 /**
- * Format of the wire-level error body — JSON `odata.error` (default) or XML
- * `<m:error>` (only for `$batch` and a few legacy endpoints).
+ * Format of the wire-level error body:
+ * - `'json'` — JSON `odata.error` envelope (default).
+ * - `'xml'`  — XML `<m:error>` (only for `$batch` and a few legacy endpoints).
+ * - `'none'` — the response was NOT an OData error envelope at all (e.g. an IIS
+ *   HTML error page for a 404/414). `code` is `'0'` and `message` carries an
+ *   actionable hint; see `mapResponseToError`.
  * @public
  */
-export type ErrorFormat = 'json' | 'xml'
+export type ErrorFormat = 'json' | 'xml' | 'none'
 
 /**
  * Common options accepted by every `ODataError` subclass.

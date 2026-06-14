@@ -12,6 +12,16 @@ export type Guid = `${string}-${string}-${string}-${string}-${string}`
 export const EMPTY_GUID = '00000000-0000-0000-0000-000000000000' as const
 
 /**
+ * Canonical 1С `Edm.Guid` shape matcher (hex + hyphens, case-insensitive). The
+ * single source of truth for "is this string a GUID" across the client — used
+ * to decide when a value must be emitted as `guid'…'` (key URLs, function-import
+ * refs, `whereIn` / `getByKeys` filters). Keep one copy so every path agrees.
+ *
+ * @internal
+ */
+export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
  * Default value for 1C `Edm.DateTime` (the 1C platform "дата начала отсчёта").
  * Used as the wire-level marker for "no date" in Nullable fields.
  * Library auto-maps this to `null` for Nullable Edm.DateTime fields by default;

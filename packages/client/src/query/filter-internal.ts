@@ -1,6 +1,7 @@
 // packages/client/src/query/filter-internal.ts
 import { formatNumberLiteral } from '../format-number.js'
 import { formatInZone } from '../timezone.js'
+import { GUID_RE } from '../types/core.js'
 
 declare const filterExpressionBrand: unique symbol
 declare const fieldExprBrand: unique symbol
@@ -70,6 +71,25 @@ function formatLiteral(v: unknown, ctx: CompileContext, argument: string): strin
     return (v as { _expr: string })._expr
   }
   return `'${String(v).replace(/'/g, "''")}'`
+}
+
+/**
+ * Format a lookup-key value as an OData V3 filter literal, GUID-aware. A
+ * GUID-shaped string becomes `guid'…'` (the form 1С requires for `Ref_Key` and
+ * other reference fields); every other value defers to the standard literal
+ * rules (`formatLiteral`): strings → `'…'` (apostrophes doubled), numbers via
+ * `formatNumberLiteral`, bigint → digits.
+ *
+ * Used by `.whereIn()` / `.getByKeys()` to build `field eq <lit>` chains. The
+ * DSL's own `.eq()` does NOT special-case GUIDs, so reference-field equality
+ * historically needed `raw("Ref_Key eq guid'…'")`; these helpers remove that.
+ *
+ * @internal
+ */
+export function formatKeyLiteral(value: string | number | bigint, serverTimezone: string): string {
+  if (typeof value === 'string' && GUID_RE.test(value)) return `guid'${value}'`
+  const ctx: CompileContext = { serverTimezone, lambdaCounter: { value: 0 } }
+  return formatLiteral(value, ctx, 'whereIn/getByKeys value')
 }
 
 /**

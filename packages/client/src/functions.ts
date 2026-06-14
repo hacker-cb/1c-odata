@@ -2,8 +2,7 @@
 import { InvalidArgumentError } from './errors.js'
 import { formatNumberLiteral } from './format-number.js'
 import { formatInZone } from './timezone.js'
-
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+import { GUID_RE } from './types/core.js'
 
 /**
  * Empty placeholder type — used as the default `TFunctions` for `ODataV3Client`

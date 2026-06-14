@@ -5,7 +5,7 @@ import { V3QueryBuilder } from './client/v3-query.js'
 import { InvalidArgumentError } from './errors.js'
 import { buildFunctionUrl } from './functions.js'
 import { parseOptsFor, parseV3Collection } from './parser.js'
-import { assertNonNegativeInt } from './query/builder.js'
+import { assertNonNegativeInt } from './query/validate.js'
 
 /**
  * Args for `balance()` — single point in time. Both AccumulationRegister and

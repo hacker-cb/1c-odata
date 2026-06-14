@@ -1,5 +1,6 @@
 // packages/client/src/url-builder.ts
 import type { QueryBuilder } from './query/builder.js'
+import { GUID_RE } from './types/core.js'
 
 /**
  * Composite key for entities with multiple key fields (registers).
@@ -88,7 +89,7 @@ export function formatKey(key: EntityKey): string {
 
 function formatKeyValue(v: string): string {
   // GUID-shaped: quote as guid. Hex+hyphens only — URL-safe by construction.
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) return `guid'${v}'`
+  if (GUID_RE.test(v)) return `guid'${v}'`
   // Otherwise treat as string literal. Two-step encoding: OData apostrophe
   // doubling first (so a literal `'` inside the value survives parsing), then
   // URL-encode the inner content. `encodeURIComponent` percent-encodes the

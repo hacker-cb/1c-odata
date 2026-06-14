@@ -2,7 +2,7 @@
 
 exports[`public surface — dist/index.d.ts snapshot > matches the committed snapshot 1`] = `
 "import { c as ChainedFieldExpr, d as FilterExpression, l as FieldExpr, s as toFilterString, u as FieldExprMap } from "./filter-Bpr--NeK.js";
-import { A as ODataError, C as ConcurrencyError, D as InvalidArgumentError, E as HTTPErrorOptions, F as TimeoutError, I as TimeoutErrorOptions, L as AuthOptions, M as ODataErrorOptions, N as ParseError, O as InvalidArgumentErrorOptions, P as PermissionError, R as BasicAuth, S as BusinessError, T as HTTPError, _ as RequestOptions, a as ValidationErrorOptions, b as RequestHooks, c as validateEntity, d as connectionAuth, f as defineConnection, g as MutationOptions, h as ClientOptions, i as ValidationError, j as ODataErrorBody, k as NetworkError, l as Connection, m as validateConnection, n as MetadataIndex, o as ValidationIssue, p as parseConnectionUrl, r as PropertySchema, s as ValidationResult, t as EntitySchema, u as DataShape, v as RetryPolicy, w as ErrorFormat, x as ResponseEvent, y as RequestEvent, z as BasicAuthOptions } from "./validate-qL7mIwlT.js";
+import { A as ODataError, C as ConcurrencyError, D as InvalidArgumentError, E as HTTPErrorOptions, F as TimeoutError, I as TimeoutErrorOptions, L as AuthOptions, M as ODataErrorOptions, N as ParseError, O as InvalidArgumentErrorOptions, P as PermissionError, R as BasicAuth, S as BusinessError, T as HTTPError, _ as RequestOptions, a as ValidationErrorOptions, b as RequestHooks, c as validateEntity, d as connectionAuth, f as defineConnection, g as MutationOptions, h as ClientOptions, i as ValidationError, j as ODataErrorBody, k as NetworkError, l as Connection, m as validateConnection, n as MetadataIndex, o as ValidationIssue, p as parseConnectionUrl, r as PropertySchema, s as ValidationResult, t as EntitySchema, u as DataShape, v as RetryPolicy, w as ErrorFormat, x as ResponseEvent, y as RequestEvent, z as BasicAuthOptions } from "./validate-DJR6epJh.js";
 
 //#region src/functions.d.ts
 /**
@@ -27,6 +27,10 @@ interface ODataV3FunctionsBase {
 type WithInstanceRef<TFunctions> = { [TSet in keyof TFunctions]: { [TMethod in keyof TFunctions[TSet]]: TFunctions[TSet][TMethod] extends ((args: infer A) => Promise<void>) ? (args: A & {
   ref: string;
 }) => Promise<void> : TFunctions[TSet][TMethod] } };
+//#endregion
+//#region src/query/batch.d.ts
+/** A value usable as a lookup key: GUID/string, number, or Int64 bigint. */
+type KeyValue = string | number | bigint;
 //#endregion
 //#region src/query/builder.d.ts
 /**
@@ -77,6 +81,20 @@ declare class QueryBuilder<T = Record<string, unknown>> {
    */
   filter(fn: (f: FieldExprMap<T>) => FilterExpression): this;
   /**
+   * Set the \`$filter\` to a membership test: \`field eq v1 or field eq v2 or …\`.
+   * GUID-shaped string values are emitted as \`guid'…'\` (so \`Ref_Key\` and other
+   * reference fields work without \`raw(...)\`); other values use the normal
+   * literal rules. AND-combines with any filter already set.
+   *
+   * Pure sugar for small key sets — it builds ONE request and does NOT chunk, so
+   * a very long \`values\` list can blow past the server's URL/query-string limit
+   * (IIS rejects query strings over ~2048 bytes with an HTML 404). For large
+   * lists use the {@link V3QueryBuilder.getByKeys} terminal, which batches.
+   *
+   * @throws {InvalidArgumentError} if \`values\` is empty.
+   */
+  whereIn<K extends keyof T & string>(field: K, values: readonly KeyValue[]): this;
+  /**
    * Comma-separated \`$select\`. \`'**'\` excludes tabular parts (1С extension).
    * \`'*'\` is all properties (incl. tabular — large for documents).
    */
@@ -107,7 +125,29 @@ declare class QueryBuilder<T = Record<string, unknown>> {
 //#endregion
 //#region src/client/v3-query.d.ts
 /**
- * V3-aware QueryBuilder subclass. Adds terminal methods (get/raw/count/stream).
+ * Options for {@link V3QueryBuilder.getByKeys}. Extends \`RequestOptions\`
+ * (signal / timeout / retry apply to every batch request).
+ *
+ * @public
+ */
+interface GetByKeysOptions extends RequestOptions {
+  /**
+   * Force a fixed maximum number of keys per batch. Overrides the automatic
+   * query-string budget estimation — exactly \`ceil(keys / batchSize)\` requests.
+   */
+  batchSize?: number;
+  /**
+   * Total query-string byte budget per request (default 1500). The key OR-chain
+   * is packed to keep the whole query string under this, leaving headroom below
+   * the IIS \`maxQueryString\` default of 2048. Ignored when \`batchSize\` is set.
+   */
+  queryBudget?: number;
+  /** Maximum concurrent batch requests (default 4). */
+  concurrency?: number;
+}
+/**
+ * V3-aware QueryBuilder subclass. Adds terminal methods
+ * (get/raw/count/stream/getByKeys).
  */
 declare class V3QueryBuilder<T> extends QueryBuilder<T> {
   private readonly client;
@@ -118,6 +158,37 @@ declare class V3QueryBuilder<T> extends QueryBuilder<T> {
     value: T[];
     count?: number;
   }>;
+  /**
+   * Fetch many records by a key field WITHOUT hand-building giant \`or\` chains
+   * or tripping the server's URL/query-string limit.
+   *
+   * Splits \`values\` into batches (each sized to keep the query string under
+   * \`queryBudget\`, default 1500 bytes — well below the IIS \`maxQueryString\`
+   * default of 2048), issues them with bounded concurrency, and concatenates
+   * every batch's \`.value\`. 1С OData V3 has no usable \`in\` operator, so each
+   * batch is a chunked \`field eq <lit> or …\` filter — GUID-shaped values are
+   * emitted as \`guid'…'\` automatically.
+   *
+   * \`$select\` / \`$expand\` / \`$orderby\` and any prior \`.filter(...)\` are applied
+   * to EVERY batch (the key filter is AND-combined with an existing filter).
+   * \`.top()\` / \`.skip()\` are ignored — they don't compose with key batching.
+   *
+   * **Semantics:**
+   * - **Dedup** — duplicate \`values\` are collapsed (first occurrence wins); each
+   *   distinct key is queried once.
+   * - **Order** — results follow batch order (≈ input order with a fixed
+   *   \`batchSize\`), then server order within each batch. 1С does NOT guarantee
+   *   row order without \`.orderBy()\`; set one, or re-map by key client-side, if
+   *   you need a specific order.
+   * - **Missing keys** — keys with no matching record are simply absent (no
+   *   error, no placeholder), so the result length may be \`< values.length\`.
+   *
+   * @throws {InvalidArgumentError} if \`batchSize\` / \`queryBudget\` / \`concurrency\`
+   *   is set but not a positive integer, or if \`$select\`/\`$expand\`/\`$filter\` are
+   *   so large that fewer than ~64 bytes remain for keys under \`queryBudget\`
+   *   (trim the projection or raise \`queryBudget\`).
+   */
+  getByKeys<K extends keyof T & string>(field: K, values: readonly KeyValue[], opts?: GetByKeysOptions): Promise<T[]>;
   /** Escape hatch — return native \`Response\` without parsing. */
   raw(opts?: RequestOptions): Promise<Response>;
   /** Standalone count via \`/$count\` endpoint. Preserves filter, ignores top/skip. */
@@ -703,6 +774,6 @@ interface ValueStorage {
   readonly base64Data: string;
 }
 //#endregion
-export { type AuthOptions, type BalanceArgs, BasicAuth, type BasicAuthOptions, BusinessError, type ChainedFieldExpr, type ClientOptions, ConcurrencyError, type Connection, type ConsoleHookOptions, type DataShape, type DrCrTurnoversArgs, EMPTY_GUID, type Entity, type EntityKey, type EntitySchema, type ErrorFormat, type FieldExpr, type FieldExprMap, type FilterExpression, type Guid, HTTPError, type HTTPErrorOptions, InvalidArgumentError, type InvalidArgumentErrorOptions, type MetadataIndex, type MutationOptions, NetworkError, ODataError, type ODataErrorBody, type ODataErrorOptions, ODataV3Client, type ODataV3ClientOptions, type ODataV3FunctionsBase, ONEC_EMPTY_DATE, ParseError, PermissionError, type PropertySchema, QueryBuilder, type QueryState, type ReadFiOptions, type ReadStreamResult, type RecordsWithExtDimensionsArgs, RegisterHelper, type RequestEvent, type RequestHooks, type RequestOptions, type ResponseEvent, type RetryPolicy, type SliceArgs, TimeoutError, type TimeoutErrorOptions, type TurnoversArgs, type UntypedEntity, V3DocumentHandle, V3EntityHandle, V3EntitySetHandle, V3QueryBuilder, ValidationError, type ValidationErrorOptions, type ValidationIssue, type ValidationResult, type ValueStorage, type WithInstanceRef, type WriteStreamInput, clientOptionsFromConnection, connectionAuth, consoleHook, defineConnection, formatInZone, loadMetadataIndex, normalizeBaseUrl, parseConnectionUrl, parseInZone, parseMetadataIndex, toFilterString, validateConnection, validateEntity };
+export { type AuthOptions, type BalanceArgs, BasicAuth, type BasicAuthOptions, BusinessError, type ChainedFieldExpr, type ClientOptions, ConcurrencyError, type Connection, type ConsoleHookOptions, type DataShape, type DrCrTurnoversArgs, EMPTY_GUID, type Entity, type EntityKey, type EntitySchema, type ErrorFormat, type FieldExpr, type FieldExprMap, type FilterExpression, type GetByKeysOptions, type Guid, HTTPError, type HTTPErrorOptions, InvalidArgumentError, type InvalidArgumentErrorOptions, type KeyValue, type MetadataIndex, type MutationOptions, NetworkError, ODataError, type ODataErrorBody, type ODataErrorOptions, ODataV3Client, type ODataV3ClientOptions, type ODataV3FunctionsBase, ONEC_EMPTY_DATE, ParseError, PermissionError, type PropertySchema, QueryBuilder, type QueryState, type ReadFiOptions, type ReadStreamResult, type RecordsWithExtDimensionsArgs, RegisterHelper, type RequestEvent, type RequestHooks, type RequestOptions, type ResponseEvent, type RetryPolicy, type SliceArgs, TimeoutError, type TimeoutErrorOptions, type TurnoversArgs, type UntypedEntity, V3DocumentHandle, V3EntityHandle, V3EntitySetHandle, V3QueryBuilder, ValidationError, type ValidationErrorOptions, type ValidationIssue, type ValidationResult, type ValueStorage, type WithInstanceRef, type WriteStreamInput, clientOptionsFromConnection, connectionAuth, consoleHook, defineConnection, formatInZone, loadMetadataIndex, normalizeBaseUrl, parseConnectionUrl, parseInZone, parseMetadataIndex, toFilterString, validateConnection, validateEntity };
 //# sourceMappingURL=index.d.ts.map"
 `;

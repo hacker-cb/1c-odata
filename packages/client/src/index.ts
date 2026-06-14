@@ -5,7 +5,7 @@ export type { ClientOptions, MutationOptions, RequestOptions, RetryPolicy } from
 // V3 client + handles
 export { ODataV3Client, type ODataV3ClientOptions } from './client/v3-client.js'
 export { V3DocumentHandle, V3EntityHandle, V3EntitySetHandle } from './client/v3-handles.js'
-export { V3QueryBuilder } from './client/v3-query.js'
+export { type GetByKeysOptions, V3QueryBuilder } from './client/v3-query.js'
 export type { Connection, DataShape } from './connection.js'
 export { connectionAuth, defineConnection, parseConnectionUrl, validateConnection } from './connection.js'
 export type {
@@ -33,6 +33,7 @@ export type { ConsoleHookOptions } from './hooks/console.js'
 export { consoleHook } from './hooks/console.js'
 export type { RequestEvent, RequestHooks, ResponseEvent } from './hooks/types.js'
 export { loadMetadataIndex, parseMetadataIndex } from './load-metadata-index.js'
+export type { KeyValue } from './query/batch.js'
 export type { QueryState } from './query/builder.js'
 export { QueryBuilder } from './query/builder.js'
 export type { ChainedFieldExpr, FieldExpr, FieldExprMap, FilterExpression } from './query/filter-internal.js'
