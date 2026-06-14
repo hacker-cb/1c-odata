@@ -147,7 +147,8 @@ declare class V3QueryBuilder<T> extends QueryBuilder<T> {
 /**
  * Args for \`balance()\` — single point in time. Both AccumulationRegister and
  * AccountingRegister expose \`Balance(Period)\`; the \`AccountCondition\` /
- * \`ExtraDimensions\` filters apply to AccountingRegister only (ignored elsewhere).
+ * \`ExtraDimensions\` filters are AccountingRegister-only — 1С rejects them
+ * (HTTP 501) when passed on an AccumulationRegister, so omit them there.
  */
 interface BalanceArgs {
   Period?: Date;
@@ -172,8 +173,8 @@ interface BalanceArgs {
  * rejected: the type forbids it, and an untyped (JS) caller gets an
  * \`InvalidArgumentError\` rather than a silent all-periods query.
  *
- * \`AccountCondition\` / \`ExtraDimensions\` apply to AccountingRegister turnovers
- * only (ignored on AccumulationRegister).
+ * \`AccountCondition\` / \`ExtraDimensions\` are AccountingRegister-only — 1С
+ * rejects them (HTTP 501) when passed on an AccumulationRegister, so omit them there.
  */
 interface TurnoversArgs {
   Period?: {

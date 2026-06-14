@@ -10,7 +10,8 @@ import { assertNonNegativeInt } from './query/builder.js'
 /**
  * Args for `balance()` — single point in time. Both AccumulationRegister and
  * AccountingRegister expose `Balance(Period)`; the `AccountCondition` /
- * `ExtraDimensions` filters apply to AccountingRegister only (ignored elsewhere).
+ * `ExtraDimensions` filters are AccountingRegister-only — 1С rejects them
+ * (HTTP 501) when passed on an AccumulationRegister, so omit them there.
  */
 export interface BalanceArgs {
   Period?: Date
@@ -36,8 +37,8 @@ export interface BalanceArgs {
  * rejected: the type forbids it, and an untyped (JS) caller gets an
  * `InvalidArgumentError` rather than a silent all-periods query.
  *
- * `AccountCondition` / `ExtraDimensions` apply to AccountingRegister turnovers
- * only (ignored on AccumulationRegister).
+ * `AccountCondition` / `ExtraDimensions` are AccountingRegister-only — 1С
+ * rejects them (HTTP 501) when passed on an AccumulationRegister, so omit them there.
  */
 export interface TurnoversArgs {
   Period?: { from?: Date; to?: Date }
@@ -127,7 +128,7 @@ export interface ReadFiOptions extends RequestOptions {
 function periodRange(period: { from?: Date; to?: Date } | undefined): Record<string, unknown> {
   if (period instanceof Date) {
     throw new InvalidArgumentError(
-      'register turnovers tables take a { from?, to? } range (use { from } or { from, to }), not a point Date — 1С has no single-point form for these virtual tables',
+      'Period must be a { from?, to? } range, not a point Date — these register turnover/record virtual tables have no single-point form in 1С; use { from } or { from, to }',
       { argument: 'Period', received: period },
     )
   }
