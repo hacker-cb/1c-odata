@@ -1,13 +1,6 @@
 import { InvalidArgumentError } from '../errors.js'
 import { parseOptsFor, parseV3Collection, parseV3Count } from '../parser.js'
-import {
-  buildKeyFilter,
-  chunkKeyValues,
-  DEFAULT_QUERY_BUDGET,
-  dedupeKeys,
-  type KeyValue,
-  mapBounded,
-} from '../query/batch.js'
+import { buildKeyFilter, chunkKeyValues, dedupeKeys, type KeyValue, mapBounded } from '../query/batch.js'
 import { QueryBuilder } from '../query/builder.js'
 import { assertPositiveInt } from '../query/validate.js'
 import { buildV3CollectionUrl, buildV3CountUrl } from '../url-builder.js'
@@ -15,20 +8,12 @@ import type { RequestOptions } from './options.js'
 import type { ODataV3Client } from './v3-client.js'
 
 /**
- * Smallest per-batch key-filter budget (URL-encoded bytes) that still fits at
- * least one GUID term (`(Ref_Key eq guid'…')` ≈ 63 bytes). If the fixed query
- * parts leave less than this, no key chunking can keep the request under the
- * limit — `getByKeys` throws instead of silently shipping an over-long URL.
+ * Default total query-string byte budget for one `getByKeys` batch. Conservative:
+ * well under the IIS `maxQueryString` default of 2048 bytes. Each batch's ACTUAL
+ * rendered query string is measured against this, so the limit is enforced
+ * exactly (no byte estimation). Callers can raise it via `opts.queryBudget`.
  */
-const MIN_FILTER_BUDGET = 64
-/**
- * Bytes reserved for `$filter=` join syntax that `fixedQueryLen()` does not
- * capture: the `&$filter=` key when no prior filter exists, or the ` and (…)`
- * wrapper (plus possible parens around an `or`-bearing existing filter) when one
- * does. Subtracting it keeps each batch's TOTAL query string within `queryBudget`
- * even with an existing `.filter(...)`.
- */
-const FILTER_SYNTAX_OVERHEAD = 32
+const DEFAULT_QUERY_BUDGET = 1500
 /** Default number of concurrent batch requests. */
 const DEFAULT_CONCURRENCY = 4
 
@@ -40,14 +25,16 @@ const DEFAULT_CONCURRENCY = 4
  */
 export interface GetByKeysOptions extends RequestOptions {
   /**
-   * Force a fixed maximum number of keys per batch. Overrides the automatic
-   * query-string budget estimation — exactly `ceil(keys / batchSize)` requests.
+   * Force a fixed maximum number of keys per batch — exactly
+   * `ceil(keys / batchSize)` requests. Bypasses the measured query-string budget,
+   * so the caller takes responsibility for staying under the server's URL limit.
    */
   batchSize?: number
   /**
-   * Total query-string byte budget per request (default 1500). The key OR-chain
-   * is packed to keep the whole query string under this, leaving headroom below
-   * the IIS `maxQueryString` default of 2048. Ignored when `batchSize` is set.
+   * Total query-string byte budget per request (default 1500). Keys are packed
+   * so each batch's ACTUAL rendered query string stays at or under this, leaving
+   * headroom below the IIS `maxQueryString` default of 2048. Ignored when
+   * `batchSize` is set.
    */
   queryBudget?: number
   /** Maximum concurrent batch requests (default 4). */
@@ -77,12 +64,12 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
    * Fetch many records by a key field WITHOUT hand-building giant `or` chains
    * or tripping the server's URL/query-string limit.
    *
-   * Splits `values` into batches (each sized to keep the query string under
-   * `queryBudget`, default 1500 bytes — well below the IIS `maxQueryString`
-   * default of 2048), issues them with bounded concurrency, and concatenates
-   * every batch's `.value`. 1С OData V3 has no usable `in` operator, so each
-   * batch is a chunked `field eq <lit> or …` filter — GUID-shaped values are
-   * emitted as `guid'…'` automatically.
+   * Splits `values` into batches whose ACTUAL rendered query string stays within
+   * `queryBudget` (default 1500 bytes — well below the IIS `maxQueryString`
+   * default of 2048; the length is measured, not estimated), issues them with
+   * bounded concurrency, and concatenates every batch's `.value`. 1С OData V3 has
+   * no usable `in` operator, so each batch is a chunked `field eq <lit> or …`
+   * filter — GUID-shaped values are emitted as `guid'…'` automatically.
    *
    * `$select` / `$expand` / `$orderby` and any prior `.filter(...)` are applied
    * to EVERY batch (the key filter is AND-combined with an existing filter).
@@ -99,9 +86,9 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
    *   error, no placeholder), so the result length may be `< values.length`.
    *
    * @throws {InvalidArgumentError} if `batchSize` / `queryBudget` / `concurrency`
-   *   is set but not a positive integer, or if `$select`/`$expand`/`$filter` are
-   *   so large that fewer than ~64 bytes remain for keys under `queryBudget`
-   *   (trim the projection or raise `queryBudget`).
+   *   is set but not a positive integer, or if a single key's rendered query
+   *   string already exceeds `queryBudget` (a `$select`/`$expand` so large that
+   *   chunking cannot help — trim the projection or raise `queryBudget`).
    */
   async getByKeys<K extends keyof T & string>(
     field: K,
@@ -115,24 +102,10 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
     const unique = dedupeKeys(values)
     if (unique.length === 0) return []
 
-    // Size the per-batch key filter against the budget the fixed query parts
-    // leave. Do NOT clamp UP to a floor — that would ship URLs past the IIS
-    // limit (the exact failure this method prevents). If too little remains,
-    // chunking keys cannot help, so fail with an actionable error.
-    const queryBudget = opts.queryBudget ?? DEFAULT_QUERY_BUDGET
-    const fixedLen = this.fixedQueryLen()
-    const filterBudget = queryBudget - fixedLen - FILTER_SYNTAX_OVERHEAD
-    if (filterBudget < MIN_FILTER_BUDGET) {
-      throw new InvalidArgumentError(
-        `getByKeys: $select/$expand/$orderby/$filter (~${fixedLen} bytes) leave only ${filterBudget} bytes for keys ` +
-          `under queryBudget=${queryBudget}; trim $select/$expand or raise queryBudget (keep it under ~2048)`,
-        { argument: 'queryBudget', received: queryBudget },
-      )
-    }
-    const batches = chunkKeyValues(field, unique, this.serverTimezone, {
-      ...(opts.batchSize !== undefined ? { batchSize: opts.batchSize } : {}),
-      filterBudget,
-    })
+    const batches =
+      opts.batchSize !== undefined
+        ? this.fixedBatches(unique, opts.batchSize)
+        : this.measuredBatches(field, unique, opts.queryBudget ?? DEFAULT_QUERY_BUDGET)
 
     const reqOpts: RequestOptions = {
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
@@ -144,37 +117,69 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
     return pages.flat()
   }
 
-  /** Run one `getByKeys` batch: clone the projection, set the key filter, GET. @internal */
-  private async fetchKeyBatch(field: string, batch: readonly KeyValue[], opts: RequestOptions): Promise<T[]> {
+  /** Fixed-size batches (caller-controlled, no budget guarantee). @internal */
+  private fixedBatches(keys: readonly KeyValue[], batchSize: number): KeyValue[][] {
+    return chunkKeyValues(keys, { batchSize })
+  }
+
+  /**
+   * Budget-driven batches: pack keys until a batch's ACTUAL rendered query
+   * string would exceed `budget`. The url-builder is the single source of truth,
+   * so the limit is enforced exactly — no byte/encoding/parenthesisation
+   * estimation. A lone key whose own query string is over budget can't be
+   * chunked away, so surface it as an actionable error. @internal
+   */
+  private measuredBatches(field: string, keys: readonly KeyValue[], budget: number): KeyValue[][] {
+    const fits = (batch: readonly KeyValue[]): boolean => this.keyBatchQueryLen(field, batch) <= budget
+    const batches = chunkKeyValues(keys, { fits })
+    const overBudget = batches.find((b) => b.length === 1 && !fits(b))
+    if (overBudget) {
+      const got = this.keyBatchQueryLen(field, overBudget)
+      throw new InvalidArgumentError(
+        `getByKeys: a single key's query string (~${got} bytes) exceeds queryBudget=${budget}; ` +
+          `trim $select/$expand or raise queryBudget (keep it under ~2048)`,
+        { argument: 'queryBudget', received: budget },
+      )
+    }
+    return batches
+  }
+
+  /** A projection clone with the batch's key filter set — used to measure and to fetch. @internal */
+  private batchQuery(field: string, batch: readonly KeyValue[]): V3QueryBuilder<T> {
     const q = this.cloneProjection()
     q.state.filter = buildKeyFilter(this.state.filter, field, batch, this.serverTimezone)
-    const { value } = await q.get(opts)
+    return q
+  }
+
+  /**
+   * Length of one batch's query string AS THE WIRE SEES IT (excluding the leading
+   * `?`). Measured through `new URL(...)`, the same normalization `fetch` applies
+   * before sending — crucially, for an `http(s)` URL it percent-encodes `'` →
+   * `%27`, so the apostrophes in `guid'…'` literals count at their true sent
+   * length. Measuring the raw builder string instead would under-count. @internal
+   */
+  private keyBatchQueryLen(field: string, batch: readonly KeyValue[]): number {
+    const url = buildV3CollectionUrl(this.client.baseUrl, this.batchQuery(field, batch))
+    const search = new URL(url).search
+    return search.length > 0 ? search.length - 1 : 0
+  }
+
+  /** Run one `getByKeys` batch: build the batch query and GET its `.value`. @internal */
+  private async fetchKeyBatch(field: string, batch: readonly KeyValue[], opts: RequestOptions): Promise<T[]> {
+    const { value } = await this.batchQuery(field, batch).get(opts)
     return value
   }
 
   /**
-   * Encoded length of the current query string MINUS the key filter — i.e. the
-   * fixed cost (`$format` + `$select` + `$expand` + `$orderby` + any existing
-   * `$filter`) that every batch carries. Subtracted from `queryBudget` to size
-   * the per-batch key filter. @internal
-   */
-  private fixedQueryLen(): number {
-    const url = buildV3CollectionUrl(this.client.baseUrl, this.cloneProjection())
-    const q = url.indexOf('?')
-    return q >= 0 ? url.length - q - 1 : 0
-  }
-
-  /**
    * Build a fresh builder carrying only the projection state — `$select` /
-   * `$expand` / `$orderby` (and `filter` when explicitly passed). Deliberately
-   * drops `top` / `skip` / `inlineCount`, which don't compose with batching. @internal
+   * `$expand` / `$orderby`. Deliberately drops `top` / `skip` / `inlineCount`,
+   * which don't compose with batching; the key `filter` is set by the caller. @internal
    */
-  private cloneProjection(filter = this.state.filter): V3QueryBuilder<T> {
+  private cloneProjection(): V3QueryBuilder<T> {
     const q = new V3QueryBuilder<T>(this.entitySet, this.client)
     if (this.state.select) q.state.select = this.state.select
     if (this.state.expand) q.state.expand = this.state.expand
     if (this.state.orderBy) q.state.orderBy = this.state.orderBy
-    if (filter) q.state.filter = filter
     return q
   }
 

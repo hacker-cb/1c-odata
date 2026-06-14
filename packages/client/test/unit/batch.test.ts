@@ -19,48 +19,46 @@ describe('dedupeKeys', () => {
 describe('chunkKeyValues — fixed batchSize', () => {
   it('splits N keys into ceil(N / batchSize) batches', () => {
     const values = Array.from({ length: 23 }, (_, i) => guid(i))
-    const batches = chunkKeyValues('Ref_Key', values, TZ, { batchSize: 5 })
+    const batches = chunkKeyValues(values, { batchSize: 5 })
     expect(batches.map((b) => b.length)).toEqual([5, 5, 5, 5, 3])
     expect(batches.flat()).toEqual(values) // order preserved, nothing dropped
   })
 
   it('one batch when batchSize >= N', () => {
-    expect(chunkKeyValues('Ref_Key', [guid(1), guid(2)], TZ, { batchSize: 10 })).toHaveLength(1)
+    expect(chunkKeyValues([guid(1), guid(2)], { batchSize: 10 })).toHaveLength(1)
   })
 
   it('rejects a non-positive batchSize', () => {
-    expect(() => chunkKeyValues('Ref_Key', [guid(1)], TZ, { batchSize: 0 })).toThrow(InvalidArgumentError)
-    expect(() => chunkKeyValues('Ref_Key', [guid(1)], TZ, { batchSize: 1.5 })).toThrow(InvalidArgumentError)
+    expect(() => chunkKeyValues([guid(1)], { batchSize: 0 })).toThrow(InvalidArgumentError)
+    expect(() => chunkKeyValues([guid(1)], { batchSize: 1.5 })).toThrow(InvalidArgumentError)
   })
 
   it('returns [] for empty input', () => {
-    expect(chunkKeyValues('Ref_Key', [], TZ, { batchSize: 5 })).toEqual([])
+    expect(chunkKeyValues([], { batchSize: 5 })).toEqual([])
   })
 })
 
-describe('chunkKeyValues — query-string budget', () => {
-  const values = Array.from({ length: 24 }, (_, i) => guid(i))
+describe('chunkKeyValues — fit predicate', () => {
+  const values = Array.from({ length: 23 }, (_, i) => guid(i))
 
-  it('packs multiple keys per batch under a generous budget, recovering all keys', () => {
-    const batches = chunkKeyValues('Ref_Key', values, TZ, { filterBudget: 1500 })
-    expect(batches.length).toBeGreaterThan(1)
-    expect(batches.flat()).toEqual(values)
-    expect(batches.every((b) => b.length > 0)).toBe(true)
-    // Each batch's encoded OR-chain stays within budget (single-key batches exempt).
-    for (const b of batches) {
-      const encoded = encodeURIComponent(toFilterString(buildKeyFilter(undefined, 'Ref_Key', b, TZ)))
-      if (b.length > 1) expect(encoded.length).toBeLessThanOrEqual(1500)
-    }
+  it('grows a batch until the next key would make it not fit', () => {
+    // Synthetic predicate: a batch of <= 7 keys "fits". Greedy → [7,7,7,2].
+    const batches = chunkKeyValues(values, { fits: (b) => b.length <= 7 })
+    expect(batches.map((b) => b.length)).toEqual([7, 7, 7, 2])
+    expect(batches.flat()).toEqual(values) // nothing dropped, order preserved
   })
 
-  it('a tiny budget forces one key per batch (never splits a key)', () => {
-    const batches = chunkKeyValues('Ref_Key', values, TZ, { filterBudget: 1 })
-    expect(batches).toHaveLength(24)
-    expect(batches.every((b) => b.length === 1)).toBe(true)
+  it('never splits a key — a key that alone fails `fits` still gets its own batch', () => {
+    const batches = chunkKeyValues([guid(1), guid(2), guid(3)], { fits: () => false })
+    expect(batches).toEqual([[guid(1)], [guid(2)], [guid(3)]])
   })
 
-  it('a huge budget yields a single batch', () => {
-    expect(chunkKeyValues('Ref_Key', values, TZ, { filterBudget: 100_000 })).toHaveLength(1)
+  it('a permissive predicate yields a single batch', () => {
+    expect(chunkKeyValues(values, { fits: () => true })).toHaveLength(1)
+  })
+
+  it('with neither batchSize nor fits, everything lands in one batch', () => {
+    expect(chunkKeyValues(values)).toEqual([values])
   })
 })
 

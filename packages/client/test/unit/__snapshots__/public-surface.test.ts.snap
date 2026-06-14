@@ -132,14 +132,16 @@ declare class QueryBuilder<T = Record<string, unknown>> {
  */
 interface GetByKeysOptions extends RequestOptions {
   /**
-   * Force a fixed maximum number of keys per batch. Overrides the automatic
-   * query-string budget estimation — exactly \`ceil(keys / batchSize)\` requests.
+   * Force a fixed maximum number of keys per batch — exactly
+   * \`ceil(keys / batchSize)\` requests. Bypasses the measured query-string budget,
+   * so the caller takes responsibility for staying under the server's URL limit.
    */
   batchSize?: number;
   /**
-   * Total query-string byte budget per request (default 1500). The key OR-chain
-   * is packed to keep the whole query string under this, leaving headroom below
-   * the IIS \`maxQueryString\` default of 2048. Ignored when \`batchSize\` is set.
+   * Total query-string byte budget per request (default 1500). Keys are packed
+   * so each batch's ACTUAL rendered query string stays at or under this, leaving
+   * headroom below the IIS \`maxQueryString\` default of 2048. Ignored when
+   * \`batchSize\` is set.
    */
   queryBudget?: number;
   /** Maximum concurrent batch requests (default 4). */
@@ -162,12 +164,12 @@ declare class V3QueryBuilder<T> extends QueryBuilder<T> {
    * Fetch many records by a key field WITHOUT hand-building giant \`or\` chains
    * or tripping the server's URL/query-string limit.
    *
-   * Splits \`values\` into batches (each sized to keep the query string under
-   * \`queryBudget\`, default 1500 bytes — well below the IIS \`maxQueryString\`
-   * default of 2048), issues them with bounded concurrency, and concatenates
-   * every batch's \`.value\`. 1С OData V3 has no usable \`in\` operator, so each
-   * batch is a chunked \`field eq <lit> or …\` filter — GUID-shaped values are
-   * emitted as \`guid'…'\` automatically.
+   * Splits \`values\` into batches whose ACTUAL rendered query string stays within
+   * \`queryBudget\` (default 1500 bytes — well below the IIS \`maxQueryString\`
+   * default of 2048; the length is measured, not estimated), issues them with
+   * bounded concurrency, and concatenates every batch's \`.value\`. 1С OData V3 has
+   * no usable \`in\` operator, so each batch is a chunked \`field eq <lit> or …\`
+   * filter — GUID-shaped values are emitted as \`guid'…'\` automatically.
    *
    * \`$select\` / \`$expand\` / \`$orderby\` and any prior \`.filter(...)\` are applied
    * to EVERY batch (the key filter is AND-combined with an existing filter).
@@ -184,9 +186,9 @@ declare class V3QueryBuilder<T> extends QueryBuilder<T> {
    *   error, no placeholder), so the result length may be \`< values.length\`.
    *
    * @throws {InvalidArgumentError} if \`batchSize\` / \`queryBudget\` / \`concurrency\`
-   *   is set but not a positive integer, or if \`$select\`/\`$expand\`/\`$filter\` are
-   *   so large that fewer than ~64 bytes remain for keys under \`queryBudget\`
-   *   (trim the projection or raise \`queryBudget\`).
+   *   is set but not a positive integer, or if a single key's rendered query
+   *   string already exceeds \`queryBudget\` (a \`$select\`/\`$expand\` so large that
+   *   chunking cannot help — trim the projection or raise \`queryBudget\`).
    */
   getByKeys<K extends keyof T & string>(field: K, values: readonly KeyValue[], opts?: GetByKeysOptions): Promise<T[]>;
   /** Escape hatch — return native \`Response\` without parsing. */

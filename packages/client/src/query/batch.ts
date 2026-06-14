@@ -2,8 +2,8 @@
 //
 // Batched lookup-by-key support shared by `.whereIn()` (filter sugar) and
 // `.getByKeys()` (chunking terminal). Kept in one small, dependency-light module
-// so the chunking math and the bounded-concurrency runner are unit-testable in
-// isolation, without an HTTP round-trip.
+// so the chunking algorithm and the bounded-concurrency runner are unit-testable
+// in isolation, without an HTTP round-trip.
 
 import { and, or, raw } from '../filter.js'
 import { type FilterExpression, formatKeyLiteral } from './filter-internal.js'
@@ -12,29 +12,20 @@ import { assertPositiveInt } from './validate.js'
 /** A value usable as a lookup key: GUID/string, number, or Int64 bigint. */
 export type KeyValue = string | number | bigint
 
-/**
- * Default total query-string byte budget for one batched request. Conservative:
- * well under the IIS `maxQueryString` default of 2048 bytes, so `$select` /
- * `$expand` / `$orderby` / `$format` fit in the remaining headroom. The single
- * source of truth for the budget — `getByKeys` subtracts the fixed query parts
- * from this to size each batch's key filter.
- */
-export const DEFAULT_QUERY_BUDGET = 1500
-
-/** URL-encoded length of the ` or ` term separator. */
-const OR_SEPARATOR_LEN = encodeURIComponent(' or ').length
-
 export interface ChunkOptions {
   /**
-   * Force a fixed maximum number of keys per batch. Overrides the length-budget
-   * estimation entirely — deterministic batch count of `ceil(n / batchSize)`.
+   * Force a fixed maximum number of keys per batch. Deterministic batch count of
+   * `ceil(n / batchSize)`. Takes precedence over `fits`.
    */
   batchSize?: number
   /**
-   * URL-encoded byte budget for the OR-chain `$filter` value. Defaults to
-   * `DEFAULT_QUERY_BUDGET`. Ignored when `batchSize` is set.
+   * Greedy fit predicate: returns whether a candidate batch is acceptable (e.g.
+   * its rendered request URL is within budget). A batch grows until adding the
+   * next key would make `fits` false. The caller owns the actual measurement, so
+   * `chunkKeyValues` stays free of URL/encoding knowledge. With neither
+   * `batchSize` nor `fits`, everything lands in a single batch.
    */
-  filterBudget?: number
+  fits?: (batch: readonly KeyValue[]) => boolean
 }
 
 /** Remove duplicate keys, preserving first-seen order. */
@@ -69,24 +60,18 @@ export function buildKeyFilter(
 }
 
 /**
- * Split key values into batches that each fit within the query-string budget.
- *
- * Two modes:
+ * Split key values into batches. Two modes:
  *  - `batchSize` set → fixed chunks of that size (deterministic count).
- *  - otherwise → greedily pack `field eq <lit>` terms (measured URL-encoded,
- *    plus ` or ` separators) until adding the next would exceed `filterBudget`.
+ *  - `fits` set → greedily grow a batch until adding the next key would make
+ *    `fits` false, then start a new one.
  *
- * A single term that alone exceeds the budget still gets its own batch — a key
- * is never split. Returns `[]` for empty input.
+ * A key is never split: the first key of a batch always goes in, even if it
+ * alone fails `fits` (the caller surfaces that as an error, since chunking
+ * cannot help). Returns `[]` for empty input.
  *
  * @internal
  */
-export function chunkKeyValues(
-  field: string,
-  values: readonly KeyValue[],
-  serverTimezone: string,
-  opts: ChunkOptions = {},
-): KeyValue[][] {
+export function chunkKeyValues(values: readonly KeyValue[], opts: ChunkOptions = {}): KeyValue[][] {
   if (values.length === 0) return []
 
   if (opts.batchSize !== undefined) {
@@ -97,24 +82,16 @@ export function chunkKeyValues(
     return out
   }
 
-  const budget = opts.filterBudget ?? DEFAULT_QUERY_BUDGET
+  const fits = opts.fits
   const out: KeyValue[][] = []
   let current: KeyValue[] = []
-  let currentLen = 0
   for (const v of values) {
-    // Match `buildKeyFilter`'s wire output: `or()` wraps each term in parens, so
-    // estimate the parenthesised, URL-encoded length. (Over-counts a lone term
-    // by the 2 parens `or()` omits for length 1 — safely conservative.)
-    const termLen = encodeURIComponent(`(${field} eq ${formatKeyLiteral(v, serverTimezone)})`).length
-    const addLen = current.length === 0 ? termLen : OR_SEPARATOR_LEN + termLen
-    if (current.length > 0 && currentLen + addLen > budget) {
+    if (current.length > 0 && fits && !fits([...current, v])) {
       out.push(current)
       current = [v]
-      currentLen = termLen
-      continue
+    } else {
+      current.push(v)
     }
-    current.push(v)
-    currentLen += addLen
   }
   if (current.length > 0) out.push(current)
   return out

@@ -61,7 +61,7 @@ describe('getByKeys', () => {
     expect(rows.map((r) => r.Ref_Key)).toEqual(guids) // concatenated in batch (= input) order
   })
 
-  it('auto-chunks a long GUID list (no batchSize) keeping each query string well under 2048 bytes', async () => {
+  it('auto-chunks a long GUID list (no batchSize), every batch within the default 1500-byte budget', async () => {
     const calls = stubEcho()
     // 24 GUIDs + a 5-field nested select + expand — the exact shape that returned
     // an HTML 404 against the live base before this helper existed.
@@ -77,7 +77,10 @@ describe('getByKeys', () => {
     expect(calls.length).toBeGreaterThan(1) // it actually split
     expect(new Set(rows.map((r) => r.Ref_Key))).toEqual(new Set(guids)) // all recovered
     for (const c of calls) {
-      expect(c.queryLen).toBeLessThan(2048) // the whole point: under the IIS limit
+      // `queryLen` is the wire query string MSW received (after fetch's URL
+      // normalization, e.g. ' → %27) — the same form getByKeys measures. Exact
+      // guarantee: never exceeds the default queryBudget (1500), comfortably < 2048.
+      expect(c.queryLen).toBeLessThanOrEqual(1500)
       expect(c.select).toBe('Ref_Key,Номенклатура_Key,Номенклатура/Description,Номенклатура/ВидНоменклатуры_Key')
       expect(c.expand).toBe('Номенклатура') // projection preserved on every batch
     }
