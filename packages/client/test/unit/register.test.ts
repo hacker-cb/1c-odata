@@ -1,4 +1,10 @@
-import { BasicAuth, InvalidArgumentError, ODataV3Client, type TurnoversArgs } from '@1c-odata/client'
+import {
+  BasicAuth,
+  type DrCrTurnoversArgs,
+  InvalidArgumentError,
+  ODataV3Client,
+  type TurnoversArgs,
+} from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -147,7 +153,7 @@ describe('RegisterHelper.sliceFirst / sliceLast (IR)', () => {
 })
 
 describe('RegisterHelper bookkeeping methods (AR)', () => {
-  it('drCrTurnovers passes StartDate/EndDate', async () => {
+  it('drCrTurnovers maps the range to StartPeriod/EndPeriod and forwards AccountCondition', async () => {
     let url: string | null = null
     server.use(
       http.get(/\/AccountingRegister_X\/DrCrTurnovers\(\).*/, ({ request }) => {
@@ -157,14 +163,25 @@ describe('RegisterHelper bookkeeping methods (AR)', () => {
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     await c.register('AccountingRegister_X').drCrTurnovers({
-      StartDate: new Date(2025, 0, 1),
-      EndDate: new Date(2025, 11, 31),
+      Period: { from: new Date(2025, 0, 1), to: new Date(2025, 11, 31) },
+      AccountCondition: "Account_Key eq guid'g1'",
     })
-    expect(url).toContain('StartDate=datetime')
-    expect(url).toContain('EndDate=datetime')
+    // 1С AccountingRegister DrCrTurnovers takes StartPeriod/EndPeriod (StartDate/EndDate 501 live)
+    // and string AccountCondition (NOT @odata.bind AccountDr/AccountCr, which don't exist in the schema).
+    expect(url).toContain('StartPeriod=datetime')
+    expect(url).toContain('EndPeriod=datetime')
+    expect(url).not.toContain('StartDate')
+    expect(url).not.toContain('EndDate')
+    expect(url !== null && decodeURIComponent(url)).toContain("AccountCondition='Account_Key eq guid")
   })
 
-  it('extDimensions passes Account_Key', async () => {
+  it('drCrTurnovers rejects a bare Date period at runtime', async () => {
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    const args = { Period: new Date(2025, 0, 1) } as unknown as DrCrTurnoversArgs
+    await expect(c.register('AccountingRegister_X').drCrTurnovers(args)).rejects.toThrow(InvalidArgumentError)
+  })
+
+  it('extDimensions calls ExtDimensions() with no parameters', async () => {
     let url: string | null = null
     server.use(
       http.get(/\/AccountingRegister_X\/ExtDimensions\(\).*/, ({ request }) => {
@@ -173,12 +190,12 @@ describe('RegisterHelper bookkeeping methods (AR)', () => {
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    await c.register('AccountingRegister_X').extDimensions({ Account_Key: 'g' })
-    // `request.url` is percent-encoded by MSW (`'` → `%27`); decode before asserting.
-    expect(url !== null && decodeURIComponent(url)).toContain("Account_Key='g'")
+    await c.register('AccountingRegister_X').extDimensions()
+    expect(url).toContain('AccountingRegister_X/ExtDimensions()')
+    expect(url).not.toContain('Account_Key')
   })
 
-  it('recordsWithExtDimensions passes StartDate/EndDate', async () => {
+  it('recordsWithExtDimensions maps the range to StartPeriod/EndPeriod and forwards Top', async () => {
     let url: string | null = null
     server.use(
       http.get(/\/AccountingRegister_X\/RecordsWithExtDimensions\(\).*/, ({ request }) => {
@@ -188,27 +205,67 @@ describe('RegisterHelper bookkeeping methods (AR)', () => {
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     await c.register('AccountingRegister_X').recordsWithExtDimensions({
-      StartDate: new Date(2025, 0, 1),
-      EndDate: new Date(2025, 11, 31),
+      Period: { from: new Date(2025, 0, 1), to: new Date(2025, 11, 31) },
+      Top: 10,
     })
-    expect(url).toContain('StartDate=datetime')
+    expect(url).toContain('StartPeriod=datetime')
+    expect(url).toContain('EndPeriod=datetime')
+    expect(url).not.toContain('StartDate')
+    expect(url).toContain('Top=10')
   })
+})
 
-  it('drCrTurnovers serializes @odata.bind args correctly', async () => {
+describe('RegisterHelper ReadFiOptions ($top)', () => {
+  it('appends $top to a FI with args (after &)', async () => {
     let url: string | null = null
     server.use(
-      http.get(/\/AccountingRegister_X\/DrCrTurnovers\(\).*/, ({ request }) => {
+      http.get(/\/AccumulationRegister_X\/Balance\(\).*/, ({ request }) => {
         url = request.url
         return HttpResponse.json({ 'odata.metadata': '#X', value: [] })
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    await c.register('AccountingRegister_X').drCrTurnovers({
-      AccountDr: { '@odata.bind': "ChartOfAccounts_X(guid'g1')" },
-      AccountCr: { '@odata.bind': "ChartOfAccounts_X(guid'g2')" },
+    await c.register('AccumulationRegister_X').balance({ Period: new Date(2025, 0, 1) }, { top: 5 })
+    expect(url !== null && decodeURIComponent(url)).toContain('$top=5')
+    expect(url).toContain('Period=datetime')
+  })
+
+  it('appends $top to a no-arg FI (after ?)', async () => {
+    let url: string | null = null
+    server.use(
+      http.get(/\/AccountingRegister_X\/ExtDimensions\(\).*/, ({ request }) => {
+        url = request.url
+        return HttpResponse.json({ 'odata.metadata': '#X', value: [] })
+      }),
+    )
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    await c.register('AccountingRegister_X').extDimensions({ top: 3 })
+    expect(url !== null && decodeURIComponent(url)).toContain('ExtDimensions()?$top=3')
+  })
+
+  it('rejects a non-integer $top before issuing the request', async () => {
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    await expect(c.register('AccumulationRegister_X').balance({}, { top: 1.5 })).rejects.toThrow(InvalidArgumentError)
+    await expect(c.register('AccumulationRegister_X').balance({}, { top: -1 })).rejects.toThrow(InvalidArgumentError)
+  })
+})
+
+describe('RegisterHelper forwards AccountingRegister filters on shared FIs', () => {
+  it('turnovers() forwards AccountCondition (not silently dropped on an AccountingRegister)', async () => {
+    let url: string | null = null
+    server.use(
+      http.get(/\/AccountingRegister_X\/Turnovers\(\).*/, ({ request }) => {
+        url = request.url
+        return HttpResponse.json({ 'odata.metadata': '#X', value: [] })
+      }),
+    )
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    await c.register('AccountingRegister_X').turnovers({
+      Period: { from: new Date(2025, 0, 1), to: new Date(2025, 11, 31) },
+      AccountCondition: "Account_Key eq guid'g1'",
+      ExtraDimensions: "Субконто1 eq guid'g2'",
     })
-    expect(url).not.toContain('[object Object]')
-    expect(decodeURIComponent(url!)).toContain(`AccountDr='ChartOfAccounts_X(guid''g1'')'`)
-    expect(decodeURIComponent(url!)).toContain(`AccountCr='ChartOfAccounts_X(guid''g2'')'`)
+    expect(url !== null && decodeURIComponent(url)).toContain("AccountCondition='Account_Key eq guid")
+    expect(url !== null && decodeURIComponent(url)).toContain("ExtraDimensions='Субконто1 eq guid")
   })
 })

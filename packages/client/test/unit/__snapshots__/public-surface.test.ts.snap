@@ -145,26 +145,36 @@ declare class V3QueryBuilder<T> extends QueryBuilder<T> {
 //#endregion
 //#region src/register.d.ts
 /**
- * Args for \`balance()\` — single point in time.
+ * Args for \`balance()\` — single point in time. Both AccumulationRegister and
+ * AccountingRegister expose \`Balance(Period)\`; the \`AccountCondition\` /
+ * \`ExtraDimensions\` filters are AccountingRegister-only — 1С rejects them
+ * (HTTP 501) when passed on an AccumulationRegister, so omit them there.
  */
 interface BalanceArgs {
   Period?: Date;
   Condition?: string;
   Dimensions?: string;
+  /** AccountingRegister only — condition on the account (\`AccountCondition\`). */
+  AccountCondition?: string;
+  /** AccountingRegister only — ext-dimension condition (\`ExtraDimensions\`). */
+  ExtraDimensions?: string;
 }
 /**
  * Args for \`turnovers()\` / \`balanceAndTurnovers()\`. Turnovers are always
  * computed over an interval, so \`Period\` is a \`{ from?, to? }\` range that maps
- * to the AccumulationRegister \`StartPeriod\` / \`EndPeriod\` virtual-table
- * parameters. Both bounds are optional (both are nullable in the 1С EDMX
- * schema): pass only \`from\` for an open-ended-forward range, only \`to\` for
- * everything up to a date, or omit \`Period\` entirely for all turnovers.
+ * to the \`StartPeriod\` / \`EndPeriod\` virtual-table parameters. Both bounds are
+ * optional (both are nullable in the 1С EDMX schema): pass only \`from\` for an
+ * open-ended-forward range, only \`to\` for everything up to a date, or omit
+ * \`Period\` entirely for all turnovers.
  *
  * Unlike \`balance()\` there is no single-point form — 1С exposes no \`Period\`
  * (point) parameter on the \`Turnovers\` / \`BalanceAndTurnovers\` virtual tables
  * (verified live against УТ 11.1 / 11.5 and БП 3.0), so a bare \`Date\` is
  * rejected: the type forbids it, and an untyped (JS) caller gets an
  * \`InvalidArgumentError\` rather than a silent all-periods query.
+ *
+ * \`AccountCondition\` / \`ExtraDimensions\` are AccountingRegister-only — 1С
+ * rejects them (HTTP 501) when passed on an AccumulationRegister, so omit them there.
  */
 interface TurnoversArgs {
   Period?: {
@@ -173,6 +183,10 @@ interface TurnoversArgs {
   };
   Condition?: string;
   Dimensions?: string;
+  /** AccountingRegister only — condition on the account (\`AccountCondition\`). */
+  AccountCondition?: string;
+  /** AccountingRegister only — ext-dimension condition (\`ExtraDimensions\`). */
+  ExtraDimensions?: string;
 }
 /**
  * Args for InformationRegister \`sliceFirst()\` / \`sliceLast()\` — single point
@@ -183,39 +197,75 @@ interface SliceArgs {
   Condition?: string;
 }
 /**
- * Args for AccountingRegister \`drCrTurnovers()\` — debit/credit turnovers in a
- * date range, optionally filtered by Dr/Cr account refs (\`@odata.bind\`).
+ * Args for AccountingRegister \`drCrTurnovers()\` — debit/credit turnovers over a
+ * \`Period\` range (mapped to \`StartPeriod\` / \`EndPeriod\`). Accounts are filtered
+ * through the string condition parameters, e.g.
+ * \`AccountCondition: "Account_Key eq guid'…'"\` — 1С exposes no \`@odata.bind\`
+ * account parameters on this virtual table (confirmed against БП 3.0).
  */
 interface DrCrTurnoversArgs {
-  StartDate?: Date;
-  EndDate?: Date;
-  AccountDr?: {
-    '@odata.bind': string;
+  Period?: {
+    from?: Date;
+    to?: Date;
   };
-  AccountCr?: {
-    '@odata.bind': string;
-  };
-}
-/**
- * Args for AccountingRegister \`extDimensions()\` — extra dimensions for a
- * given account.
- */
-interface ExtDimensionsArgs {
-  Account_Key?: string;
+  Condition?: string;
+  /** Condition on the main account (\`AccountCondition\`). */
+  AccountCondition?: string;
+  /** Condition on the corresponding / balanced account (\`BalancedAccountCondition\`). */
+  BalancedAccountCondition?: string;
+  Dimensions?: string;
+  /** Ext-dimension condition for the main account (\`ExtraDimensions\`). */
+  ExtraDimensions?: string;
+  /** Ext-dimension condition for the corresponding account (\`BalancedExtraDimensions\`). */
+  BalancedExtraDimensions?: string;
 }
 /**
  * Args for AccountingRegister \`recordsWithExtDimensions()\` — records together
- * with extra dimensions in a date range.
+ * with their extra dimensions over a \`Period\` range (mapped to \`StartPeriod\` /
+ * \`EndPeriod\`).
  */
 interface RecordsWithExtDimensionsArgs {
-  StartDate?: Date;
-  EndDate?: Date;
+  Period?: {
+    from?: Date;
+    to?: Date;
+  };
+  Condition?: string;
+  /** 1С ordering expression (\`Order\` parameter). */
+  Order?: string;
+  /**
+   * The virtual table's own \`Top\` parameter — caps the records the FI computes
+   * server-side. Distinct from {@link ReadFiOptions.top} (\`$top\`), which caps the
+   * rows in the OData response; both may be set independently.
+   */
+  Top?: number;
+}
+/**
+ * System query options applied to a virtual-table FI call, plus the per-call
+ * {@link RequestOptions} (\`signal\` / \`timeout\` / \`retry\`) honoured by every read
+ * path. \`$top\` bounds the response — register FIs can return very large
+ * collections (e.g. \`Balance\` / \`ExtDimensions\` over a big AccountingRegister),
+ * and without a bound the whole collection is fetched and parsed.
+ */
+interface ReadFiOptions extends RequestOptions {
+  /**
+   * \`$top\` — cap the number of rows in the response. Must be a non-negative
+   * integer. Distinct from any FI-specific \`Top\` argument (e.g.
+   * {@link RecordsWithExtDimensionsArgs.Top}), which is a virtual-table parameter.
+   */
+  top?: number;
 }
 /**
  * Facade over the V3 client for register-style entity sets. Provides:
- *   - \`recordsets()\` — query against the parent register EntitySet (RecordSet rows)
- *   - \`records()\` — query against \`<set>_RecordType\` (flat per-record movements)
- *   - \`balance()\` / \`turnovers()\` / \`balanceAndTurnovers()\` — virtual-table FI wrappers
+ *   - \`recordsets()\` — query the parent register EntitySet (RecordSet rows)
+ *   - \`records()\` — query \`<set>_RecordType\` (flat per-record movements)
+ *   - AccumulationRegister: \`balance()\` / \`turnovers()\` / \`balanceAndTurnovers()\`
+ *   - InformationRegister: \`sliceFirst()\` / \`sliceLast()\`
+ *   - AccountingRegister: \`drCrTurnovers()\` / \`extDimensions()\` / \`recordsWithExtDimensions()\`
+ *     (also \`balance()\` / \`turnovers()\` / \`balanceAndTurnovers()\`)
+ *
+ * Every virtual-table method takes an optional trailing {@link ReadFiOptions}
+ * (\`$top\` + per-call \`signal\` / \`timeout\` / \`retry\`) — useful for the large
+ * collections big registers return.
  *
  * See spec §4.7.
  */
@@ -227,28 +277,43 @@ declare class RegisterHelper<T> {
   recordsets(): V3QueryBuilder<T>;
   /** Query \`<set>_RecordType\`. Used for flat per-record server-side filtering. */
   records<R = Record<string, unknown>>(): V3QueryBuilder<R>;
-  /** Virtual-table FI: balance at \`Period\`. AccumulationRegister. */
-  balance<R = Record<string, unknown>>(args?: BalanceArgs): Promise<R[]>;
-  /** Virtual-table FI: turnovers over a \`Period\` range. AccumulationRegister. */
-  turnovers<R = Record<string, unknown>>(args?: TurnoversArgs): Promise<R[]>;
-  /** Virtual-table FI: balance + turnovers over a \`Period\` range. AccumulationRegister. */
-  balanceAndTurnovers<R = Record<string, unknown>>(args?: TurnoversArgs): Promise<R[]>;
-  /** Virtual-table FI: slice at the first row before/at \`Period\`. InformationRegister. */
-  sliceFirst<R = Record<string, unknown>>(args?: SliceArgs): Promise<R[]>;
-  /** Virtual-table FI: slice at the last row before/at \`Period\`. InformationRegister. */
-  sliceLast<R = Record<string, unknown>>(args?: SliceArgs): Promise<R[]>;
-  /** Virtual-table FI: Dr/Cr turnovers in \`[StartDate, EndDate]\`. AccountingRegister. */
-  drCrTurnovers<R = Record<string, unknown>>(args?: DrCrTurnoversArgs): Promise<R[]>;
-  /** Virtual-table FI: extra dimensions for a given account. AccountingRegister. */
-  extDimensions<R = Record<string, unknown>>(args?: ExtDimensionsArgs): Promise<R[]>;
-  /** Virtual-table FI: records with extra dimensions in \`[StartDate, EndDate]\`. AccountingRegister. */
-  recordsWithExtDimensions<R = Record<string, unknown>>(args?: RecordsWithExtDimensionsArgs): Promise<R[]>;
+  /** Virtual-table FI: balance at \`Period\`. Accumulation / Accounting register. */
+  balance<R = Record<string, unknown>>(args?: BalanceArgs, opts?: ReadFiOptions): Promise<R[]>;
+  /** Virtual-table FI: turnovers over a \`Period\` range. Accumulation / Accounting register. */
+  turnovers<R = Record<string, unknown>>(args?: TurnoversArgs, opts?: ReadFiOptions): Promise<R[]>;
+  /** Virtual-table FI: balance + turnovers over a \`Period\` range. Accumulation / Accounting register. */
+  balanceAndTurnovers<R = Record<string, unknown>>(args?: TurnoversArgs, opts?: ReadFiOptions): Promise<R[]>;
+  /**
+   * Virtual-table FI: slice at the first row at/before \`Period\`. InformationRegister.
+   *
+   * Invoked on the registered entity set. Most InformationRegister slices bind
+   * to the bare set — \`register('InformationRegister_X')\`; for the minority
+   * bound to the record type, register the \`_RecordType\` set instead —
+   * \`register('InformationRegister_X_RecordType')\`.
+   */
+  sliceFirst<R = Record<string, unknown>>(args?: SliceArgs, opts?: ReadFiOptions): Promise<R[]>;
+  /**
+   * Virtual-table FI: slice at the last row at/before \`Period\`. InformationRegister.
+   *
+   * Invoked on the registered entity set. Most InformationRegister slices bind
+   * to the bare set — \`register('InformationRegister_X')\`; for the minority
+   * bound to the record type, register the \`_RecordType\` set instead —
+   * \`register('InformationRegister_X_RecordType')\`.
+   */
+  sliceLast<R = Record<string, unknown>>(args?: SliceArgs, opts?: ReadFiOptions): Promise<R[]>;
+  /** Virtual-table FI: Dr/Cr turnovers over a \`Period\` range. AccountingRegister. */
+  drCrTurnovers<R = Record<string, unknown>>(args?: DrCrTurnoversArgs, opts?: ReadFiOptions): Promise<R[]>;
+  /** Virtual-table FI: extra-dimension types for the register. Takes no FI arguments. AccountingRegister. */
+  extDimensions<R = Record<string, unknown>>(opts?: ReadFiOptions): Promise<R[]>;
+  /** Virtual-table FI: records with extra dimensions over a \`Period\` range. AccountingRegister. */
+  recordsWithExtDimensions<R = Record<string, unknown>>(args?: RecordsWithExtDimensionsArgs, opts?: ReadFiOptions): Promise<R[]>;
   /**
    * Shared dispatch for read-style virtual-table FIs. Builds the URL via
-   * \`buildFunctionUrl\` (no \`ref\` — set-bound), GETs through the transport,
-   * and parses through \`parseV3Collection\` so \`Edm.DateTime\` values become
-   * \`Date\` instances and the \`0001-01-01T00:00:00\` empty-date sentinel
-   * becomes \`null\` (consistent with \`client.functions.X.Y\` dispatch).
+   * \`buildFunctionUrl\` (no \`ref\` — set-bound), appends \`$top\` when requested,
+   * GETs through the transport (threading the per-call \`RequestOptions\`), and
+   * parses through \`parseV3Collection\` so \`Edm.DateTime\` values become \`Date\`
+   * instances and the \`0001-01-01T00:00:00\` empty-date sentinel becomes \`null\`
+   * (consistent with \`client.functions.X.Y\` dispatch).
    */
   private callReadFi;
 }
@@ -638,6 +703,6 @@ interface ValueStorage {
   readonly base64Data: string;
 }
 //#endregion
-export { type AuthOptions, type BalanceArgs, BasicAuth, type BasicAuthOptions, BusinessError, type ChainedFieldExpr, type ClientOptions, ConcurrencyError, type Connection, type ConsoleHookOptions, type DataShape, type DrCrTurnoversArgs, EMPTY_GUID, type Entity, type EntityKey, type EntitySchema, type ErrorFormat, type ExtDimensionsArgs, type FieldExpr, type FieldExprMap, type FilterExpression, type Guid, HTTPError, type HTTPErrorOptions, InvalidArgumentError, type InvalidArgumentErrorOptions, type MetadataIndex, type MutationOptions, NetworkError, ODataError, type ODataErrorBody, type ODataErrorOptions, ODataV3Client, type ODataV3ClientOptions, type ODataV3FunctionsBase, ONEC_EMPTY_DATE, ParseError, PermissionError, type PropertySchema, QueryBuilder, type QueryState, type ReadStreamResult, type RecordsWithExtDimensionsArgs, RegisterHelper, type RequestEvent, type RequestHooks, type RequestOptions, type ResponseEvent, type RetryPolicy, type SliceArgs, TimeoutError, type TimeoutErrorOptions, type TurnoversArgs, type UntypedEntity, V3DocumentHandle, V3EntityHandle, V3EntitySetHandle, V3QueryBuilder, ValidationError, type ValidationErrorOptions, type ValidationIssue, type ValidationResult, type ValueStorage, type WithInstanceRef, type WriteStreamInput, clientOptionsFromConnection, connectionAuth, consoleHook, defineConnection, formatInZone, loadMetadataIndex, normalizeBaseUrl, parseConnectionUrl, parseInZone, parseMetadataIndex, toFilterString, validateConnection, validateEntity };
+export { type AuthOptions, type BalanceArgs, BasicAuth, type BasicAuthOptions, BusinessError, type ChainedFieldExpr, type ClientOptions, ConcurrencyError, type Connection, type ConsoleHookOptions, type DataShape, type DrCrTurnoversArgs, EMPTY_GUID, type Entity, type EntityKey, type EntitySchema, type ErrorFormat, type FieldExpr, type FieldExprMap, type FilterExpression, type Guid, HTTPError, type HTTPErrorOptions, InvalidArgumentError, type InvalidArgumentErrorOptions, type MetadataIndex, type MutationOptions, NetworkError, ODataError, type ODataErrorBody, type ODataErrorOptions, ODataV3Client, type ODataV3ClientOptions, type ODataV3FunctionsBase, ONEC_EMPTY_DATE, ParseError, PermissionError, type PropertySchema, QueryBuilder, type QueryState, type ReadFiOptions, type ReadStreamResult, type RecordsWithExtDimensionsArgs, RegisterHelper, type RequestEvent, type RequestHooks, type RequestOptions, type ResponseEvent, type RetryPolicy, type SliceArgs, TimeoutError, type TimeoutErrorOptions, type TurnoversArgs, type UntypedEntity, V3DocumentHandle, V3EntityHandle, V3EntitySetHandle, V3QueryBuilder, ValidationError, type ValidationErrorOptions, type ValidationIssue, type ValidationResult, type ValueStorage, type WithInstanceRef, type WriteStreamInput, clientOptionsFromConnection, connectionAuth, consoleHook, defineConnection, formatInZone, loadMetadataIndex, normalizeBaseUrl, parseConnectionUrl, parseInZone, parseMetadataIndex, toFilterString, validateConnection, validateEntity };
 //# sourceMappingURL=index.d.ts.map"
 `;
