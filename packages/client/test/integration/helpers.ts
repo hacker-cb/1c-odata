@@ -12,6 +12,15 @@ export interface FixtureProfile {
   smoke: { catalogName: string; countDocument: string }
   crud?: { catalogName: string; descField: string }
   valueStorage?: { catalogName: string; field: string }
+  /**
+   * Register virtual-table coverage, confirmed by EDMX inspection of
+   * `snapshots/<id>.xml`:
+   *   - `balanceSet` — AccumulationRegister WITH balances (Balance + Turnovers + BalanceAndTurnovers)
+   *   - `turnoverSet` — AccumulationRegister turnovers-only (Turnovers, no Balance)
+   *   - `infoSet` — InformationRegister whose slice FIs bind to the bare set (SliceFirst / SliceLast)
+   *   - `accountingSet` — AccountingRegister (DrCrTurnovers / RecordsWithExtDimensions / ExtDimensions)
+   */
+  register?: { balanceSet: string; turnoverSet?: string; infoSet?: string; accountingSet?: string }
 }
 
 /**
@@ -26,12 +35,23 @@ export const FIXTURE_PROFILES: Record<string, FixtureProfile> = {
     smoke: { catalogName: 'Catalog_Валюты', countDocument: 'Document_РеализацияТоваровУслуг' },
     crud: { catalogName: 'Catalog_ВидыКонтактнойИнформации', descField: 'Description' },
     valueStorage: { catalogName: 'Catalog_Файлы', field: 'ФайлХранилище' },
+    register: {
+      balanceSet: 'AccumulationRegister_ДенежныеСредстваНаличные',
+      turnoverSet: 'AccumulationRegister_ВыручкаИСебестоимостьПродаж',
+      infoSet: 'InformationRegister_КурсыВалют',
+    },
   },
   'bp_v3.0': {
     id: 'bp_v3.0',
     smoke: { catalogName: 'Catalog_Валюты', countDocument: 'Document_РеализацияТоваровУслуг' },
     crud: { catalogName: 'Catalog_ВидыКонтактнойИнформации', descField: 'Description' },
     valueStorage: { catalogName: 'Catalog_Файлы', field: 'ФайлХранилище' },
+    register: {
+      balanceSet: 'AccumulationRegister_ВзаиморасчетыСДепонентами',
+      turnoverSet: 'AccumulationRegister_ВозвратыТоваров',
+      infoSet: 'InformationRegister_КурсыВалют',
+      accountingSet: 'AccountingRegister_Хозрасчетный',
+    },
   },
 }
 
