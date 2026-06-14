@@ -10,8 +10,9 @@ describe('dedupeKeys', () => {
   it('removes duplicates preserving first-seen order', () => {
     expect(dedupeKeys(['b', 'a', 'b', 'c', 'a'])).toEqual(['b', 'a', 'c'])
   })
-  it('keeps distinct number vs bigint entries', () => {
-    expect(dedupeKeys<KeyValue>([1, 1, 2])).toEqual([1, 2])
+  it('keeps a number and an equal-valued bigint as distinct entries', () => {
+    // Set identity: 1 (number) !== 1n (bigint), so both survive; each is deduped.
+    expect(dedupeKeys<KeyValue>([1, 1n, 1, 2n, 1n])).toEqual([1, 1n, 2n])
   })
 })
 

@@ -87,12 +87,15 @@ function dispatchByStatus(status: number, message: string, opts: HTTPErrorOption
  */
 function nonODataError(status: number, statusText: string, contentType: string): HTTPError {
   const ct = contentType || 'unknown'
+  // getByKeys() (not whereIn(), which does not chunk) is the remedy for the
+  // over-long-URL case. Sentence-cased, no trailing period per the errors.ts
+  // message convention.
   const hint =
     status === 404 || status === 414
-      ? 'For 404/414 this often means a wrong entity-set path or an over-long request URL — reduce the $filter (fewer OR terms), trim $select/$expand, or lower the page size (e.g. batch large key lists with getByKeys()/whereIn()).'
-      : 'The server did not return a parseable OData error body.'
+      ? 'for 404/414 this often means a wrong entity-set path or an over-long request URL — reduce the $filter (fewer OR terms), trim $select/$expand, lower the page size, or batch large key lists with getByKeys()'
+      : 'the server did not return a parseable OData error body'
   const where = statusText ? ` ${statusText}` : ''
-  const message = `HTTP ${status}${where}: server returned a non-OData ${ct} body (not an OData error). ${hint}`
+  const message = `HTTP ${status}${where}: server returned a non-OData ${ct} body — not an OData error envelope; ${hint}`
   const body: ODataErrorBody = { code: '0', message }
   const opts: HTTPErrorOptions = { status, statusText, code: '0', errorFormat: 'none', body }
   return dispatchByStatus(status, message, opts)

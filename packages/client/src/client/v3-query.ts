@@ -21,6 +21,14 @@ import type { ODataV3Client } from './v3-client.js'
  * limit — `getByKeys` throws instead of silently shipping an over-long URL.
  */
 const MIN_FILTER_BUDGET = 64
+/**
+ * Bytes reserved for `$filter=` join syntax that `fixedQueryLen()` does not
+ * capture: the `&$filter=` key when no prior filter exists, or the ` and (…)`
+ * wrapper (plus possible parens around an `or`-bearing existing filter) when one
+ * does. Subtracting it keeps each batch's TOTAL query string within `queryBudget`
+ * even with an existing `.filter(...)`.
+ */
+const FILTER_SYNTAX_OVERHEAD = 32
 /** Default number of concurrent batch requests. */
 const DEFAULT_CONCURRENCY = 4
 
@@ -113,11 +121,11 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
     // chunking keys cannot help, so fail with an actionable error.
     const queryBudget = opts.queryBudget ?? DEFAULT_QUERY_BUDGET
     const fixedLen = this.fixedQueryLen()
-    const filterBudget = queryBudget - fixedLen
+    const filterBudget = queryBudget - fixedLen - FILTER_SYNTAX_OVERHEAD
     if (filterBudget < MIN_FILTER_BUDGET) {
       throw new InvalidArgumentError(
         `getByKeys: $select/$expand/$orderby/$filter (~${fixedLen} bytes) leave only ${filterBudget} bytes for keys ` +
-          `under queryBudget=${queryBudget}. Trim $select/$expand or raise queryBudget (keep it under ~2048).`,
+          `under queryBudget=${queryBudget}; trim $select/$expand or raise queryBudget (keep it under ~2048)`,
         { argument: 'queryBudget', received: queryBudget },
       )
     }
