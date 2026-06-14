@@ -1,4 +1,4 @@
-import { BasicAuth, ODataV3Client } from '@1c-odata/client'
+import { BasicAuth, InvalidArgumentError, ODataV3Client, type TurnoversArgs } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -57,7 +57,7 @@ describe('RegisterHelper.balance / turnovers / balanceAndTurnovers', () => {
     expect(r).toEqual([{ Количество: 5 }])
   })
 
-  it('turnovers({Period: {from, to}}) flattens range to two args', async () => {
+  it('turnovers({Period: {from, to}}) maps the range to StartPeriod/EndPeriod', async () => {
     let url: string | null = null
     server.use(
       http.get(/\/AccumulationRegister_X\/Turnovers\(\).*/, ({ request }) => {
@@ -69,11 +69,29 @@ describe('RegisterHelper.balance / turnovers / balanceAndTurnovers', () => {
     await c.register('AccumulationRegister_X').turnovers({
       Period: { from: new Date(2025, 0, 1), to: new Date(2025, 11, 31) },
     })
-    expect(url).toContain('StartDate=datetime')
-    expect(url).toContain('EndDate=datetime')
+    // 1С AccumulationRegister Turnovers takes StartPeriod/EndPeriod — StartDate/EndDate
+    // (AccountingRegister tables) are rejected 501 live across УТ 11.1/11.5 + БП 3.0.
+    expect(url).toContain('StartPeriod=datetime')
+    expect(url).toContain('EndPeriod=datetime')
+    expect(url).not.toContain('StartDate')
+    expect(url).not.toContain('EndDate')
   })
 
-  it('balanceAndTurnovers calls AccumulationRegister_X/BalanceAndTurnovers()', async () => {
+  it('turnovers({Period: {from}}) emits an open-ended StartPeriod only', async () => {
+    let url: string | null = null
+    server.use(
+      http.get(/\/AccumulationRegister_X\/Turnovers\(\).*/, ({ request }) => {
+        url = request.url
+        return HttpResponse.json({ 'odata.metadata': '#X', value: [] })
+      }),
+    )
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    await c.register('AccumulationRegister_X').turnovers({ Period: { from: new Date(2025, 0, 1) } })
+    expect(url).toContain('StartPeriod=datetime')
+    expect(url).not.toContain('EndPeriod')
+  })
+
+  it('balanceAndTurnovers maps the range to StartPeriod/EndPeriod', async () => {
     let url: string | null = null
     server.use(
       http.get(/\/AccumulationRegister_X\/BalanceAndTurnovers\(\).*/, ({ request }) => {
@@ -82,8 +100,21 @@ describe('RegisterHelper.balance / turnovers / balanceAndTurnovers', () => {
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    await c.register('AccumulationRegister_X').balanceAndTurnovers({ Period: new Date(2025, 0, 1) })
+    await c.register('AccumulationRegister_X').balanceAndTurnovers({
+      Period: { from: new Date(2025, 0, 1), to: new Date(2025, 11, 31) },
+    })
     expect(url).toContain('AccumulationRegister_X/BalanceAndTurnovers()')
+    expect(url).toContain('StartPeriod=datetime')
+    expect(url).toContain('EndPeriod=datetime')
+  })
+
+  it('turnovers() rejects a bare Date period at runtime (no silent all-periods query)', async () => {
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    // A point Date is not a valid turnovers period (no single-point form in 1С).
+    // The type forbids it; this simulates an untyped (JS) caller bypassing it —
+    // it must fail loudly, not silently emit no period (→ all-periods query).
+    const args = { Period: new Date(2025, 0, 1) } as unknown as TurnoversArgs
+    await expect(c.register('AccumulationRegister_X').turnovers(args)).rejects.toThrow(InvalidArgumentError)
   })
 })
 

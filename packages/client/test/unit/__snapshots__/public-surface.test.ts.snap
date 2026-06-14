@@ -153,14 +153,23 @@ interface BalanceArgs {
   Dimensions?: string;
 }
 /**
- * Args for \`turnovers()\` / \`balanceAndTurnovers()\`. \`Period\` may be either a
- * single \`Date\` (point) or \`{from, to}\` (range). The latter flattens to two
- * args (\`StartDate\`/\`EndDate\`) per spec §4.7.
+ * Args for \`turnovers()\` / \`balanceAndTurnovers()\`. Turnovers are always
+ * computed over an interval, so \`Period\` is a \`{ from?, to? }\` range that maps
+ * to the AccumulationRegister \`StartPeriod\` / \`EndPeriod\` virtual-table
+ * parameters. Both bounds are optional (both are nullable in the 1С EDMX
+ * schema): pass only \`from\` for an open-ended-forward range, only \`to\` for
+ * everything up to a date, or omit \`Period\` entirely for all turnovers.
+ *
+ * Unlike \`balance()\` there is no single-point form — 1С exposes no \`Period\`
+ * (point) parameter on the \`Turnovers\` / \`BalanceAndTurnovers\` virtual tables
+ * (verified live against УТ 11.1 / 11.5 and БП 3.0), so a bare \`Date\` is
+ * rejected: the type forbids it, and an untyped (JS) caller gets an
+ * \`InvalidArgumentError\` rather than a silent all-periods query.
  */
 interface TurnoversArgs {
-  Period?: Date | {
-    from: Date;
-    to: Date;
+  Period?: {
+    from?: Date;
+    to?: Date;
   };
   Condition?: string;
   Dimensions?: string;
@@ -220,9 +229,9 @@ declare class RegisterHelper<T> {
   records<R = Record<string, unknown>>(): V3QueryBuilder<R>;
   /** Virtual-table FI: balance at \`Period\`. AccumulationRegister. */
   balance<R = Record<string, unknown>>(args?: BalanceArgs): Promise<R[]>;
-  /** Virtual-table FI: turnovers in \`Period\` (point or range). AccumulationRegister. */
+  /** Virtual-table FI: turnovers over a \`Period\` range. AccumulationRegister. */
   turnovers<R = Record<string, unknown>>(args?: TurnoversArgs): Promise<R[]>;
-  /** Virtual-table FI: balance + turnovers in \`Period\`. AccumulationRegister. */
+  /** Virtual-table FI: balance + turnovers over a \`Period\` range. AccumulationRegister. */
   balanceAndTurnovers<R = Record<string, unknown>>(args?: TurnoversArgs): Promise<R[]>;
   /** Virtual-table FI: slice at the first row before/at \`Period\`. InformationRegister. */
   sliceFirst<R = Record<string, unknown>>(args?: SliceArgs): Promise<R[]>;

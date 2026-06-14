@@ -1,6 +1,7 @@
 // packages/client/src/register.ts
 import type { ODataV3Client } from './client/v3-client.js'
 import { V3QueryBuilder } from './client/v3-query.js'
+import { InvalidArgumentError } from './errors.js'
 import { buildFunctionUrl } from './functions.js'
 import { parseOptsFor, parseV3Collection } from './parser.js'
 
@@ -14,12 +15,21 @@ export interface BalanceArgs {
 }
 
 /**
- * Args for `turnovers()` / `balanceAndTurnovers()`. `Period` may be either a
- * single `Date` (point) or `{from, to}` (range). The latter flattens to two
- * args (`StartDate`/`EndDate`) per spec §4.7.
+ * Args for `turnovers()` / `balanceAndTurnovers()`. Turnovers are always
+ * computed over an interval, so `Period` is a `{ from?, to? }` range that maps
+ * to the AccumulationRegister `StartPeriod` / `EndPeriod` virtual-table
+ * parameters. Both bounds are optional (both are nullable in the 1С EDMX
+ * schema): pass only `from` for an open-ended-forward range, only `to` for
+ * everything up to a date, or omit `Period` entirely for all turnovers.
+ *
+ * Unlike `balance()` there is no single-point form — 1С exposes no `Period`
+ * (point) parameter on the `Turnovers` / `BalanceAndTurnovers` virtual tables
+ * (verified live against УТ 11.1 / 11.5 and БП 3.0), so a bare `Date` is
+ * rejected: the type forbids it, and an untyped (JS) caller gets an
+ * `InvalidArgumentError` rather than a silent all-periods query.
  */
 export interface TurnoversArgs {
-  Period?: Date | { from: Date; to: Date }
+  Period?: { from?: Date; to?: Date }
   Condition?: string
   Dimensions?: string
 }
@@ -62,18 +72,25 @@ export interface RecordsWithExtDimensionsArgs {
 }
 
 /**
- * Expand a `TurnoversArgs.Period` range to `StartDate`/`EndDate`. A `Date`
- * value passes through under the original key. Other args (`Condition`,
- * `Dimensions`) are forwarded only when defined.
+ * Expand a `TurnoversArgs.Period` range to the AccumulationRegister
+ * `StartPeriod` / `EndPeriod` virtual-table parameters — only the bounds that
+ * are defined are emitted (both are optional in the schema). Other args
+ * (`Condition`, `Dimensions`) are forwarded only when defined.
  */
 function expandPeriod(args: TurnoversArgs): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
+  // The type forbids a bare `Date`, but an untyped (JS) caller — or TS that
+  // bypasses the types — would otherwise have its `Date` match neither `from`
+  // nor `to`, emitting no period at all and silently turning the call into an
+  // unintended all-periods turnovers query. Fail loudly instead.
   if (args.Period instanceof Date) {
-    out.Period = args.Period
-  } else if (args.Period !== undefined) {
-    out.StartDate = args.Period.from
-    out.EndDate = args.Period.to
+    throw new InvalidArgumentError(
+      'turnovers()/balanceAndTurnovers() take a { from?, to? } range (use { from } or { from, to }), not a point Date — 1С AccumulationRegister turnovers tables have no single-point form',
+      { argument: 'Period', received: args.Period },
+    )
   }
+  const out: Record<string, unknown> = {}
+  if (args.Period?.from !== undefined) out.StartPeriod = args.Period.from
+  if (args.Period?.to !== undefined) out.EndPeriod = args.Period.to
   if (args.Condition !== undefined) out.Condition = args.Condition
   if (args.Dimensions !== undefined) out.Dimensions = args.Dimensions
   return out
@@ -108,12 +125,12 @@ export class RegisterHelper<T> {
     return this.callReadFi<R>('Balance', args as Record<string, unknown>)
   }
 
-  /** Virtual-table FI: turnovers in `Period` (point or range). AccumulationRegister. */
+  /** Virtual-table FI: turnovers over a `Period` range. AccumulationRegister. */
   async turnovers<R = Record<string, unknown>>(args: TurnoversArgs = {}): Promise<R[]> {
     return this.callReadFi<R>('Turnovers', expandPeriod(args))
   }
 
-  /** Virtual-table FI: balance + turnovers in `Period`. AccumulationRegister. */
+  /** Virtual-table FI: balance + turnovers over a `Period` range. AccumulationRegister. */
   async balanceAndTurnovers<R = Record<string, unknown>>(args: TurnoversArgs = {}): Promise<R[]> {
     return this.callReadFi<R>('BalanceAndTurnovers', expandPeriod(args))
   }
