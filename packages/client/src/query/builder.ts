@@ -74,7 +74,7 @@ export class QueryBuilder<T = Record<string, unknown>> {
    */
   whereIn<K extends keyof T & string>(field: K, values: readonly KeyValueFor<T, K>[]): this {
     if (values.length === 0) {
-      throw new InvalidArgumentError('whereIn() requires at least one value', { argument: 'values', received: values })
+      throw new InvalidArgumentError('Pass at least one value to whereIn()', { argument: 'values', received: values })
     }
     this.state.filter = buildKeyFilter(this.state.filter, field, values as readonly KeyValue[], this.serverTimezone)
     return this

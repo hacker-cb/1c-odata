@@ -143,7 +143,7 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
     if (overBudget) {
       const got = this.keyBatchQueryLen(field, overBudget)
       throw new InvalidArgumentError(
-        `getByKeys: a single key's query string (~${got} bytes) exceeds queryBudget=${budget}; ` +
+        `A single key's query string (~${got} bytes) exceeds getByKeys queryBudget=${budget}; ` +
           `trim $select/$expand or raise queryBudget (keep it under ~2048)`,
         { argument: 'queryBudget', received: budget },
       )

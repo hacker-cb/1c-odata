@@ -112,9 +112,10 @@ export function chunkKeyValues(values: readonly KeyValue[], opts: ChunkOptions =
 
 /**
  * Run `fn` over `items` with at most `limit` concurrent invocations, preserving
- * input order in the result array. `limit` is clamped to `[1, items.length]`; a
- * non-finite or fractional `limit` is floored to a safe `1` (so a stray `NaN`
- * never silently starts zero workers and drops all the work).
+ * input order in the result array. `limit` is floored to an integer (`2.9` → `2`)
+ * and clamped to `[1, items.length]`; a non-finite `limit` (e.g. `NaN` from
+ * `Number(undefined)`) is treated as `1`, so it never silently starts zero
+ * workers and drops all the work.
  *
  * @internal
  */
