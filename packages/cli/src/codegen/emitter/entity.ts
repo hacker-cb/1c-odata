@@ -1,3 +1,4 @@
+import type { DateMode, Int64Mode } from '@1c-odata/client'
 import { detectValueStorage, type EdmxEntityType, type EdmxNavigationProperty } from '@1c-odata/metadata'
 import { compareCyrillic } from '../util.js'
 import { applyNullable, extractCustomSymbols, mapEdmxTypeToTs } from './type-mapper.js'
@@ -6,14 +7,14 @@ export interface EntityEmitInput {
   header: EdmxEntityType
   tabulars: EdmxEntityType[]
   schemaNamespace: string
-  int64Mode: 'number' | 'bigint' | 'string'
-  dateMode: 'date' | 'string'
+  int64Mode: Int64Mode
+  dateMode: DateMode
 }
 
 interface EmitContext {
   schemaNamespace: string
-  int64Mode: 'number' | 'bigint' | 'string'
-  dateMode: 'date' | 'string'
+  int64Mode: Int64Mode
+  dateMode: DateMode
   importsFromCore: Set<string>
   importsLocal: Set<string>
   /** Names of EntityType interfaces emitted in this same file (header + tabulars). */

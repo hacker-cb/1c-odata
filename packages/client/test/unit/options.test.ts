@@ -1,6 +1,7 @@
 import {
   BasicAuth,
   type ClientOptions,
+  DEFAULT_RETRY_POLICY,
   type RequestHooks,
   type RequestOptions,
   type RetryPolicy,
@@ -40,6 +41,31 @@ describe('auth + options', () => {
     const ctrl = new AbortController()
     const opts: RequestOptions = { signal: ctrl.signal, timeout: 60_000, retry: false }
     expect(opts.signal).toBe(ctrl.signal)
+  })
+
+  it('DEFAULT_RETRY_POLICY is a ready-made idempotent-methods policy', () => {
+    expect(DEFAULT_RETRY_POLICY.maxRetries).toBe(3)
+    expect(DEFAULT_RETRY_POLICY.retryableStatuses).toEqual([502, 503, 504])
+    // POST is intentionally excluded (not retry-safe).
+    expect(DEFAULT_RETRY_POLICY.retryableMethods).not.toContain('POST')
+    expect(DEFAULT_RETRY_POLICY.retryableMethods).toContain('GET')
+    expect(DEFAULT_RETRY_POLICY.jitter).toBe('full')
+  })
+
+  it('DEFAULT_RETRY_POLICY is deeply frozen — a direct import cannot mutate the shared default', () => {
+    expect(Object.isFrozen(DEFAULT_RETRY_POLICY)).toBe(true)
+    expect(Object.isFrozen(DEFAULT_RETRY_POLICY.retryableStatuses)).toBe(true)
+    expect(Object.isFrozen(DEFAULT_RETRY_POLICY.retryableMethods)).toBe(true)
+    expect(() => {
+      ;(DEFAULT_RETRY_POLICY as { maxRetries: number }).maxRetries = 99
+    }).toThrow(TypeError)
+    expect(() => DEFAULT_RETRY_POLICY.retryableStatuses.push(500)).toThrow(TypeError)
+  })
+
+  it('DEFAULT_RETRY_POLICY can be spread to customize without mutating the original', () => {
+    const custom: RetryPolicy = { ...DEFAULT_RETRY_POLICY, maxRetries: 5 }
+    expect(custom.maxRetries).toBe(5)
+    expect(DEFAULT_RETRY_POLICY.maxRetries).toBe(3)
   })
 
   it('RequestHooks types support beforeRequest/afterResponse/onError', () => {

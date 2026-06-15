@@ -17,4 +17,4 @@ pnpm --filter dynamic-example demo
 
 (Or put the variable into `examples/dynamic/.env.local`.) Percent-encode reserved characters in credentials — see [`examples/README.md`](../README.md).
 
-First run takes a few seconds: `$metadata` is 10+ MB on real bases. Long-lived services should cache the index instead of re-downloading — see "Usage without codegen" in the [root README](../../README.md#usage-without-codegen).
+First run takes a few seconds: `$metadata` is 10+ MB on real bases. Long-lived services should cache the index instead of re-downloading — see "Schema sources" in the [root README](../../README.md#schema-sources).

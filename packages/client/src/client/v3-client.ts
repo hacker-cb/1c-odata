@@ -7,7 +7,7 @@ import { requestWithRetry } from '../http/retry.js'
 import { request, requestStream } from '../http/transport.js'
 import { RegisterHelper } from '../register.js'
 import { type EntityKey, normalizeBaseUrl } from '../url-builder.js'
-import { type MetadataIndex, ValidationError, validateEntity } from '../validate.js'
+import { type EntitySchema, type MetadataIndex, ValidationError, validateEntity } from '../validate.js'
 import { bigintToStringReplacer, transformDatesToWire, transformDateValuesUntyped } from '../write-transform.js'
 import type { ClientOptions, RequestOptions } from './options.js'
 import { createFunctionsProxy } from './v3-functions-proxy.js'
@@ -119,6 +119,21 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
         argument: 'opts.serverTimezone',
       })
     }
+    // Validate IANA timezone validity, not just presence: a bogus zone silently
+    // shifts every DateTime parse/format. `validateConnection` already does this
+    // for the Connection path, but a client built directly via `new
+    // ODataV3Client({...})` would otherwise slip through with a bad zone.
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: opts.serverTimezone })
+    } catch {
+      throw new InvalidArgumentError(
+        'ClientOptions.serverTimezone is not a valid IANA timezone (e.g. "Europe/Moscow")',
+        {
+          argument: 'opts.serverTimezone',
+          received: opts.serverTimezone,
+        },
+      )
+    }
     if (opts.validateOnWrite && opts.metadataIndex === undefined) {
       throw new InvalidArgumentError(
         'validateOnWrite requires metadataIndex (loadMetadataIndex from generated __metadata.json, or fetchMetadataIndex from @1c-odata/metadata)',
@@ -167,16 +182,28 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
    */
   validateBeforeWrite(entitySet: string, body: unknown): void {
     if (!this.v3Opts.validateOnWrite) return
-    const idx = this.v3Opts.metadataIndex
-    if (idx === undefined) return // construction-time guard already enforced
-    const typeName = idx.entitySetToType[entitySet]
-    if (typeName === undefined) return // forward-compat: unknown set, skip
-    const schema = idx.schemas[typeName]
-    if (schema === undefined) return
+    const schema = this.schemaForSet(entitySet)
+    if (schema === undefined) return // no index / forward-compat unknown set — skip
     const r = validateEntity(body as Record<string, unknown>, schema)
     if (!r.ok) {
       throw new ValidationError(`Validation failed for ${entitySet}: ${r.errors.length} issue(s)`, { issues: r.errors })
     }
+  }
+
+  /**
+   * Resolve the EntityType schema for an entity set via
+   * `entitySetToType` → `schemas`. Returns `undefined` when there is no loaded
+   * index, or for an entity set absent from it (forward-compat with a newer
+   * server schema). Shared by `validateBeforeWrite` and `transformWriteBody`.
+   *
+   * @internal
+   */
+  private schemaForSet(entitySet: string): EntitySchema | undefined {
+    const idx = this.v3Opts.metadataIndex
+    if (idx === undefined) return undefined
+    const typeName = idx.entitySetToType[entitySet]
+    if (typeName === undefined) return undefined
+    return idx.schemas[typeName]
   }
 
   /**
@@ -203,8 +230,7 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     if (typeof body !== 'object' || body === null) return body
     if (this.shape?.dateMode === 'string') return body
     const idx = this.v3Opts.metadataIndex
-    const typeName = idx?.entitySetToType[entitySet]
-    const schema = typeName !== undefined ? idx?.schemas[typeName] : undefined
+    const schema = this.schemaForSet(entitySet)
     if (idx === undefined || schema === undefined) {
       return transformDateValuesUntyped(body, this.opts.serverTimezone)
     }

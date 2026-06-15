@@ -1,4 +1,4 @@
-import { BasicAuth, ODataV3Client } from '@1c-odata/client'
+import { BasicAuth, InvalidArgumentError, ODataV3Client } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -52,5 +52,21 @@ describe('V3EntitySetHandle.create', () => {
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     const r = await c.entity<{ Ref_Key: string; Code: string }>('Catalog_X', 'g').get()
     expect(r.Code).toBe('B')
+  })
+})
+
+describe('ODataV3Client constructor — serverTimezone validation', () => {
+  it('rejects an invalid IANA timezone (not just a missing one)', () => {
+    expect(() => new ODataV3Client({ baseUrl, auth, serverTimezone: 'Mars/Phobos' })).toThrow(InvalidArgumentError)
+    try {
+      new ODataV3Client({ baseUrl, auth, serverTimezone: 'Mars/Phobos' })
+    } catch (e) {
+      expect((e as InvalidArgumentError).argument).toBe('opts.serverTimezone')
+      expect((e as Error).message).toMatch(/IANA/i)
+    }
+  })
+
+  it('accepts a valid IANA timezone', () => {
+    expect(() => new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })).not.toThrow()
   })
 })

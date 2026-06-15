@@ -37,6 +37,8 @@ export async function assertExpectedVersion(
       statusText: 'Precondition Failed',
       errorFormat: 'none',
       request: { method: 'GET', url },
+      expectedVersion: expected,
+      ...(fresh.DataVersion !== undefined ? { actualVersion: fresh.DataVersion } : {}),
     })
   }
 }

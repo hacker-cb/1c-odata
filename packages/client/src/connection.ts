@@ -3,6 +3,22 @@ import { InvalidArgumentError } from './errors.js'
 import { normalizeBaseUrl } from './url-builder.js'
 
 /**
+ * TS representation for `Edm.Int64` (1С wire form is always a string). See
+ * {@link DataShape.int64Mode} for the per-mode semantics.
+ *
+ * @public
+ */
+export type Int64Mode = 'number' | 'bigint' | 'string'
+
+/**
+ * TS representation for `Edm.DateTime`. See {@link DataShape.dateMode} for the
+ * per-mode semantics.
+ *
+ * @public
+ */
+export type DateMode = 'date' | 'string'
+
+/**
  * Data-shape contract — how `Edm.*` types and 1С composites map onto JS values.
  * MUST be identical at codegen-time (TS types emitted) and runtime (parser
  * output). Lives in @1c-odata/client because both layers consume it.
@@ -20,7 +36,7 @@ export interface DataShape {
    *          automatically — read → write round-trips work out of the box.
    * 'string' — wire passthrough; no automatic conversion, user-managed.
    */
-  int64Mode?: 'number' | 'bigint' | 'string'
+  int64Mode?: Int64Mode
   /**
    * TS representation for Edm.DateTime.
    * Default: 'date' — library auto-converts wire ↔ Date using serverTimezone,
@@ -31,8 +47,22 @@ export interface DataShape {
    *          FILTER CAVEAT: DateOps mixin doesn't apply to string-typed DateTime fields —
    *          use raw(`<field> gt datetime'<iso>'`) escape hatch for date comparisons.
    */
-  dateMode?: 'date' | 'string'
+  dateMode?: DateMode
 }
+
+/**
+ * The resolved `DataShape` defaults — the single source of truth for the
+ * `int64Mode: 'number'` / `dateMode: 'date'` choices applied independently by
+ * `buildMetadataIndex` (the emitted `__metadata.json`), the CLI codegen, and
+ * the runtime parser. Changing a default here keeps all three in lock-step
+ * (the `metadata-parity` test pins their agreement).
+ *
+ * Frozen and `readonly`: it's a public export, so a consumer mutating it would
+ * otherwise silently retune the library's default conversions process-wide.
+ *
+ * @public
+ */
+export const DEFAULT_SHAPE: Readonly<Required<DataShape>> = Object.freeze({ int64Mode: 'number', dateMode: 'date' })
 
 /**
  * Runtime connection descriptor — the clean value-object passed to

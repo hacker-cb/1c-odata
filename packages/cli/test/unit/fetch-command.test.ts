@@ -66,11 +66,11 @@ describe('runFetch', () => {
     server.use(
       http.get('http://example.test/odata/$metadata', () => {
         xCalled++
-        return HttpResponse.text('X', { status: 200 })
+        return HttpResponse.text('<edmx:Edmx>X</edmx:Edmx>', { status: 200 })
       }),
       http.get('http://other.test/odata/$metadata', () => {
         yCalled++
-        return HttpResponse.text('Y', { status: 200 })
+        return HttpResponse.text('<edmx:Edmx>Y</edmx:Edmx>', { status: 200 })
       }),
     )
     await runFetch({
@@ -191,12 +191,12 @@ describe('runFetch', () => {
     server.use(
       http.get('http://example.test/odata/$metadata', async () => {
         await xHeld
-        return HttpResponse.text('X', { status: 200 })
+        return HttpResponse.text('<edmx:Edmx>X</edmx:Edmx>', { status: 200 })
       }),
       http.get('http://other.test/odata/$metadata', () => {
         yRequested = true
         releaseX?.()
-        return HttpResponse.text('Y', { status: 200 })
+        return HttpResponse.text('<edmx:Edmx>Y</edmx:Edmx>', { status: 200 })
       }),
     )
     await runFetch({
@@ -221,8 +221,8 @@ describe('runFetch', () => {
       },
     })
     expect(yRequested).toBe(true)
-    expect(readFileSync(join(tmp, 'metadata/x.xml'), 'utf8')).toBe('X')
-    expect(readFileSync(join(tmp, 'metadata/y.xml'), 'utf8')).toBe('Y')
+    expect(readFileSync(join(tmp, 'metadata/x.xml'), 'utf8')).toBe('<edmx:Edmx>X</edmx:Edmx>')
+    expect(readFileSync(join(tmp, 'metadata/y.xml'), 'utf8')).toBe('<edmx:Edmx>Y</edmx:Edmx>')
   })
 
   it('rethrows the first failure in target order when multiple targets fail', async () => {

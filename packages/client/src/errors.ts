@@ -120,15 +120,41 @@ export class BusinessError extends HTTPError {
 }
 
 /**
+ * Options for {@link ConcurrencyError}. Extends {@link HTTPErrorOptions} with
+ * the two `DataVersion`s the client-side guard compared.
+ * @public
+ */
+export interface ConcurrencyErrorOptions extends HTTPErrorOptions {
+  /** `DataVersion` the caller asserted via `MutationOptions.expectVersion`. */
+  expectedVersion?: string
+  /** `DataVersion` the server actually held when the guard ran. */
+  actualVersion?: string
+}
+
+/**
  * Optimistic-concurrency failure. The 1С server silently ignores `If-Match`
  * regardless of value, so HTTP 412 is never produced server-side. The library
  * throws `ConcurrencyError` from the client-side guard activated by
  * `MutationOptions.expectVersion`: it does a GET and compares `DataVersion`
  * before issuing the mutation.
+ *
+ * For that client-side guard, `expectedVersion` / `actualVersion` carry the
+ * compared values as structured fields — read them directly instead of parsing
+ * the message. The synthetic `status: 412` mirrors precondition-failed
+ * semantics even though no server response occurred (`errorFormat: 'none'`,
+ * no `odata` envelope); both version fields are `undefined` on the rare path
+ * where a real HTTP 412 is mapped to this class.
  * @public
  */
 export class ConcurrencyError extends HTTPError {
   override readonly name = 'ConcurrencyError'
+  readonly expectedVersion: string | undefined
+  readonly actualVersion: string | undefined
+  constructor(message: string, opts: ConcurrencyErrorOptions) {
+    super(message, opts)
+    this.expectedVersion = opts.expectedVersion
+    this.actualVersion = opts.actualVersion
+  }
 }
 
 /**
@@ -181,6 +207,10 @@ export class ParseError extends ODataError {
  * (read / JSON / shape validation via `loadMetadataIndex` / `parseMetadataIndex`)
  * or an EDMX `$metadata` document (`parseEdmx`). Distinct from `ParseError`,
  * which is reserved for HTTP response-body parse failures.
+ *
+ * Carries a `request` {@link RequestContext} when the metadata was fetched over
+ * the network (`fetchMetadataIndex`) — so a parse failure points at the base it
+ * came from; `undefined` for local file-load failures.
  * @public
  */
 export class MetadataError extends ODataError {

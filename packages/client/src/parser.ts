@@ -1,6 +1,6 @@
 // packages/client/src/parser.ts
 
-import type { DataShape } from './connection.js'
+import { type DataShape, DEFAULT_SHAPE } from './connection.js'
 import { ParseError } from './errors.js'
 import { parseInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
@@ -156,41 +156,90 @@ function mapValue(
   shape: DataShape | undefined,
   opts: ParseOptions,
 ): unknown {
-  if (typeof v === 'string') {
-    const propType = schema?.properties[fieldName]?.type
-    // Edm.Int64 — apply `shape.int64Mode`. Defaults to 'number' per the
-    // DataShape contract in connection.ts; absence of an explicit shape (or
-    // an explicit shape without `int64Mode`) means "behave like the documented
-    // default", not "leave the wire string untouched".
-    if (propType === 'Edm.Int64') {
-      const mode = shape?.int64Mode ?? 'number'
-      if (mode === 'bigint') return BigInt(v)
-      if (mode === 'number') return Number(v)
-      return v
-    }
-    // Edm.DateTime — by schema or regex heuristic.
-    // `Collection(Edm.DateTime)` not handled here — 0 empirical occurrences in real
-    // 1С EDMX; emitter falls back to generic `Date[]` typing, runtime leaves wire
-    // elements as strings. See packages/cli/src/codegen/emitter/entity.ts for the
-    // full design rationale.
-    if (propType === 'Edm.DateTime' || (propType === undefined && DATETIME_FIELD.test(v))) {
-      if (shape?.dateMode === 'string') return v
-      if (v.startsWith(ONEC_EMPTY_DATE)) return null
-      return parseInZone(v, opts.serverTimezone)
-    }
-    return v
-  }
+  const propType = schema?.properties[fieldName]?.type
+  if (typeof v === 'string') return convertStringValue(v, propType, shape, opts)
+  // Nested entities (tabular parts, ComplexTypes) are parsed with THEIR OWN
+  // schema, resolved from the field's declared type — not the parent's. Without
+  // this, a nested `Edm.Int64` / `Edm.DateTime` / ValueStorage field is looked
+  // up in the parent schema (absent → no conversion), diverging from the write
+  // path (write-transform.ts), which already recurses with the nested type.
   if (Array.isArray(v)) {
+    const childOpts = withNestedTypeHint(opts, propType)
     return v.map((item) =>
       typeof item === 'object' && item !== null
-        ? mapEntity(item as Record<string, unknown>, opts)
+        ? mapEntity(item as Record<string, unknown>, childOpts)
         : mapValue(item, fieldName, schema, shape, opts),
     )
   }
   if (typeof v === 'object' && v !== null) {
-    return mapEntity(v as Record<string, unknown>, opts)
+    return mapEntity(v as Record<string, unknown>, withNestedTypeHint(opts, propType))
   }
   return v
+}
+
+/** Convert a string wire value per its declared (or heuristically-detected) type. */
+function convertStringValue(
+  v: string,
+  propType: string | undefined,
+  shape: DataShape | undefined,
+  opts: ParseOptions,
+): unknown {
+  // Edm.Int64 — apply `shape.int64Mode`. Defaults to 'number' per the DataShape
+  // contract in connection.ts; absence of an explicit shape (or an explicit
+  // shape without `int64Mode`) means "behave like the documented default", not
+  // "leave the wire string untouched".
+  if (propType === 'Edm.Int64') {
+    const mode = shape?.int64Mode ?? DEFAULT_SHAPE.int64Mode
+    if (mode === 'bigint') return BigInt(v)
+    if (mode === 'number') return Number(v)
+    return v
+  }
+  // Edm.DateTime — by schema or regex heuristic.
+  // `Collection(Edm.DateTime)` not handled here — 0 empirical occurrences in real
+  // 1С EDMX; emitter falls back to generic `Date[]` typing, runtime leaves wire
+  // elements as strings. See packages/cli/src/codegen/emitter/entity.ts for the
+  // full design rationale.
+  if (propType === 'Edm.DateTime' || (propType === undefined && DATETIME_FIELD.test(v))) {
+    if (shape?.dateMode === 'string') return v
+    if (v.startsWith(ONEC_EMPTY_DATE)) return null
+    return parseInZone(v, opts.serverTimezone)
+  }
+  return v
+}
+
+/**
+ * Resolve the EntityType/ComplexType local name of a nested field from its
+ * declared property type (`Collection(<ns>.Foo)` or `<ns>.Foo`), so nested
+ * values are parsed with their own schema. Returns undefined for primitive
+ * collections (`Collection(Edm.*)`), unknown namespaces, or types absent from
+ * the index — the caller then parses the nested value schema-less instead of
+ * misapplying the parent schema. Mirrors the write-side resolution in
+ * write-transform.ts.
+ */
+function resolveNestedTypeHint(
+  propType: string | undefined,
+  metadataIndex: MetadataIndex | undefined,
+): string | undefined {
+  if (propType === undefined || metadataIndex === undefined) return undefined
+  let t = propType
+  if (t.startsWith('Collection(') && t.endsWith(')')) t = t.slice('Collection('.length, -1)
+  if (t.startsWith('Edm.')) return undefined
+  const prefix = `${metadataIndex.schemaNamespace}.`
+  const local = t.startsWith(prefix) ? t.slice(prefix.length) : t
+  return metadataIndex.schemas[local] !== undefined ? local : undefined
+}
+
+/**
+ * Build the `ParseOptions` for a nested value: adopt the nested type's own
+ * `typeHint` when resolvable, otherwise drop the parent `typeHint` so the
+ * nested value is parsed schema-less (an expanded navigation property is absent
+ * from `schema.properties`, so its type can't be resolved here — schema-less is
+ * safer than misapplying the parent schema).
+ */
+function withNestedTypeHint(opts: ParseOptions, propType: string | undefined): ParseOptions {
+  const typeHint = resolveNestedTypeHint(propType, opts.metadataIndex)
+  const { typeHint: _parent, ...rest } = opts
+  return typeHint !== undefined ? { ...rest, typeHint } : rest
 }
 
 function safeParse(s: string): unknown {
