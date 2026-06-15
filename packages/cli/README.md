@@ -49,6 +49,29 @@ pnpm 1c-odata fetch
 pnpm 1c-odata generate
 ```
 
+`loadConfig` auto-sources `.env` then `.env.local` (relative to cwd) before evaluating `1c-odata.config.ts`, so `process.env.ONEC_URL` resolves at config-eval time without a manual `export`.
+
+## Commands & flags
+
+Both commands default to **all** targets; pass `-t` to pick one.
+
+| Command | Flags |
+|---|---|
+| `1c-odata fetch` | `-t, --target <name>`, `--config <path>` |
+| `1c-odata generate` | `-t, --target <name>`, `--config <path>`, `-f, --force` (regenerate even when inputs are unchanged), `--metadata-only` (emit only `__metadata.json`; skips TS generation — existing `.ts` files are left untouched) |
+
+## Config options
+
+`defineCodegenConfig` accepts, alongside `targets`:
+
+| Option | Default | Purpose |
+|---|---|---|
+| `metadataDir` | `./metadata` | where `<target>.xml` snapshots are written / read |
+| `generatedDir` | `./generated` | where generated TS lands (`<target>/<kind>/<Name>.ts`) |
+| `fetchTimeout` | `120_000` | `1c-odata fetch` timeout in ms (per-target override available) |
+
+Each target is `{ connection, include?, fetchTimeout? }` — `include` is a glob whitelist of entity-type names (`Catalog_*`), and the dependency closure auto-expands.
+
 See [the repo README](https://github.com/hacker-cb/1c-odata#readme) for project-wide setup and [`examples/basic`](https://github.com/hacker-cb/1c-odata/tree/master/examples/basic) for a runnable consumer.
 
 ## License

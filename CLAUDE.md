@@ -52,7 +52,7 @@ pnpm changeset                         # add a release note (consumer-facing)
 
 **Live/write tests** need `.env.local` at repo root with `ONEC_TRADE_V11_5_URL`, `ONEC_BP_V3_0_URL`, and optionally `ONEC_TESTS_ALLOW_WRITES=true` — see [`snapshots/README.md`](./snapshots/README.md) for the full env contract. Without `.env.local` they skip cleanly.
 
-**Git hooks** (`simple-git-hooks` via `prepare`): `pre-commit` runs `biome check --write` on staged files, `pre-push` runs `pnpm turbo typecheck`. Don't `--no-verify`.
+**Git hooks** (`simple-git-hooks` via `prepare`): `pre-commit` runs `pnpm lint-staged` (Biome `check --write` on staged files), `pre-push` runs `pnpm turbo typecheck --filter='./packages/*'`. Don't `--no-verify`.
 
 ## CI gates
 
@@ -71,4 +71,5 @@ Windows runner is materially slower than Linux/Mac for `tsc --noEmit` over thous
 
 - [`docs/1c/markdown/`](./docs/1c/markdown) — vendor docs snapshot (Russian) for 1С OData V3
 - [`snapshots/README.md`](./snapshots/README.md) — test-fixture EDMX bases, refresh workflow
-- [`examples/basic/README.md`](./examples/basic/README.md) — runnable end-to-end consumer
+- [`examples/basic/README.md`](./examples/basic/README.md) — runnable end-to-end codegen consumer
+- [`examples/dynamic/README.md`](./examples/dynamic/README.md) — runnable zero-codegen `createDynamicClient` consumer
