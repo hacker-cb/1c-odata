@@ -39,33 +39,37 @@ const APP_DIR = '1c-odata'
  * added once (via the CLI) is visible to all of them — no agent should override
  * `ONEC_MCP_DATA_DIR` per-install, or it would fragment that shared config.
  *
- * Resolution order:
- * 1. `ONEC_MCP_DATA_DIR` — explicit opt-in override (sandboxed / portable / CI),
- *    trimmed of surrounding whitespace.
- * 2. Otherwise a predictable per-user dir, XDG-style on every platform:
+ * Resolution order (first non-blank wins; both overrides are trimmed):
+ * 1. `dataDirOverride` — the `--data-dir` CLI flag, when given.
+ * 2. `ONEC_MCP_DATA_DIR` — env override (sandboxed / portable / CI).
+ * 3. A predictable per-user dir, XDG-style on every platform:
  *    - macOS / Linux: `$XDG_CONFIG_HOME/1c-odata` when set to an absolute path,
  *      else `~/.config/1c-odata`.
  *    - Windows: `%APPDATA%\1c-odata`, else `~\AppData\Roaming\1c-odata`.
  *
  * The result is always absolute; resolution throws if it isn't (a relative
- * override, or no `HOME`/`USERPROFILE` so the default can't anchor) rather than
- * silently writing config + the `0600` credentials file to a CWD-relative path.
+ * `--data-dir` / `ONEC_MCP_DATA_DIR`, or no `HOME`/`USERPROFILE` so the default
+ * can't anchor) rather than silently writing config + the `0600` credentials
+ * file to a CWD-relative path that forks the shared config per launch.
  */
-export function resolveDataDir(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.ONEC_MCP_DATA_DIR?.trim()
-  const dir = override !== undefined && override !== '' ? override : defaultDataDir(env)
-  // The path must be absolute: a relative dir resolves against each process's
-  // CWD, which would fork the shared config per launch and scatter the 0600
-  // credentials file. This trips on a relative override, or when HOME/USERPROFILE
-  // is unset so homedir() returns '' (stripped container/sandbox env) and the
-  // default collapses to a CWD-relative path — fail loudly instead.
+export function resolveDataDir(env: NodeJS.ProcessEnv = process.env, dataDirOverride?: string): string {
+  const dir = firstNonBlank(dataDirOverride, env.ONEC_MCP_DATA_DIR) ?? defaultDataDir(env)
   if (!isAbsolute(dir)) {
     throw new Error(
-      `Resolved data directory ${JSON.stringify(dir)} is not absolute. Set ONEC_MCP_DATA_DIR to an absolute ` +
-        'path, or ensure HOME/USERPROFILE is set so the default (~/.config or %APPDATA%) can resolve.',
+      `Resolved data directory ${JSON.stringify(dir)} is not absolute. Set --data-dir / ONEC_MCP_DATA_DIR to an ` +
+        'absolute path, or ensure HOME/USERPROFILE is set so the default (~/.config or %APPDATA%) can resolve.',
     )
   }
   return dir
+}
+
+/** First of `values` that is defined and non-blank, trimmed; else `undefined`. */
+function firstNonBlank(...values: (string | undefined)[]): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim()
+    if (trimmed !== undefined && trimmed !== '') return trimmed
+  }
+  return undefined
 }
 
 /** Per-user default data dir: XDG on macOS/Linux, `%APPDATA%` on Windows. */

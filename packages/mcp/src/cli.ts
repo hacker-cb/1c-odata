@@ -56,7 +56,9 @@ export function buildProgram(): Command {
 
   const dataDir = (): string => {
     const opts = program.opts<GlobalOptions>()
-    return opts.dataDir ?? resolveDataDir()
+    // Route the --data-dir flag through resolveDataDir too, so it gets the same
+    // trim + absolute-path guard as the ONEC_MCP_DATA_DIR env override.
+    return resolveDataDir(process.env, opts.dataDir)
   }
   const insecure = (): boolean => program.opts<GlobalOptions>().insecureStorage === true
 

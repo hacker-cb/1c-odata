@@ -25,6 +25,18 @@ describe('resolveDataDir', () => {
     expect(() => resolveDataDir({ ONEC_MCP_DATA_DIR: 'relative/dir' })).toThrow(/not absolute/)
   })
 
+  it('lets the --data-dir override win over ONEC_MCP_DATA_DIR, trimmed', () => {
+    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '/from/env' }, '  /from/flag  ')).toBe('/from/flag')
+  })
+
+  it('falls back to ONEC_MCP_DATA_DIR when the --data-dir override is blank', () => {
+    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '/from/env' }, '   ')).toBe('/from/env')
+  })
+
+  it('rejects a relative --data-dir override too (same guard as the env var)', () => {
+    expect(() => resolveDataDir({}, 'relative/dir')).toThrow(/not absolute/)
+  })
+
   it('ignores a blank override and falls back to a per-user dir named after the app', () => {
     expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '   ' })).toContain('1c-odata')
     expect(resolveDataDir({})).toContain('1c-odata')
