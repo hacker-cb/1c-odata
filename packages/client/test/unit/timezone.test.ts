@@ -41,4 +41,26 @@ describe('formatInZone', () => {
     const d = parseInZone(naive, 'Europe/Berlin')
     expect(formatInZone(d, 'Europe/Berlin')).toBe(naive)
   })
+
+  it('omits the fractional suffix for second-precision instants (unchanged wire form)', () => {
+    const d = new Date('2025-01-10T12:30:00.000Z')
+    expect(formatInZone(d, 'Europe/Moscow')).toBe('2025-01-10T15:30:00')
+  })
+
+  it('preserves milliseconds instead of silently truncating them on write', () => {
+    const d = new Date('2025-01-10T12:30:00.250Z')
+    expect(formatInZone(d, 'Europe/Moscow')).toBe('2025-01-10T15:30:00.250')
+  })
+
+  it('round-trips a fractional-seconds wall-clock without loss', () => {
+    const naive = '2025-06-15T10:00:00.250'
+    const d = parseInZone(naive, 'Europe/Moscow')
+    expect(d.toISOString()).toBe('2025-06-15T07:00:00.250Z')
+    expect(formatInZone(d, 'Europe/Moscow')).toBe(naive)
+  })
+
+  it('still resolves the correct instant for a fractional input across DST (Berlin)', () => {
+    const d = parseInZone('2025-10-26T01:30:00.500', 'Europe/Berlin')
+    expect(formatInZone(d, 'Europe/Berlin')).toBe('2025-10-26T01:30:00.500')
+  })
 })

@@ -47,6 +47,34 @@ describe('validateEntity', () => {
     expect(r.errors).toContainEqual({ kind: 'required', field: 'Ref_Key' })
     expect(r.errors).toContainEqual({ kind: 'maxLength', field: 'Code', value: 'TOOLONG', max: 3 })
   })
+
+  // ValueStorage triple members are skipped — the user-facing grouped form
+  // (`Файл: { contentType, base64Data }`) is split into the wire halves by the
+  // write transform, so a non-nullable `<base>_Type` half must NOT reject it.
+  const vsSchema: EntitySchema = {
+    properties: {
+      Ref_Key: { type: 'Edm.Guid', nullable: false },
+      Файл: { type: 'Edm.Stream', nullable: true },
+      Файл_Base64Data: { type: 'Edm.Binary', nullable: true },
+      Файл_Type: { type: 'Edm.String', nullable: false }, // non-nullable half (occurs in real 1С EDMX)
+    },
+    valueStorages: ['Файл'],
+  }
+
+  it('accepts the grouped ValueStorage form even when a triple half is non-nullable', () => {
+    const r = validateEntity({ Ref_Key: 'g', Файл: { contentType: 'image/png', base64Data: 'aGk=' } }, vsSchema)
+    expect(r).toEqual({ ok: true })
+  })
+
+  it('does not require ValueStorage triple members when the field is omitted entirely', () => {
+    const r = validateEntity({ Ref_Key: 'g' }, vsSchema)
+    expect(r).toEqual({ ok: true })
+  })
+
+  it('accepts the split wire halves form too', () => {
+    const r = validateEntity({ Ref_Key: 'g', Файл_Type: 'image/png', Файл_Base64Data: 'aGk=' }, vsSchema)
+    expect(r).toEqual({ ok: true })
+  })
 })
 
 describe('ValidationError', () => {
