@@ -4,7 +4,6 @@ import { activeFixtures, makeClient, writesAllowed } from '../helpers.js'
 
 for (const { fixture, profile } of activeFixtures()) {
   describe.skipIf(!writesAllowed() || !profile.valueStorage)(`live write ValueStorage: ${fixture.id}`, () => {
-    // biome-ignore lint/style/noNonNullAssertion: gated by describe.skipIf above
     const vs = profile.valueStorage!
     let client: ReturnType<typeof makeClient>
 
@@ -22,7 +21,6 @@ for (const { fixture, profile } of activeFixtures()) {
         console.warn(`[value-storage] no records in ${vs.catalogName} on ${fixture.id} — skipping round-trip`)
         return
       }
-      // biome-ignore lint/style/noNonNullAssertion: list.value.length checked above
       const refKey = list.value[0]!.Ref_Key
 
       // Read original payload + content type (so we can restore them)

@@ -33,7 +33,8 @@
       "style": {
         "useImportType": "error",
         "useConsistentArrayType": { "level": "error", "options": { "syntax": "shorthand" } },
-        "useNamingConvention": "off"
+        "useNamingConvention": "off",
+        "noNonNullAssertion": "error"
       },
       "complexity": {
         "noExcessiveCognitiveComplexity": { "level": "warn", "options": { "maxAllowedComplexity": 20 } }
@@ -63,7 +64,13 @@
     },
     {
       "includes": ["**/test/**"],
-      "linter": { "rules": { "suspicious": { "noConsole": "off" } } }
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" },
+          "style": { "noNonNullAssertion": "off" },
+          "complexity": { "useLiteralKeys": "off" }
+        }
+      }
     }
   ]
 }

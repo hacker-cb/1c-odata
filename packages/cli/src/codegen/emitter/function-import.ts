@@ -31,10 +31,9 @@ export function emitFunctionImportsFile(input: FunctionImportEmitInput): string 
   // Drop unbound FIs (rare; spec §4.5 lists only bound FIs)
   grouped.delete('')
 
-  const sets = [...grouped.keys()].sort()
+  const sets = [...grouped.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
   const setBlocks: string[] = []
-  for (const setName of sets) {
-    const methods = grouped.get(setName)!
+  for (const [setName, methods] of sets) {
     const methodLines: string[] = []
     for (const fi of methods) {
       methodLines.push(renderFiSignature(fi, input, importsFromCore, importsLocal))

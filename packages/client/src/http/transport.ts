@@ -117,9 +117,10 @@ async function translateAndFireError(
 ): Promise<never> {
   const request: RequestContext = { method: reqEvent.method, url: reqEvent.url }
   if (e instanceof Error && e.name === 'AbortError') {
-    if (timeoutSignal?.signal.aborted) {
-      const err = new TimeoutError(`Request timed out after ${timeoutMs!}ms`, {
-        timeoutMs: timeoutMs!,
+    // timeoutMs is paired with timeoutSignal in prepareRequest: set whenever the signal can fire.
+    if (timeoutSignal?.signal.aborted && timeoutMs !== undefined) {
+      const err = new TimeoutError(`Request timed out after ${timeoutMs}ms`, {
+        timeoutMs,
         cause: e,
         request,
       })

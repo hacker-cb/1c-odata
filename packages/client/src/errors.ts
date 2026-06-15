@@ -146,9 +146,6 @@ export class PermissionError extends HTTPError {
  */
 export class NetworkError extends ODataError {
   override readonly name = 'NetworkError'
-  constructor(message: string, opts?: ODataErrorOptions) {
-    super(message, opts)
-  }
 }
 
 /**
@@ -177,9 +174,6 @@ export class TimeoutError extends ODataError {
  */
 export class ParseError extends ODataError {
   override readonly name = 'ParseError'
-  constructor(message: string, opts?: ODataErrorOptions) {
-    super(message, opts)
-  }
 }
 
 /**
@@ -191,9 +185,6 @@ export class ParseError extends ODataError {
  */
 export class MetadataError extends ODataError {
   override readonly name = 'MetadataError'
-  constructor(message: string, opts?: ODataErrorOptions) {
-    super(message, opts)
-  }
 }
 
 /**

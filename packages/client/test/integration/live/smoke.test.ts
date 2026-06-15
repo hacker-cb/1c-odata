@@ -20,9 +20,7 @@ for (const { fixture, profile } of activeFixtures()) {
       expect(result.value).toHaveLength(1)
       const row = result.value[0]
       expect(row).toBeDefined()
-      // biome-ignore lint/style/noNonNullAssertion: existence asserted on previous line
       expect(row!.Ref_Key).toMatch(GUID_RE)
-      // biome-ignore lint/style/noNonNullAssertion: same
       expect(typeof row!.Code).toBe('string')
     }, 30_000)
 
