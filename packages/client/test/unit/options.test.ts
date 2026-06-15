@@ -52,11 +52,14 @@ describe('auth + options', () => {
     expect(DEFAULT_RETRY_POLICY.jitter).toBe('full')
   })
 
-  it('DEFAULT_RETRY_POLICY is frozen — a direct import cannot mutate the shared default', () => {
+  it('DEFAULT_RETRY_POLICY is deeply frozen — a direct import cannot mutate the shared default', () => {
     expect(Object.isFrozen(DEFAULT_RETRY_POLICY)).toBe(true)
+    expect(Object.isFrozen(DEFAULT_RETRY_POLICY.retryableStatuses)).toBe(true)
+    expect(Object.isFrozen(DEFAULT_RETRY_POLICY.retryableMethods)).toBe(true)
     expect(() => {
       ;(DEFAULT_RETRY_POLICY as { maxRetries: number }).maxRetries = 99
     }).toThrow(TypeError)
+    expect(() => DEFAULT_RETRY_POLICY.retryableStatuses.push(500)).toThrow(TypeError)
   })
 
   it('DEFAULT_RETRY_POLICY can be spread to customize without mutating the original', () => {

@@ -76,15 +76,16 @@ export interface RetryPolicy {
  *
  * Retries stay OFF unless a policy is supplied; opt in by passing this object
  * as `ClientOptions.retry` (or per-call `RequestOptions.retry`), and spread it
- * to tweak a field: `{ ...DEFAULT_RETRY_POLICY, maxRetries: 5 }`. Frozen, so a
- * direct import cannot mutate the shared default process-wide.
+ * to tweak a field: `{ ...DEFAULT_RETRY_POLICY, maxRetries: 5 }`. Deeply frozen
+ * (object AND its arrays), so a direct import cannot retune the shared default
+ * process-wide — spread it to customize.
  *
  * @public
  */
 export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze<RetryPolicy>({
   maxRetries: 3,
-  retryableStatuses: [502, 503, 504],
-  retryableMethods: ['GET', 'PUT', 'DELETE', 'PATCH'],
+  retryableStatuses: Object.freeze([502, 503, 504]) as number[],
+  retryableMethods: Object.freeze(['GET', 'PUT', 'DELETE', 'PATCH']) as RetryPolicy['retryableMethods'],
   initialDelayMs: 200,
   maxDelayMs: 5_000,
   backoffMultiplier: 2,
