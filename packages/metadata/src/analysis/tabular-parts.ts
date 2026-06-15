@@ -1,6 +1,28 @@
 import type { EdmxEntityType } from '../parser/ast.js'
 
 /**
+ * The longest `_`-split prefix of `name` (excluding the full name) that
+ * `resolve` maps to a single-key (header) entity — e.g. `Document_РТУ_Товары`
+ * → `Document_РТУ`. Shared by closure expansion (`computeClosure`) and tabular
+ * linking (`linkTabularParts`): both locate a composite-key tabular child's
+ * header this way. The callers differ only in their `resolve` set (the partial
+ * closure vs the full model); `_RecordType` companion handling stays at each
+ * call site (the two intentionally diverge on the fall-through there).
+ */
+export function findHeaderByPrefix(
+  name: string,
+  resolve: (candidate: string) => EdmxEntityType | undefined,
+): string | undefined {
+  const parts = name.split('_')
+  for (let i = parts.length - 1; i >= 1; i--) {
+    const candidate = parts.slice(0, i).join('_')
+    const parent = resolve(candidate)
+    if (parent !== undefined && parent.key.length === 1) return candidate
+  }
+  return undefined
+}
+
+/**
  * Link tabular EntityTypes to their header parents.
  *
  * Two distinct cases — both produce the same `headerToTabulars` / `tabularToHeader` view,
@@ -39,18 +61,12 @@ export function linkTabularParts(entities: EdmxEntityType[]): {
     }
     // Case 1: regular tabular — child has composite key; parent is a single-key header.
     if (e.key.length <= 1) continue
-    // Find the longest prefix that is itself a known EntityType.
-    const parts = e.name.split('_')
-    for (let i = parts.length - 1; i >= 1; i--) {
-      const candidate = parts.slice(0, i).join('_')
-      const parent = byName.get(candidate)
-      if (!parent) continue
-      if (parent.key.length !== 1) continue // parent must be a header
+    const candidate = findHeaderByPrefix(e.name, (c) => byName.get(c))
+    if (candidate !== undefined) {
       const existing = headerToTabulars.get(candidate) ?? []
       existing.push(e.name)
       headerToTabulars.set(candidate, existing)
       tabularToHeader.set(e.name, candidate)
-      break
     }
   }
   return { headerToTabulars, tabularToHeader }
