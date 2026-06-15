@@ -1,0 +1,10 @@
+---
+"@1c-odata/client": patch
+---
+
+Fix four TS ↔ 1С conversion correctness issues:
+
+- **Nested entities are now parsed with their own schema.** Reading an `$expand`ed tabular part or nested ComplexType previously looked every field up in the *parent* entity's schema, so a nested `Edm.Int64` stayed a string, a nested `Edm.DateTime` fell back to the regex heuristic, and nested ValueStorage triples were never grouped — even though the generated types promised converted values, and the write path already recursed with the nested type. The parser now resolves each nested field's own type (mirroring `write-transform`), and parses expanded navigation entities schema-less instead of bleeding the parent schema into them.
+- **ValueStorage round-trips on write.** The read side groups `<base>_Base64Data` + `<base>_Type` into a single `{ contentType, base64Data }` object; writing that object straight back (read → modify → `patch`) now splits it into the two wire halves 1С expects (the same shape `writeStream` PATCHes), instead of silently sending an unrecognized body. `validateOnWrite` now skips ValueStorage triple members, so the grouped form is no longer rejected when a `<base>_Type` half is declared non-nullable (which occurs in real 1С schemas).
+- **Numeric filter literals no longer use exponential notation.** `formatNumberLiteral` expanded small fractions / large magnitudes (e.g. `1e-7`, `1e21`) that JavaScript renders exponentially into plain decimal strings — OData V3 has no exponential numeric literal, so `f.field.eq(0.0000001)` previously produced an invalid `$filter` (HTTP 400 or a silent mismatch).
+- **Datetime milliseconds survive a round-trip.** `formatInZone` now keeps a non-zero millisecond component (`…:00.250`) instead of truncating to whole seconds, and `parseInZone` resolves the zone offset at second precision before re-applying the fraction — fixing both the silent write-side loss and a redundant offset recomputation for fractional inputs. Second-precision values (all standard 1С datetimes) are unchanged.

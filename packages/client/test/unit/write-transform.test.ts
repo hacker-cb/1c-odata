@@ -80,6 +80,58 @@ describe('transformDatesToWire — dateMode=date', () => {
   })
 })
 
+describe('transformDatesToWire — ValueStorage round-trip', () => {
+  const withVs: EntitySchema = {
+    properties: {
+      Ref_Key: { type: 'Edm.Guid', nullable: false },
+      Файл: { type: 'Edm.Stream', nullable: true },
+      Файл_Base64Data: { type: 'Edm.Binary', nullable: true },
+      Файл_Type: { type: 'Edm.String', nullable: true },
+    },
+    valueStorages: ['Файл'],
+  }
+
+  it('splits a grouped ValueStorage object back into the two wire halves', () => {
+    const out = transformDatesToWire(
+      { Ref_Key: 'g', Файл: { contentType: 'image/png', base64Data: 'aGk=' } },
+      withVs,
+      TZ,
+      baseMetadata,
+      'date',
+    )
+    expect(out.Файл_Type).toBe('image/png')
+    expect(out.Файл_Base64Data).toBe('aGk=')
+    expect(out).not.toHaveProperty('Файл')
+  })
+
+  it('leaves already-split wire halves untouched (no double processing)', () => {
+    const out = transformDatesToWire(
+      { Файл_Type: 'image/png', Файл_Base64Data: 'aGk=' },
+      withVs,
+      TZ,
+      baseMetadata,
+      'date',
+    )
+    expect(out.Файл_Type).toBe('image/png')
+    expect(out.Файл_Base64Data).toBe('aGk=')
+    expect(out).not.toHaveProperty('Файл')
+  })
+
+  it('does not split a non-ValueStorage-shaped value under the base key', () => {
+    // A bare string (e.g. user clearing the field) is not the grouped object.
+    const out = transformDatesToWire({ Файл: '' }, withVs, TZ, baseMetadata, 'date')
+    expect(out.Файл).toBe('')
+    expect(out).not.toHaveProperty('Файл_Type')
+  })
+
+  it('leaves a null base value untouched (no split, no crash)', () => {
+    const out = transformDatesToWire({ Файл: null }, withVs, TZ, baseMetadata, 'date')
+    expect(out.Файл).toBeNull()
+    expect(out).not.toHaveProperty('Файл_Type')
+    expect(out).not.toHaveProperty('Файл_Base64Data')
+  })
+})
+
 describe('transformDatesToWire — dateMode=string', () => {
   it('is no-op in string mode (full passthrough)', () => {
     const obj = { Date: new Date('2025-03-15T12:00:00Z'), Сумма: 100 }

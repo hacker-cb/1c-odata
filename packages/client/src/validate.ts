@@ -87,12 +87,20 @@ export type ValidationResult = { ok: true } | { ok: false; errors: ValidationIss
  * - Unknown fields are ignored (forward-compat with newer server schemas).
  * - Type-shape coercion (Guid/Boolean/numeric) is NOT validated — server is
  *   the source of truth for those.
+ * - ValueStorage triple members (`<base>`, `<base>_Base64Data`, `<base>_Type`)
+ *   are NOT validated. The user-facing grouped form is a single `<base>:
+ *   { contentType, base64Data }` object that the write transform splits into
+ *   the two wire halves, so the per-half `nullable` flags don't map to it (a
+ *   non-nullable `<base>_Type` would otherwise reject a perfectly valid grouped
+ *   payload). Binary content presence/format is server-validated.
  *
  * @public
  */
 export function validateEntity(entity: Record<string, unknown>, schema: EntitySchema): ValidationResult {
   const errors: ValidationIssue[] = []
+  const valueStorageMembers = collectValueStorageMembers(schema)
   for (const [name, prop] of Object.entries(schema.properties)) {
+    if (valueStorageMembers.has(name)) continue
     const v = entity[name]
     if (v === undefined || v === null) {
       if (!prop.nullable) errors.push({ kind: 'required', field: name })
@@ -103,6 +111,17 @@ export function validateEntity(entity: Record<string, unknown>, schema: EntitySc
     }
   }
   return errors.length === 0 ? { ok: true } : { ok: false, errors }
+}
+
+/** Property names belonging to a ValueStorage triple — excluded from validation. */
+function collectValueStorageMembers(schema: EntitySchema): Set<string> {
+  const members = new Set<string>()
+  for (const base of schema.valueStorages ?? []) {
+    members.add(base)
+    members.add(`${base}_Base64Data`)
+    members.add(`${base}_Type`)
+  }
+  return members
 }
 
 /**

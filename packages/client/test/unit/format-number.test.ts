@@ -42,4 +42,22 @@ describe('formatNumberLiteral', () => {
       expect((e as InvalidArgumentError).received).toBeNaN()
     }
   })
+
+  it('expands small fractions out of exponential notation (no `e` in OData V3 literals)', () => {
+    expect(String(1e-7)).toContain('e') // precondition: JS renders this exponentially
+    expect(formatNumberLiteral(1e-7, 'Amount')).toBe('0.0000001')
+    expect(formatNumberLiteral(1.5e-7, 'Amount')).toBe('0.00000015')
+    expect(formatNumberLiteral(-1e-7, 'Amount')).toBe('-0.0000001')
+  })
+
+  it('expands large magnitudes out of exponential notation', () => {
+    expect(String(1e21)).toContain('e') // precondition
+    expect(formatNumberLiteral(1e21, 'Amount')).toBe(`1${'0'.repeat(21)}`)
+  })
+
+  it('never emits an exponential literal for representative finite inputs', () => {
+    for (const v of [1e-7, 1e-9, 1e21, 1e30, -1e-8, 3.14, 0.0001, 42]) {
+      expect(formatNumberLiteral(v, 'X')).not.toMatch(/[eE]/)
+    }
+  })
 })

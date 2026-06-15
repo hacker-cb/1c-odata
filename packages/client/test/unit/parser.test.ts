@@ -246,6 +246,85 @@ describe('schema-aware parsing', () => {
     expect(r.value[0]?.EmptyDate).toBe('0001-01-01T00:00:00')
   })
 
+  it('parses nested tabular rows with THEIR OWN schema (Int64 / DateTime / ValueStorage)', () => {
+    const nestedIndex: MetadataIndex = {
+      schemaNamespace: 'StandardODATA',
+      schemas: {
+        Document_X: {
+          properties: {
+            Ref_Key: { type: 'Edm.Guid', nullable: false },
+            Код: { type: 'Edm.Int64', nullable: false },
+            Товары: { type: 'Collection(StandardODATA.Document_X_Товары_RowType)', nullable: true },
+          },
+        },
+        Document_X_Товары_RowType: {
+          properties: {
+            LineNumber: { type: 'Edm.Int64', nullable: false },
+            ДатаОтгрузки: { type: 'Edm.DateTime', nullable: true },
+            Файл_Base64Data: { type: 'Edm.Binary', nullable: true },
+            Файл_Type: { type: 'Edm.String', nullable: true },
+          },
+          valueStorages: ['Файл'],
+        },
+      },
+      entitySetToType: { Document_X: 'Document_X' },
+      shape: { int64Mode: 'number', dateMode: 'date' },
+    }
+    const body = JSON.stringify({
+      'odata.metadata': '...',
+      Ref_Key: 'g',
+      Товары: [
+        { LineNumber: '5', ДатаОтгрузки: '2025-03-16T00:00:00', Файл_Base64Data: 'aGk=', Файл_Type: 'image/png' },
+      ],
+    })
+    const r = parseV3Single<{ Товары: Record<string, unknown>[] }>(body, {
+      serverTimezone: 'UTC',
+      typeHint: 'Document_X',
+      metadataIndex: nestedIndex,
+    })
+    const row = r.Товары[0] as Record<string, unknown>
+    // Without the nested-schema fix these would be looked up in Document_X
+    // (which lacks LineNumber/ДатаОтгрузки/Файл*) and pass through unconverted.
+    expect(row.LineNumber).toBe(5)
+    expect(typeof row.LineNumber).toBe('number')
+    expect(row.ДатаОтгрузки).toBeInstanceOf(Date)
+    expect(row.Файл).toMatchObject({ contentType: 'image/png', base64Data: 'aGk=' })
+    expect(row).not.toHaveProperty('Файл_Base64Data')
+    expect(row).not.toHaveProperty('Файл_Type')
+  })
+
+  it('parses an expanded entity schema-less — parent schema does not bleed into it', () => {
+    const nestedIndex: MetadataIndex = {
+      schemaNamespace: 'StandardODATA',
+      schemas: {
+        Document_X: {
+          properties: {
+            Ref_Key: { type: 'Edm.Guid', nullable: false },
+            // Document_X declares `Код` as Int64; the expanded `Owner` entity
+            // (a navigation property, absent from `properties`) also has a `Код`
+            // that is a plain string. Old behavior reused Document_X's schema for
+            // the nested object → Number('ABC-1') = NaN.
+            Код: { type: 'Edm.Int64', nullable: false },
+          },
+        },
+      },
+      entitySetToType: { Document_X: 'Document_X' },
+      shape: { int64Mode: 'number', dateMode: 'date' },
+    }
+    const body = JSON.stringify({
+      'odata.metadata': '...',
+      Ref_Key: 'g',
+      Owner: { Ref_Key: 'o', Код: 'ABC-1', Дата: '2025-03-16T00:00:00' },
+    })
+    const r = parseV3Single<{ Owner: Record<string, unknown> }>(body, {
+      serverTimezone: 'UTC',
+      typeHint: 'Document_X',
+      metadataIndex: nestedIndex,
+    })
+    expect(r.Owner.Код).toBe('ABC-1') // schema-less → not coerced to NaN
+    expect(r.Owner.Дата).toBeInstanceOf(Date) // regex heuristic still applies
+  })
+
   it('converts Edm.DateTime sentinel to null when shape.dateMode=date (default)', () => {
     const body = JSON.stringify({
       value: [{ Ref_Key: 'a', Date: '0001-01-01T00:00:00' }],

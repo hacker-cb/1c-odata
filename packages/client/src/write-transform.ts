@@ -54,6 +54,13 @@ export function bigintToStringReplacer(_key: string, v: unknown): unknown {
   return typeof v === 'bigint' ? String(v) : v
 }
 
+/** Type guard for the grouped ValueStorage read form `{ contentType, base64Data }`. */
+function isValueStorageObject(v: unknown): v is { contentType: string; base64Data: string } {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  return typeof o.contentType === 'string' && typeof o.base64Data === 'string'
+}
+
 /** Strip schema namespace prefix from a fully-qualified type reference. */
 function makeStripNs(metadataIndex: MetadataIndex): (t: string) => string {
   const prefix = `${metadataIndex.schemaNamespace}.`
@@ -108,7 +115,15 @@ function transformNestedComplex(
  * value heuristic — `Date` instances convert via `transformDateValuesUntyped`.
  * Recursive for nested entities (tabular parts and single nested ComplexType).
  *
- * In `dateMode: 'string'` mode this function is a no-op — full passthrough.
+ * ValueStorage fields: the read side groups `<base>_Base64Data` + `<base>_Type`
+ * into a single `{ contentType, base64Data }` object under `<base>`. This
+ * splits that object back into the two wire halves (same shape `writeStream`
+ * PATCHes), so the read form is a valid write form — a natural read → modify →
+ * patch round-trip otherwise sends a body 1С does not understand.
+ *
+ * In `dateMode: 'string'` mode this function is a no-op — full passthrough
+ * (the client also short-circuits before calling it, so ValueStorage splitting
+ * does not apply in that advanced raw-wire mode; use `writeStream` instead).
  *
  * @internal
  */
@@ -161,5 +176,19 @@ export function transformDatesToWire(
 
     out[name] = v
   }
+
+  // Split each grouped ValueStorage back into its two wire halves — symmetric
+  // with the read-side grouping in parser.ts `mapEntity`. Only EntityTypes carry
+  // `valueStorages`; a string/undefined value (the user passed wire halves
+  // directly, or cleared the field) is left untouched.
+  for (const base of schema.valueStorages ?? []) {
+    const grouped = out[base]
+    if (isValueStorageObject(grouped)) {
+      out[`${base}_Type`] = grouped.contentType
+      out[`${base}_Base64Data`] = grouped.base64Data
+      delete out[base]
+    }
+  }
+
   return out
 }
