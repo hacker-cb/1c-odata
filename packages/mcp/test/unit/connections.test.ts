@@ -76,6 +76,26 @@ describe('upsertConnection', () => {
   it('rejects an invalid (non-ASCII) connection name', async () => {
     await expect(upsertConnection({ ...base, dataDir: dir, name: 'Валюта' })).rejects.toThrow(/Invalid connection name/)
   })
+
+  it('clears the stored password on a passwordless overwrite that changes the auth target', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'pw' })
+    const r = await upsertConnection({
+      ...base,
+      dataDir: dir,
+      name: 'trade',
+      baseUrl: 'http://other/odata',
+      overwrite: true,
+    })
+    expect(r.passwordCleared).toBe(true)
+    expect(await fileStore().read('trade')).toBeNull()
+  })
+
+  it('keeps the stored password on a passwordless overwrite that does not change the auth target', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'pw' })
+    const r = await upsertConnection({ ...base, dataDir: dir, name: 'trade', serverTimezone: 'UTC', overwrite: true })
+    expect(r.passwordCleared).toBeUndefined()
+    expect(await fileStore().read('trade')).toEqual({ password: 'pw', source: 'file' })
+  })
 })
 
 describe('removeConnection', () => {

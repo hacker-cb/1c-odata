@@ -138,13 +138,17 @@ async function verifyOrConfirm(fields: ResolvedFields, opts: AddOptions): Promis
 function reportSaved(
   opts: AddOptions,
   fields: ResolvedFields,
-  result: { overwritten: boolean; passwordBackend?: 'keychain' | 'file' },
+  result: { overwritten: boolean; passwordBackend?: 'keychain' | 'file'; passwordCleared?: boolean },
 ): void {
   process.stdout.write(`\n✓ Connection "${fields.name}" ${result.overwritten ? 'updated' : 'saved'}.\n`)
   process.stdout.write(`  config:   ${opts.dataDir}/config.json\n`)
   if (result.passwordBackend !== undefined) {
     const where = result.passwordBackend === 'keychain' ? 'OS keychain' : `${opts.dataDir}/credentials.json (0600)`
     process.stdout.write(`  password: ${where}\n`)
+  } else if (result.passwordCleared === true) {
+    process.stdout.write(
+      `  password: previous cleared (auth target changed) — provide ${passwordEnvVar(fields.name)} or re-run with a password\n`,
+    )
   } else if (fields.password !== undefined && !fields.persistPassword) {
     process.stdout.write(`  password: ${passwordEnvVar(fields.name)} env var (not copied to storage)\n`)
   } else {

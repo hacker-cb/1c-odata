@@ -3,13 +3,20 @@ import { fetchMetadataXml } from '@1c-odata/metadata'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { type ConnectionPool, DEFAULT_METADATA_TIMEOUT_MS } from '../connection-pool.js'
-import { removeConnection, upsertConnection } from '../connections.js'
+import { removeConnection, type UpsertConnectionResult, upsertConnection } from '../connections.js'
 import { stripUrlUserinfo } from '../redact.js'
 import { toolResult } from './_result.js'
 
 export interface ManagementToolsOptions {
   dataDir: string
   insecure?: boolean
+}
+
+/** Human-readable password disposition for the add_connection summary. */
+function passwordNote(result: UpsertConnectionResult): string {
+  if (result.passwordBackend !== undefined) return ` (password stored in ${result.passwordBackend})`
+  if (result.passwordCleared === true) return ' (previous password cleared — auth target changed; set a new one)'
+  return ' (no password stored)'
 }
 
 /**
@@ -59,16 +66,13 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
         })
         pool.refresh(connection)
         return {
-          summary: `Connection "${connection}" ${result.overwritten ? 'updated' : 'added'}${
-            result.passwordBackend !== undefined
-              ? ` (password stored in ${result.passwordBackend})`
-              : ' (no password stored)'
-          }.`,
+          summary: `Connection "${connection}" ${result.overwritten ? 'updated' : 'added'}${passwordNote(result)}.`,
           data: {
             connection,
             overwritten: result.overwritten,
             passwordStored: result.passwordBackend !== undefined,
             ...(result.passwordBackend !== undefined ? { passwordBackend: result.passwordBackend } : {}),
+            ...(result.passwordCleared === true ? { passwordCleared: true } : {}),
           },
         }
       }),

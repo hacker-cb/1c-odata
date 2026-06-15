@@ -189,12 +189,19 @@ export class SecretStore {
   }
 
   private fileDelete(name: string): void {
-    const secrets = this.readFileSecrets(false)
+    let secrets: FileSecrets
+    try {
+      secrets = this.readFileSecrets(false)
+    } catch {
+      // Malformed/unreadable file: we can't surgically drop one entry and it may
+      // hold stale plaintext we couldn't parse — remove it whole (it held no
+      // recoverable secrets) so a keychain migration / removal leaves nothing.
+      this.fileUnlink()
+      return
+    }
     if (!(name in secrets)) {
-      // `readFileSecrets(false)` returns {} for BOTH an empty/absent file and a
-      // malformed one — and a malformed file may still hold stale plaintext we
-      // couldn't parse. If the file exists yet yields no readable secrets, drop
-      // it entirely so a keychain migration / removal leaves nothing on disk.
+      // An empty `{}` file that exists is harmless to drop; a file still holding
+      // other connections' secrets is left untouched.
       if (Object.keys(secrets).length === 0 && existsSync(this.credentialsPath)) this.fileUnlink()
       return
     }
@@ -216,9 +223,10 @@ export class SecretStore {
 
   /**
    * Load the credentials file. With `enforcePermissions` it checks the 0600 rule
-   * BEFORE reading (a too-open file's plaintext is never loaded) and rejects
-   * malformed JSON — use it for reads. Write/delete pass `false`: they overwrite
-   * with 0600, so they tolerate a too-open or corrupt existing file. Only string
+   * BEFORE reading (a too-open file's plaintext is never loaded) — use it for
+   * reads. Write/delete pass `false`: they overwrite with 0600, so they tolerate
+   * a too-open existing file. Malformed JSON ALWAYS throws (a write must not
+   * clobber unparseable siblings; fileDelete catches it and unlinks). Only string
    * values are kept (a hand-edited file may contain other types).
    */
   private readFileSecrets(enforcePermissions: boolean): FileSecrets {
@@ -240,8 +248,9 @@ export class SecretStore {
     try {
       parsed = JSON.parse(raw)
     } catch {
-      if (enforcePermissions) throw new Error(`Malformed JSON in ${this.credentialsPath} — fix or delete the file.`)
-      return {}
+      // Malformed JSON always throws (both read and write paths) — a write must
+      // not silently clobber unparseable siblings; fileDelete catches & unlinks.
+      throw new Error(`Malformed JSON in ${this.credentialsPath} — fix or delete the file.`)
     }
     if (parsed === null || typeof parsed !== 'object') return {}
     const result: FileSecrets = {}

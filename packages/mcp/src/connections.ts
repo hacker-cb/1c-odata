@@ -37,6 +37,8 @@ export interface UpsertConnectionInput {
 export interface UpsertConnectionResult {
   overwritten: boolean
   passwordBackend?: 'keychain' | 'file'
+  /** True when a stale secret was dropped because a passwordless overwrite changed the auth target. */
+  passwordCleared?: boolean
 }
 
 /**
@@ -62,7 +64,8 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
 
   return withConfigLock(async () => {
     const config = loadConfig(input.dataDir)
-    const existed = config.connections[input.name] !== undefined
+    const existing = config.connections[input.name]
+    const existed = existing !== undefined
     if (existed && input.overwrite !== true) {
       throw new InvalidArgumentError(`Connection "${input.name}" already exists`, { argument: 'name' })
     }
@@ -75,12 +78,22 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
     } satisfies StoredConnection
     saveConfig(input.dataDir, config)
 
+    const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
     let passwordBackend: 'keychain' | 'file' | undefined
+    let passwordCleared = false
     if (password !== undefined && password !== '') {
-      const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
       passwordBackend = (await store.write(input.name, password)).backend
+    } else if (existing !== undefined && (existing.baseUrl !== baseUrl || existing.login !== login)) {
+      // Passwordless overwrite that changes the auth target (baseUrl/login): drop
+      // the stale secret so the old credential is never sent to the new endpoint.
+      await store.remove(input.name)
+      passwordCleared = true
     }
-    return { overwritten: existed, ...(passwordBackend !== undefined ? { passwordBackend } : {}) }
+    return {
+      overwritten: existed,
+      ...(passwordBackend !== undefined ? { passwordBackend } : {}),
+      ...(passwordCleared ? { passwordCleared: true } : {}),
+    }
   })
 }
 

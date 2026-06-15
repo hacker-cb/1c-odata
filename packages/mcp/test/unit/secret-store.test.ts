@@ -114,4 +114,12 @@ describe('SecretStore', () => {
     await store.remove('trade')
     expect(existsSync(join(dir, 'credentials.json'))).toBe(false)
   })
+
+  it('refuses to write over a malformed credentials file (no silent loss of siblings)', async () => {
+    const store = fileStore()
+    // Writing must NOT clobber a file whose other (unparseable) entries we can't
+    // read — fail loudly so the user fixes it instead of losing passwords.
+    writeFileSync(join(dir, 'credentials.json'), "{ broken: 'not json", { mode: 0o600 })
+    await expect(store.write('trade', 'pw')).rejects.toThrow(/Malformed JSON/)
+  })
 })

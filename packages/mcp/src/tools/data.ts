@@ -13,7 +13,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import type { ConnectionPool } from '../connection-pool.js'
 import { clampTop, type Limits } from '../limits.js'
-import { capLongStrings, type FitResult, fitRows, stripNoise } from '../rows.js'
+import { capLongStrings, type FitResult, fitRows, stripNoise, toJsonSafe } from '../rows.js'
 import { toolResult } from './_result.js'
 
 /** Register virtual tables, keyed by RegisterHelper method name. */
@@ -195,9 +195,17 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool, limit
         const { client } = await pool.get(connection)
         const entity = await client.entity<UntypedEntity>(entitySet, key).get()
         const cleaned = compact === true ? stripNoise(entity) : entity
-        // Cap oversized fields (e.g. a base64 ValueStorage) so a single entity
-        // can't exceed the budget; there are no rows here to drop.
+        // Cap oversized string fields (e.g. a base64 ValueStorage) first.
         const shaped = capLongStrings(cleaned, limits.maxBytes)
+        // A wide entity (many fields / large tabular parts) can still exceed the
+        // budget, and there are no rows to drop — refuse rather than overflow.
+        const bytes = Buffer.byteLength(JSON.stringify(toJsonSafe(shaped)), 'utf8')
+        if (bytes > limits.maxBytes) {
+          return {
+            summary: `${entitySet}(${key}) is ~${bytes} bytes — over the ~${limits.maxBytes}-byte budget. Use query with filter "Ref_Key eq guid'${key}'" and a narrow select (or select "**" to drop tabular parts).`,
+            data: { connection, entitySet, key, truncated: true, bytes },
+          }
+        }
         return { summary: `Fetched ${entitySet}(${key}).`, data: { connection, entitySet, key, entity: shaped } }
       }),
   )
@@ -269,8 +277,9 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool, limit
     async (args) =>
       toolResult(async () => {
         const { client } = await pool.get(args.connection)
-        // The FI returns the whole virtual table; paginate client-side (no $top
-        // on FI URLs) so `total` is exact and the row array stays bounded.
+        // Fetch the whole virtual table and paginate client-side so `total` is
+        // exact and the row array stays bounded. (The client's ReadFiOptions.top
+        // could cap the fetch server-side, but that would forgo the exact total.)
         const allRows = await runRegisterTable(client.register(args.register), args)
         const total = allRows.length
         const offset = args.skip ?? 0

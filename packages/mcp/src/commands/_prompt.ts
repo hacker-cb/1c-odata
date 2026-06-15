@@ -13,6 +13,17 @@ export async function promptLine(label: string, opts: { default?: string } = {})
   }
 }
 
+type KeyAction = 'submit' | 'abort' | 'backspace' | 'append'
+
+/** Classify a raw keypress for {@link promptHidden}: Ctrl-D submits a non-empty buffer but aborts an empty one. */
+function classifyKey(code: number, buffer: string): KeyAction {
+  if (code === 13 || code === 10) return 'submit' // Enter (CR / LF)
+  if (code === 4) return buffer === '' ? 'abort' : 'submit' // Ctrl-D (EOT)
+  if (code === 3) return 'abort' // Ctrl-C (ETX)
+  if (code === 127 || code === 8) return 'backspace' // Backspace / Delete
+  return 'append'
+}
+
 /**
  * Ask for a secret with no echo (raw-mode TTY, like `sudo` / `gh auth login`).
  * The typed characters never reach the screen, shell history, or `ps`. Requires
@@ -43,29 +54,26 @@ export async function promptHidden(label: string): Promise<string> {
       stdout.write('\n')
       reject(new Error('Input closed before a password was entered'))
     }
+    // Single exit: restore the TTY, then settle. `null` aborts (rejects).
+    const finish = (result: string | null): void => {
+      cleanup()
+      stdout.write('\n')
+      if (result === null) reject(new Error('Aborted'))
+      else resolve(result)
+    }
     const onData = (chunk: string): void => {
       for (const ch of chunk) {
-        const code = ch.charCodeAt(0)
-        if (code === 13 || code === 10 || code === 4) {
-          // Enter (CR / LF) or Ctrl-D
-          cleanup()
-          stdout.write('\n')
-          resolve(buffer)
+        const action = classifyKey(ch.charCodeAt(0), buffer)
+        if (action === 'submit') {
+          finish(buffer)
           return
         }
-        if (code === 3) {
-          // Ctrl-C
-          cleanup()
-          stdout.write('\n')
-          reject(new Error('Aborted'))
+        if (action === 'abort') {
+          finish(null)
           return
         }
-        if (code === 127 || code === 8) {
-          // Backspace / Delete
-          buffer = buffer.slice(0, -1)
-          continue
-        }
-        buffer += ch
+        if (action === 'backspace') buffer = buffer.slice(0, -1)
+        else if (action === 'append') buffer += ch
       }
     }
     stdin.on('data', onData)
