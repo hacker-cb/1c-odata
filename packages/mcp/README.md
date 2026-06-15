@@ -93,6 +93,7 @@ it with env vars (all optional):
 | `ONEC_MCP_DEFAULT_TOP` | `50` | Page size when a call omits `top`. |
 | `ONEC_MCP_MAX_TOP` | `1000` | Hard ceiling on a call's `top`. |
 | `ONEC_MCP_MAX_BYTES` | `24000` | Per-result byte budget for the returned rows. |
+| `ONEC_MCP_MAX_REGISTER_ROWS` | `100000` | Cap on rows fetched from a register virtual table before client-side paging; beyond it `register_query` returns a `totalCapped` floor. |
 
 Pass `compact: true` to `query` / `get_entity` / `register_query` to also drop 1С `*_Type` annotation
 companions (and `@odata` noise) and fit more rows per response. Caveat: that also removes composite-type
