@@ -88,4 +88,19 @@ describe('mapResponseToError', () => {
     expect(err).toBeInstanceOf(ParseError)
     expect(err.request).toEqual(req)
   })
+
+  it('tolerates odata.error shape drift (bare string message) without a misleading ParseError', async () => {
+    const json = '{"odata.error":{"code":"7","message":"plain string message"}}'
+    const err = await mapResponseToError(400, 'Bad Request', { 'content-type': 'application/json' }, json, req)
+    expect(err).toBeInstanceOf(HTTPError)
+    expect(err).not.toBeInstanceOf(ParseError)
+    expect((err as HTTPError).odata).toEqual({ code: '7', message: 'plain string message' })
+  })
+
+  it('falls back to a generic message when odata.error has no usable message', async () => {
+    const json = '{"odata.error":{"code":"7"}}'
+    const err = await mapResponseToError(400, 'Bad Request', { 'content-type': 'application/json' }, json, req)
+    expect(err).toBeInstanceOf(HTTPError)
+    expect((err as HTTPError).odata?.message).toBe('Unknown OData error')
+  })
 })

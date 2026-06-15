@@ -38,15 +38,18 @@ export async function mapResponseToError(
   let format: 'json' | 'xml'
 
   if (ct.includes('application/json') || ct.includes('json')) {
+    let obj: { 'odata.error'?: { code?: unknown; message?: unknown } }
     try {
-      const obj = JSON.parse(body) as { 'odata.error'?: { code: string; message: { value: string } } }
-      const err = obj['odata.error']
-      if (!err) return new ParseError(`Response missing odata.error wrapper (status ${status})`, { request })
-      parsed = { code: String(err.code), message: err.message.value }
-      format = 'json'
+      obj = JSON.parse(body)
     } catch (e) {
       return new ParseError(`Invalid JSON in error body (status ${status})`, { cause: e, request })
     }
+    const err = obj['odata.error']
+    if (!err) return new ParseError(`Response missing odata.error wrapper (status ${status})`, { request })
+    // Tolerate envelope-shape drift: a present-but-odd `odata.error` still yields
+    // a usable HTTPError instead of a misleading "Invalid JSON" ParseError.
+    parsed = { code: String(err.code ?? ''), message: extractODataMessage(err.message) }
+    format = 'json'
   } else if (ct.includes('xml')) {
     // Only a real `<m:error>` envelope counts as XML. An XHTML/proxy error page
     // served with an `xml` content-type but no `<code>`/`<message>` is treated
@@ -88,7 +91,7 @@ function noEnvelopeError(
     `(content-type "${ct || 'none'}"). Check the request URL — a wrong ` +
     `entity-set path, a missing base, or an over-long URL (1С rejects requests ` +
     `past its URL-length limit) typically produces this instead of a JSON ` +
-    `odata.error.${preview ? ` Body starts: ${preview}` : ''}`
+    `odata.error envelope.${preview ? ` Body starts: ${preview}` : ''}`
   return new HTTPError(message, {
     status,
     statusText,
@@ -96,6 +99,19 @@ function noEnvelopeError(
     request,
     ...(rawBody ? { rawBody } : {}),
   })
+}
+
+/**
+ * Pull the human message out of an `odata.error.message`, tolerating shape
+ * drift: the 1С envelope nests it as `{ value }`, but some servers send a bare
+ * string. Never throws — an unrecognized shape yields a generic fallback.
+ */
+function extractODataMessage(m: unknown): string {
+  if (typeof m === 'string') return m
+  if (typeof m === 'object' && m !== null && typeof (m as { value?: unknown }).value === 'string') {
+    return (m as { value: string }).value
+  }
+  return 'Unknown OData error'
 }
 
 /**

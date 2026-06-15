@@ -211,7 +211,7 @@ export function parseEdmx(xml: string): EdmxModel {
   try {
     parsed = parser.parse(xml)
   } catch (e) {
-    throw new MetadataError(`Failed to parse EDMX XML: ${(e as Error).message}`)
+    throw new MetadataError(`Failed to parse EDMX XML: ${(e as Error).message}`, { cause: e })
   }
   const root = (parsed as Record<string, unknown>)['edmx:Edmx']
   if (!root || typeof root !== 'object') {
