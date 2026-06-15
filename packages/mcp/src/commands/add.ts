@@ -56,22 +56,23 @@ async function resolveNonInteractivePassword(
   opts: AddOptions,
   name: string,
 ): Promise<{ value: string; persist: boolean } | undefined> {
+  // Passwords are opaque — kept verbatim. stdin drops only a single trailing
+  // newline (the line terminator from `echo` / a file), never real whitespace.
   if (opts.passwordStdin === true) {
-    const value = (await readStdin()).trim()
+    const value = (await readStdin()).replace(/\r?\n$/, '')
     if (value === '') {
       throw new InvalidArgumentError('--password-stdin received an empty password', { argument: 'password' })
     }
     return { value, persist: true }
   }
   if (opts.password !== undefined) {
-    const value = opts.password.trim()
-    if (value === '') throw new InvalidArgumentError('--password must not be empty', { argument: 'password' })
-    return { value, persist: true }
+    if (opts.password === '') throw new InvalidArgumentError('--password must not be empty', { argument: 'password' })
+    return { value: opts.password, persist: true }
   }
   // No explicit password — fall back to the env var if present. Env passwords
-  // already resolve at runtime, so verify with them but don't copy to storage.
+  // resolve verbatim at runtime, so verify with them verbatim but don't store them.
   const fromEnv = process.env[passwordEnvVar(name)]
-  if (fromEnv !== undefined && fromEnv !== '') return { value: fromEnv.trim(), persist: false }
+  if (fromEnv !== undefined && fromEnv !== '') return { value: fromEnv, persist: false }
   return undefined
 }
 
@@ -108,7 +109,7 @@ async function gatherInteractive(opts: AddOptions): Promise<ResolvedFields | nul
   const baseUrl = (await promptLine('Base URL: ')).trim()
   warnIfUrlHasUserinfo(baseUrl)
   const login = (await promptLine('Login: ')).trim()
-  const password = (await promptHidden('Password: ')).trim()
+  const password = await promptHidden('Password: ')
   const serverTimezone = await promptLine('Server timezone [Europe/Moscow]: ', { default: 'Europe/Moscow' })
   return { name, baseUrl, login, password, persistPassword: true, serverTimezone, overwrite }
 }

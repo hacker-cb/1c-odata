@@ -45,12 +45,13 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
     },
     async ({ connection, baseUrl, login, serverTimezone, password, overwrite }) =>
       toolResult(async () => {
-        const hasPassword = password !== undefined && password.trim() !== ''
-        // Verify before persisting when a password is available.
+        const hasPassword = password !== undefined && password !== ''
+        // Verify before persisting when a password is available. The password is
+        // used verbatim here so verify matches exactly what gets stored/used.
         if (hasPassword) {
           await fetchMetadataXml({
             baseUrl: stripUrlUserinfo(baseUrl.trim()),
-            auth: connectionAuth({ auth: { username: login.trim(), password: (password as string).trim() } }),
+            auth: connectionAuth({ auth: { username: login.trim(), password: password as string } }),
             timeout: DEFAULT_METADATA_TIMEOUT_MS,
           })
         }

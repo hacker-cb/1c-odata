@@ -49,6 +49,11 @@ describe('upsertConnection', () => {
     expect(await fileStore().read('trade')).toEqual({ password: 'pw', source: 'file' })
   })
 
+  it('stores the password verbatim — never trims edge whitespace', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: '  s p a c e s  ' })
+    expect(await fileStore().read('trade')).toEqual({ password: '  s p a c e s  ', source: 'file' })
+  })
+
   it('saves config only when no password is given', async () => {
     const result = await upsertConnection({ ...base, dataDir: dir, name: 'trade' })
     expect(result.passwordBackend).toBeUndefined()

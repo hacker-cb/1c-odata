@@ -51,7 +51,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
   assertValidConnectionName(input.name)
   const baseUrl = normalizeBaseUrl(stripUrlUserinfo(input.baseUrl.trim()))
   const login = input.login.trim()
-  const password = input.password?.trim()
+  const password = input.password // opaque credential — stored verbatim, never trimmed
 
   // Validate baseUrl / login / timezone. When only the non-secret config is
   // saved, a placeholder satisfies validateConnection's non-empty password
