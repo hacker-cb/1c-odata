@@ -1,6 +1,6 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadMetadataIndex, ParseError } from '@1c-odata/client'
+import { loadMetadataIndex, MetadataError } from '@1c-odata/client'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { activeFixtures, makeClient } from '../helpers.js'
 
@@ -31,12 +31,12 @@ for (const { fixture, profile } of activeFixtures()) {
 
     beforeAll(async () => {
       client = makeClient(fixture)
-      // loadMetadataIndex wraps every failure in ParseError — for ENOENT (file
+      // loadMetadataIndex wraps every failure in MetadataError — for ENOENT (file
       // truly missing) we want a hint pointing at `pnpm generate`; for everything
       // else (malformed JSON, schema mismatch) we must surface the original
-      // ParseError so the real diagnosis isn't masked.
+      // MetadataError so the real diagnosis isn't masked.
       const idx = await loadMetadataIndex(METADATA_PATH).catch((err: unknown) => {
-        const fsCause = err instanceof ParseError ? (err.cause as { code?: string } | undefined) : undefined
+        const fsCause = err instanceof MetadataError ? (err.cause as { code?: string } | undefined) : undefined
         if (fsCause?.code === 'ENOENT') {
           throw new Error(
             `Metadata fixture missing at ${METADATA_PATH}. ` +

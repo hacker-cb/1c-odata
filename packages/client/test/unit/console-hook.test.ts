@@ -51,10 +51,28 @@ describe('consoleHook', () => {
       statusText: 'Internal Server Error',
       code: '-1',
       errorFormat: 'json',
-      body: { code: '-1', message: 'X' },
+      odata: { code: '-1', message: 'X' },
     })
     await hooks.onError!(req, err)
     expect(out.join('')).toContain('HTTPError')
     expect(out.join('')).toContain('-1')
+  })
+
+  it('omits code= for a no-envelope HTTPError but still prints status', async () => {
+    const out: string[] = []
+    const writeFn = vi.fn((s: string) => {
+      out.push(s)
+    })
+    const hooks = consoleHook({ writeFn })
+    const req: RequestEvent = { method: 'GET', url: 'http://x/Bad', headers: {} }
+    const err = new HTTPError('HTTP 404 Not Found: server returned no OData error envelope', {
+      status: 404,
+      statusText: 'Not Found',
+      errorFormat: 'none',
+      rawBody: '<html>404</html>',
+    })
+    await hooks.onError!(req, err)
+    expect(out.join('')).toContain('404')
+    expect(out.join('')).not.toContain('code=')
   })
 })

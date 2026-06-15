@@ -1,4 +1,4 @@
-import type { ODataError } from '../errors.js'
+import { HTTPError, type ODataError } from '../errors.js'
 import type { RequestEvent, RequestHooks, ResponseEvent } from './types.js'
 
 export interface ConsoleHookOptions {
@@ -47,9 +47,8 @@ export function consoleHook(opts: ConsoleHookOptions = {}): RequestHooks {
       write(line)
     },
     onError: (_req: RequestEvent, err: ODataError) => {
-      const e = err as ODataError & { status?: number; code?: string }
-      const status = e.status !== undefined ? `${e.status} ` : ''
-      const code = e.code !== undefined ? `code="${e.code}" ` : ''
+      const status = err instanceof HTTPError ? `${err.status} ` : ''
+      const code = err instanceof HTTPError && err.code !== undefined ? `code="${err.code}" ` : ''
       write(`[1c-odata] ✗ ${err.name} ${status}${code}${err.message}\n`)
     },
   }

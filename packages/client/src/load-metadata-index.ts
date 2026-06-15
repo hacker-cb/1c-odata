@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
-import { ParseError } from './errors.js'
+import { MetadataError } from './errors.js'
 import type { MetadataIndex } from './validate.js'
 
 /**
@@ -10,7 +10,7 @@ import type { MetadataIndex } from './validate.js'
  * response, or any other transport.
  *
  * Validates structural shape: `schemaNamespace`, `schemas`, `entitySetToType`,
- * optional `shape`, optional `enums`. Mismatches throw `ParseError` with a
+ * optional `shape`, optional `enums`. Mismatches throw `MetadataError` with a
  * JSON-path breadcrumb pointing at the offending node (e.g.
  * `$.schemas.Catalog_X.properties.Y.type`). `source` is only used in error
  * messages to say where the data came from.
@@ -37,20 +37,20 @@ export async function loadMetadataIndex(input: string | URL): Promise<MetadataIn
     try {
       path = fileURLToPath(input)
     } catch (e) {
-      throw new ParseError(`Invalid URL input (expected file: scheme): ${input.toString()}`, { cause: e })
+      throw new MetadataError(`Invalid URL input (expected file: scheme): ${input.toString()}`, { cause: e })
     }
   }
   let raw: string
   try {
     raw = await readFile(path, 'utf8')
   } catch (e) {
-    throw new ParseError(`Failed to read ${path}`, { cause: e })
+    throw new MetadataError(`Failed to read ${path}`, { cause: e })
   }
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
   } catch (e) {
-    throw new ParseError(`Invalid JSON in ${path}`, { cause: e })
+    throw new MetadataError(`Invalid JSON in ${path}`, { cause: e })
   }
   return parseMetadataIndex(parsed, path)
 }
@@ -63,7 +63,7 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 
 function fail(filePath: string, subpath: string, expected: string, got: unknown): never {
   const gotDesc = got === null ? 'null' : Array.isArray(got) ? 'array' : typeof got
-  throw new ParseError(`Invalid metadata at ${filePath} ${subpath}: expected ${expected}, got ${gotDesc}`)
+  throw new MetadataError(`Invalid metadata at ${filePath} ${subpath}: expected ${expected}, got ${gotDesc}`)
 }
 
 function assertString(v: unknown, filePath: string, path: string): asserts v is string {

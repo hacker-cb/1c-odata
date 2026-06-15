@@ -1,5 +1,5 @@
 import type { RequestOptions } from '../client/options.js'
-import { NetworkError, ODataError, TimeoutError } from '../errors.js'
+import { NetworkError, ODataError, type RequestContext, TimeoutError } from '../errors.js'
 import type { RequestEvent, RequestHooks, ResponseEvent } from '../hooks/types.js'
 import { mapResponseToError } from './error-mapping.js'
 
@@ -115,9 +115,14 @@ async function translateAndFireError(
   timeoutSignal: AbortController | undefined,
   timeoutMs: number | undefined,
 ): Promise<never> {
+  const request: RequestContext = { method: reqEvent.method, url: reqEvent.url }
   if (e instanceof Error && e.name === 'AbortError') {
     if (timeoutSignal?.signal.aborted) {
-      const err = new TimeoutError(`Request timed out after ${timeoutMs!}ms`, { timeoutMs: timeoutMs!, cause: e })
+      const err = new TimeoutError(`Request timed out after ${timeoutMs!}ms`, {
+        timeoutMs: timeoutMs!,
+        cause: e,
+        request,
+      })
       if (hooks?.onError) await hooks.onError(reqEvent, err)
       throw err
     }
@@ -126,7 +131,7 @@ async function translateAndFireError(
   }
   if (e instanceof ODataError) throw e
   // Anything else is treated as network-level
-  const err = new NetworkError(`Network error: ${(e as Error).message ?? 'unknown'}`, { cause: e })
+  const err = new NetworkError(`Network error: ${(e as Error).message ?? 'unknown'}`, { cause: e, request })
   if (hooks?.onError) await hooks.onError(reqEvent, err)
   throw err
 }
@@ -142,8 +147,10 @@ async function translateAndFireError(
  * @throws {HTTPError} (and its subclasses `BusinessError`, `ConcurrencyError`,
  *   `PermissionError`) when the server returns HTTP ≥ 400. The exact subclass
  *   is decided by `mapResponseToError` based on status + `odata.error.code`.
- * @throws {ParseError} when the error response body is unparseable (invalid
- *   JSON, unrecognised content-type) — the original status is lost.
+ * @throws {ParseError} when a JSON/XML error body is unparseable (invalid JSON
+ *   or a missing `odata.error` wrapper). A non-OData body (HTML/proxy page,
+ *   wrong path, over-long URL) instead yields an `HTTPError` with
+ *   `errorFormat: 'none'` and the status preserved.
  * @throws {DOMException} `AbortError` (`error.name === 'AbortError'`) is
  *   rethrown unchanged when the user-issued `AbortSignal` fires.
  */
@@ -179,7 +186,10 @@ export async function request(
     if (callOpts.hooks?.afterResponse) await callOpts.hooks.afterResponse(reqEvent, resEvent)
 
     if (response.status >= 400) {
-      const err = await mapResponseToError(response.status, response.statusText, headers, body)
+      const err = await mapResponseToError(response.status, response.statusText, headers, body, {
+        method: reqEvent.method,
+        url: reqEvent.url,
+      })
       if (callOpts.hooks?.onError) await callOpts.hooks.onError(reqEvent, err)
       throw err
     }
@@ -218,7 +228,8 @@ export async function request(
  * @throws {HTTPError} (and subclasses) when the server returns HTTP ≥ 400.
  *   Note: for the error path the body IS consumed in order to map to the
  *   typed error; the caller never sees the body in that case.
- * @throws {ParseError} when the error response body is unparseable.
+ * @throws {ParseError} when a JSON/XML error body is unparseable. A non-OData
+ *   body yields an `HTTPError` with `errorFormat: 'none'` (status preserved).
  * @throws {DOMException} `AbortError` (`error.name === 'AbortError'`) is
  *   rethrown unchanged when the user-issued `AbortSignal` fires.
  */
@@ -252,7 +263,10 @@ export async function requestStream(
     // left untouched and returned to the caller.
     if (response.status >= 400) {
       const body = await response.text()
-      const err = await mapResponseToError(response.status, response.statusText, headers, body)
+      const err = await mapResponseToError(response.status, response.statusText, headers, body, {
+        method: reqEvent.method,
+        url: reqEvent.url,
+      })
       if (callOpts.hooks?.onError) await callOpts.hooks.onError(reqEvent, err)
       throw err
     }
