@@ -1,3 +1,4 @@
+import type { DateMode } from './connection.js'
 import { formatInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
 import type { EntitySchema, MetadataIndex } from './validate.js'
@@ -73,7 +74,7 @@ function transformCollection(
   propType: string,
   tz: string,
   metadataIndex: MetadataIndex,
-  dateMode: 'date' | 'string',
+  dateMode: DateMode,
   stripNs: (t: string) => string,
 ): unknown {
   const innerType = propType.slice('Collection('.length, -1)
@@ -92,7 +93,7 @@ function transformNestedComplex(
   propType: string,
   tz: string,
   metadataIndex: MetadataIndex,
-  dateMode: 'date' | 'string',
+  dateMode: DateMode,
   stripNs: (t: string) => string,
 ): unknown {
   const innerSchema = metadataIndex.schemas[stripNs(propType)]
@@ -132,7 +133,7 @@ export function transformDatesToWire(
   schema: EntitySchema,
   tz: string,
   metadataIndex: MetadataIndex,
-  dateMode: 'date' | 'string',
+  dateMode: DateMode,
 ): Record<string, unknown> {
   if (dateMode === 'string') return body
 

@@ -1,7 +1,9 @@
+import type { DateMode, Int64Mode } from '@1c-odata/client'
+
 export interface TypeMapperOptions {
   schemaNamespace: string
-  int64Mode: 'number' | 'bigint' | 'string'
-  dateMode: 'date' | 'string'
+  int64Mode: Int64Mode
+  dateMode: DateMode
 }
 
 /**

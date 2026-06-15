@@ -1,4 +1,5 @@
 import type { EdmxFunctionImport, EdmxModel } from '../parser/ast.js'
+import { findHeaderByPrefix } from './tabular-parts.js'
 
 export interface ClosureAddition {
   kind: 'entity' | 'complex' | 'function'
@@ -109,16 +110,11 @@ export function computeClosure(model: EdmxModel, filter: (name: string) => boole
         }
       }
       if (e.key.length > 1) {
-        const parts = e.name.split('_')
-        for (let i = parts.length - 1; i >= 1; i--) {
-          const candidate = parts.slice(0, i).join('_')
-          if (!entities.has(candidate)) continue
-          const parent = entityByName.get(candidate)
-          if (!parent || parent.key.length !== 1) continue
+        const candidate = findHeaderByPrefix(e.name, (c) => (entities.has(c) ? entityByName.get(c) : undefined))
+        if (candidate !== undefined) {
           entities.add(e.name)
           additions.push({ kind: 'entity', name: e.name, reason: `tabular of ${candidate}` })
           changed = true
-          break
         }
       }
     }

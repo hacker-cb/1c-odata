@@ -1,4 +1,10 @@
-import type { DataShape, EntitySchema, MetadataIndex, PropertySchema } from '@1c-odata/client'
+import {
+  type DataShape,
+  DEFAULT_SHAPE,
+  type EntitySchema,
+  type MetadataIndex,
+  type PropertySchema,
+} from '@1c-odata/client'
 import { computeClosure } from './analysis/closure.js'
 import { detectValueStorage } from './analysis/value-storage.js'
 import type { EdmxModel } from './parser/ast.js'
@@ -117,8 +123,8 @@ export interface BuildMetadataIndexOptions {
  */
 export function buildMetadataIndex(model: EdmxModel, opts: BuildMetadataIndexOptions = {}): MetadataIndex {
   const shape: DataShape = {
-    int64Mode: opts.shape?.int64Mode ?? 'number',
-    dateMode: opts.shape?.dateMode ?? 'date',
+    int64Mode: opts.shape?.int64Mode ?? DEFAULT_SHAPE.int64Mode,
+    dateMode: opts.shape?.dateMode ?? DEFAULT_SHAPE.dateMode,
   }
   let keep: ((typeName: string) => boolean) | undefined
   if (opts.filter !== undefined) {

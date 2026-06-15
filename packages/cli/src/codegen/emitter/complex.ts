@@ -1,11 +1,12 @@
+import type { DateMode, Int64Mode } from '@1c-odata/client'
 import type { EdmxComplexType } from '@1c-odata/metadata'
 import { applyNullable, mapEdmxTypeToTs } from './type-mapper.js'
 
 export interface ComplexEmitInput {
   types: EdmxComplexType[]
   schemaNamespace: string
-  int64Mode: 'number' | 'bigint' | 'string'
-  dateMode: 'date' | 'string'
+  int64Mode: Int64Mode
+  dateMode: DateMode
 }
 
 /**
