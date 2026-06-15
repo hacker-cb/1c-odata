@@ -2,6 +2,7 @@
 export type { AuthOptions, BasicAuthOptions } from './auth/basic.js'
 export { BasicAuth } from './auth/basic.js'
 export type { ClientOptions, MutationOptions, RequestOptions, RetryPolicy } from './client/options.js'
+export { DEFAULT_RETRY_POLICY } from './client/options.js'
 // V3 client + handles
 export { ODataV3Client, type ODataV3ClientOptions } from './client/v3-client.js'
 export { V3DocumentHandle, V3EntityHandle, V3EntitySetHandle } from './client/v3-handles.js'
@@ -15,6 +16,7 @@ export {
   validateConnection,
 } from './connection.js'
 export type {
+  ConcurrencyErrorOptions,
   ErrorFormat,
   HTTPErrorOptions,
   InvalidArgumentErrorOptions,

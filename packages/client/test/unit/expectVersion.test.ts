@@ -62,9 +62,17 @@ describe('V3EntityHandle expectVersion option', () => {
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    await expect(c.entity('Catalog_X', 'g').patch({ Code: 'NEW' }, { expectVersion: 'v1' })).rejects.toBeInstanceOf(
-      ConcurrencyError,
-    )
+    const err = await c
+      .entity('Catalog_X', 'g')
+      .patch({ Code: 'NEW' }, { expectVersion: 'v1' })
+      .then(
+        () => null,
+        (e: unknown) => e,
+      )
+    expect(err).toBeInstanceOf(ConcurrencyError)
+    // Compared versions are exposed as structured fields, not just in the message.
+    expect((err as ConcurrencyError).expectedVersion).toBe('v1')
+    expect((err as ConcurrencyError).actualVersion).toBe('v3')
     expect(patchHit).toBe(false)
   })
 
