@@ -1,6 +1,7 @@
+import { join } from 'node:path'
 import { connectionAuth, InvalidArgumentError } from '@1c-odata/client'
 import { fetchMetadataXml } from '@1c-odata/metadata'
-import { assertValidConnectionName, loadConfig } from '../config.js'
+import { assertValidConnectionName, configPath, loadConfig } from '../config.js'
 import { DEFAULT_METADATA_TIMEOUT_MS } from '../connection-pool.js'
 import { upsertConnection } from '../connections.js'
 import { errorText, stripUrlUserinfo } from '../redact.js'
@@ -142,9 +143,10 @@ function reportSaved(
   result: { overwritten: boolean; passwordBackend?: 'keychain' | 'file'; passwordCleared?: boolean },
 ): void {
   process.stdout.write(`\n✓ Connection "${fields.name}" ${result.overwritten ? 'updated' : 'saved'}.\n`)
-  process.stdout.write(`  config:   ${opts.dataDir}/config.json\n`)
+  process.stdout.write(`  config:   ${configPath(opts.dataDir)}\n`)
   if (result.passwordBackend !== undefined) {
-    const where = result.passwordBackend === 'keychain' ? 'OS keychain' : `${opts.dataDir}/credentials.json (0600)`
+    const where =
+      result.passwordBackend === 'keychain' ? 'OS keychain' : `${join(opts.dataDir, 'credentials.json')} (0600)`
     process.stdout.write(`  password: ${where}\n`)
   } else if (result.passwordCleared === true) {
     process.stdout.write(

@@ -40,16 +40,32 @@ const APP_DIR = '1c-odata'
  * `ONEC_MCP_DATA_DIR` per-install, or it would fragment that shared config.
  *
  * Resolution order:
- * 1. `ONEC_MCP_DATA_DIR` — explicit opt-in override (sandboxed / portable / CI).
+ * 1. `ONEC_MCP_DATA_DIR` — explicit opt-in override (sandboxed / portable / CI),
+ *    trimmed of surrounding whitespace.
  * 2. Otherwise a predictable per-user dir, XDG-style on every platform:
  *    - macOS / Linux: `$XDG_CONFIG_HOME/1c-odata` when set to an absolute path,
  *      else `~/.config/1c-odata`.
  *    - Windows: `%APPDATA%\1c-odata`, else `~\AppData\Roaming\1c-odata`.
+ *
+ * The result is always absolute; resolution throws if it isn't (a relative
+ * override, or no `HOME`/`USERPROFILE` so the default can't anchor) rather than
+ * silently writing config + the `0600` credentials file to a CWD-relative path.
  */
 export function resolveDataDir(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.ONEC_MCP_DATA_DIR
-  if (override !== undefined && override.trim() !== '') return override
-  return defaultDataDir(env)
+  const override = env.ONEC_MCP_DATA_DIR?.trim()
+  const dir = override !== undefined && override !== '' ? override : defaultDataDir(env)
+  // The path must be absolute: a relative dir resolves against each process's
+  // CWD, which would fork the shared config per launch and scatter the 0600
+  // credentials file. This trips on a relative override, or when HOME/USERPROFILE
+  // is unset so homedir() returns '' (stripped container/sandbox env) and the
+  // default collapses to a CWD-relative path — fail loudly instead.
+  if (!isAbsolute(dir)) {
+    throw new Error(
+      `Resolved data directory ${JSON.stringify(dir)} is not absolute. Set ONEC_MCP_DATA_DIR to an absolute ` +
+        'path, or ensure HOME/USERPROFILE is set so the default (~/.config or %APPDATA%) can resolve.',
+    )
+  }
+  return dir
 }
 
 /** Per-user default data dir: XDG on macOS/Linux, `%APPDATA%` on Windows. */

@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { assertValidConnectionName, configPath, loadConfig, resolveDataDir, saveConfig } from '../../src/config.js'
 
@@ -13,13 +13,25 @@ afterEach(() => {
 })
 
 describe('resolveDataDir', () => {
-  it('prefers ONEC_MCP_DATA_DIR verbatim, over any platform default', () => {
+  it('prefers ONEC_MCP_DATA_DIR over any platform default', () => {
     expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '/x/y', XDG_CONFIG_HOME: '/other', APPDATA: 'C:\\other' })).toBe('/x/y')
+  })
+
+  it('trims surrounding whitespace from ONEC_MCP_DATA_DIR', () => {
+    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '  /srv/onec  ' })).toBe('/srv/onec')
+  })
+
+  it('rejects a relative ONEC_MCP_DATA_DIR (would fork per-CWD and scatter secrets)', () => {
+    expect(() => resolveDataDir({ ONEC_MCP_DATA_DIR: 'relative/dir' })).toThrow(/not absolute/)
   })
 
   it('ignores a blank override and falls back to a per-user dir named after the app', () => {
     expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '   ' })).toContain('1c-odata')
     expect(resolveDataDir({})).toContain('1c-odata')
+  })
+
+  it('always resolves to an absolute path, independent of platform', () => {
+    expect(isAbsolute(resolveDataDir({}))).toBe(true)
   })
 
   // The default is XDG-style and agent-independent: branches on the host OS.
@@ -30,18 +42,21 @@ describe('resolveDataDir', () => {
       )
     })
 
-    it('falls back to ~\\AppData\\Roaming when APPDATA is unset', () => {
-      expect(resolveDataDir({})).toBe(join(homedir(), 'AppData', 'Roaming', '1c-odata'))
+    it('falls back to ~\\AppData\\Roaming when APPDATA is unset or blank', () => {
+      const expected = join(homedir(), 'AppData', 'Roaming', '1c-odata')
+      expect(resolveDataDir({})).toBe(expected)
+      expect(resolveDataDir({ APPDATA: '   ' })).toBe(expected)
     })
   } else {
     it('honors an absolute $XDG_CONFIG_HOME on macOS/Linux', () => {
       expect(resolveDataDir({ XDG_CONFIG_HOME: '/custom/cfg' })).toBe('/custom/cfg/1c-odata')
     })
 
-    it('ignores a relative or empty $XDG_CONFIG_HOME and uses ~/.config', () => {
+    it('ignores a relative, empty or blank $XDG_CONFIG_HOME and uses ~/.config', () => {
       const expected = join(homedir(), '.config', '1c-odata')
       expect(resolveDataDir({ XDG_CONFIG_HOME: 'relative/path' })).toBe(expected)
       expect(resolveDataDir({ XDG_CONFIG_HOME: '' })).toBe(expected)
+      expect(resolveDataDir({ XDG_CONFIG_HOME: '   ' })).toBe(expected)
       expect(resolveDataDir({})).toBe(expected)
     })
   }
