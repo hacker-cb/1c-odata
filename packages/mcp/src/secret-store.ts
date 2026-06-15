@@ -1,4 +1,13 @@
-import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
 
 /** Where a connection's password was resolved from (or `none`). */
@@ -181,17 +190,28 @@ export class SecretStore {
 
   private fileDelete(name: string): void {
     const secrets = this.readFileSecrets(false)
-    if (!(name in secrets)) return
+    if (!(name in secrets)) {
+      // `readFileSecrets(false)` returns {} for BOTH an empty/absent file and a
+      // malformed one — and a malformed file may still hold stale plaintext we
+      // couldn't parse. If the file exists yet yields no readable secrets, drop
+      // it entirely so a keychain migration / removal leaves nothing on disk.
+      if (Object.keys(secrets).length === 0 && existsSync(this.credentialsPath)) this.fileUnlink()
+      return
+    }
     delete secrets[name]
     if (Object.keys(secrets).length === 0) {
-      try {
-        unlinkSync(this.credentialsPath)
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-      }
+      this.fileUnlink()
       return
     }
     this.writeFileSecrets(secrets)
+  }
+
+  private fileUnlink(): void {
+    try {
+      unlinkSync(this.credentialsPath)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    }
   }
 
   /**

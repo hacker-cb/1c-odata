@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -104,5 +104,14 @@ describe('SecretStore', () => {
     writeFileSync(join(dir, 'credentials.json'), JSON.stringify({ a: 'pw', b: 123 }), { mode: 0o600 })
     expect(await store.read('b')).toBeNull()
     expect(await store.read('a')).toEqual({ password: 'pw', source: 'file' })
+  })
+
+  it('removes a malformed credentials file on delete, leaving no stale plaintext', async () => {
+    const store = fileStore()
+    // A hand-broken file our parser can't read must still be cleared on remove,
+    // not left on disk (it may hold plaintext we couldn't parse).
+    writeFileSync(join(dir, 'credentials.json'), "{ broken: 'not json", { mode: 0o600 })
+    await store.remove('trade')
+    expect(existsSync(join(dir, 'credentials.json'))).toBe(false)
   })
 })

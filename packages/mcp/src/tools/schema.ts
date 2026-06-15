@@ -57,9 +57,9 @@ export function registerSchemaTools(server: McpServer, pool: ConnectionPool, lim
       inputSchema: {
         connection: z.string().describe('Connection name'),
         kind: z
-          .string()
+          .enum(KIND_ORDER as unknown as [string, ...string[]])
           .optional()
-          .describe(`Filter by 1С entity kind (one of: ${KIND_ORDER.join(', ')})`),
+          .describe('Filter by 1С entity kind'),
         name: z.string().optional().describe('Case-insensitive substring matched against the entity-set or short name'),
         top: z.number().int().optional().describe('Max rows to return this page (server-capped; omit for the default)'),
         skip: z.number().int().min(0).optional().describe('Offset for pagination (default 0)'),
