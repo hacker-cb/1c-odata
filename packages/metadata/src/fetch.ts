@@ -2,6 +2,7 @@ import {
   type AuthOptions,
   type Connection,
   connectionAuth,
+  MetadataError,
   type MetadataIndex,
   normalizeBaseUrl,
 } from '@1c-odata/client'
@@ -52,7 +53,28 @@ export async function fetchMetadataXml(opts: FetchMetadataXmlOptions): Promise<s
     },
     { timeout: opts.timeout ?? DEFAULT_FETCH_TIMEOUT },
   )
+  assertEdmxResponse(raw, url)
   return raw.body
+}
+
+/**
+ * Guard against a non-EDMX 2xx response — the most common dynamic-path failure
+ * is an unauthenticated request being redirected to an HTML login/portal page,
+ * or a wrong base URL serving `index.html`. Without this the body flows into
+ * `parseEdmx` and surfaces as a cryptic "Expected <edmx:Edmx> root element".
+ * Fail loudly with the URL, status, content-type, and a body snippet instead.
+ */
+function assertEdmxResponse(raw: { status: number; headers: Record<string, string>; body: string }, url: string): void {
+  const head = raw.body.replace(/^﻿/, '').trimStart().slice(0, 512)
+  const lower = head.toLowerCase()
+  const looksLikeXml = head.startsWith('<') && !lower.startsWith('<!doctype html') && !lower.startsWith('<html')
+  if (looksLikeXml) return // looks like XML/EDMX — let parseEdmx do the precise check
+  const contentType = raw.headers['content-type'] ?? '(none)'
+  const snippet = head.slice(0, 200).replace(/\s+/g, ' ').trim()
+  throw new MetadataError(
+    `Expected EDMX ($metadata) XML from ${url}, but the response was not XML (status ${raw.status}, content-type ${contentType}). The base URL is likely wrong, or an unauthenticated request was redirected to an HTML login page. First bytes: ${snippet}`,
+    { request: { method: 'GET', url } },
+  )
 }
 
 /**
@@ -94,9 +116,26 @@ export async function fetchMetadataIndex(
     timeout: opts.timeout ?? DEFAULT_FETCH_TIMEOUT,
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   })
-  const model = parseEdmx(xml)
+  const model = parseEdmxWithContext(xml, `${normalizeBaseUrl(conn.baseUrl)}/$metadata`)
   return buildMetadataIndex(model, {
     ...(conn.shape !== undefined ? { shape: conn.shape } : {}),
     ...(opts.filter !== undefined ? { filter: opts.filter } : {}),
   })
+}
+
+/**
+ * Parse fetched EDMX, attaching the source URL to any `MetadataError` that
+ * doesn't already carry request context. Without this, a parse failure on a
+ * live `$metadata` gives no hint which base produced the bad XML — the first
+ * thing you need in a multi-target / multi-tenant setup.
+ */
+function parseEdmxWithContext(xml: string, url: string): ReturnType<typeof parseEdmx> {
+  try {
+    return parseEdmx(xml)
+  } catch (e) {
+    if (e instanceof MetadataError && e.request === undefined) {
+      throw new MetadataError(e.message, { request: { method: 'GET', url }, cause: e })
+    }
+    throw e
+  }
 }

@@ -119,6 +119,21 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
         argument: 'opts.serverTimezone',
       })
     }
+    // Validate IANA timezone validity, not just presence: a bogus zone silently
+    // shifts every DateTime parse/format. `validateConnection` already does this
+    // for the Connection path, but a client built directly via `new
+    // ODataV3Client({...})` would otherwise slip through with a bad zone.
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: opts.serverTimezone })
+    } catch {
+      throw new InvalidArgumentError(
+        'ClientOptions.serverTimezone is not a valid IANA timezone (e.g. "Europe/Moscow")',
+        {
+          argument: 'opts.serverTimezone',
+          received: opts.serverTimezone,
+        },
+      )
+    }
     if (opts.validateOnWrite && opts.metadataIndex === undefined) {
       throw new InvalidArgumentError(
         'validateOnWrite requires metadataIndex (loadMetadataIndex from generated __metadata.json, or fetchMetadataIndex from @1c-odata/metadata)',
