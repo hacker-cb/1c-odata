@@ -8,6 +8,16 @@ import { buildMetadataIndex, type ClosureResult, type EdmxModel, KIND_ORDER, typ
  * tracking schema drift (type counts, header counts, closure stats, input
  * hashes).
  *
+ * For an `include` run, the same `filter` that drives `.ts` emission is
+ * threaded into `buildMetadataIndex` so the runtime index is narrowed to the
+ * SAME dependency closure as the generated TypeScript. Without this, an
+ * `include` run emitted narrowed `.ts` files but a full-base `__metadata.json`
+ * — diverging from both the generated types and `fetchMetadataIndex(conn, {
+ * filter })`, and breaking the "all sources produce identical behavior"
+ * invariant. For a full-base run `filter` is `undefined`: the index is built
+ * unfiltered (byte-identical to the narrowed match-all build, pinned by
+ * `metadata-parity`) and the redundant closure walk is skipped.
+ *
  * Key order is fixed explicitly so the emitted JSON stays byte-stable across
  * refactors — `metadata-parity` and `metadata-json-schema` tests pin it.
  *
@@ -21,10 +31,11 @@ export function normalizeModel(
   model: EdmxModel,
   headerCountsByKind: Record<Kind, number>,
   closure: ClosureResult,
+  filter: ((entityTypeName: string) => boolean) | undefined,
   shape: DataShape,
   inputs?: { metadata: string; options: string; cliVersion: string },
 ): string {
-  const idx = buildMetadataIndex(model, { shape })
+  const idx = buildMetadataIndex(model, { shape, ...(filter !== undefined ? { filter } : {}) })
   // Re-emit in canonical KIND_ORDER for deterministic JSON key order.
   const headerCounts: Record<Kind, number> = Object.fromEntries(
     KIND_ORDER.map((k) => [k, headerCountsByKind[k] ?? 0]),
