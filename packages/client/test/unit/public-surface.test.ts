@@ -10,6 +10,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const PKG_ROOT = join(__dirname, '../..')
 const DIST_DTS = join(PKG_ROOT, 'dist/index.d.ts')
 
+// This test guards ONE invariant: internal transport symbols must never leak
+// into the public `.d.ts`. It intentionally does NOT snapshot the full API
+// shape — that is covered structurally by `package.json#exports`, `tsc`,
+// `publint` + `arethetypeswrong` (package:lint), and the changesets release
+// process. A verbatim `.d.ts` snapshot only re-encoded bundler output (chunk
+// hashes, aliases) and churned on every intentional API change in v0.x.
+
 // Inputs that influence the emitted dist. Any change to these can invalidate
 // dist/*.d.ts. Mirrors tsdown entries + tsconfig + base config + tsdown config.
 const BUILD_INPUTS = [
@@ -29,13 +36,14 @@ function newestMtime(path: string): number {
   return max
 }
 
-function loadDts(): string {
+// Refuse to scan a stale/missing build: any source / config newer than
+// dist/index.d.ts ⇒ throw. Covers all entrypoints (index.ts, filter.ts,
+// internal.ts), all nested src/**, and the configs that drive the build, so the
+// banned-symbol scan can never pass against an out-of-date dist.
+function assertDistFresh(): void {
   if (!existsSync(DIST_DTS)) {
     throw new Error(`Public surface test requires dist/index.d.ts. Run 'pnpm -F @1c-odata/client build' first.`)
   }
-  // Stale check: any source / config newer than dist/index.d.ts ⇒ refuse.
-  // Covers all entrypoints (index.ts, filter.ts, internal.ts), all nested
-  // src/**, and the configs that drive the build.
   const dtsM = statSync(DIST_DTS).mtimeMs
   for (const input of BUILD_INPUTS) {
     if (!existsSync(input)) continue
@@ -43,29 +51,13 @@ function loadDts(): string {
       throw new Error(`dist/index.d.ts is stale (${input} modified later). Run 'pnpm -F @1c-odata/client build' first.`)
     }
   }
-  const raw = readFileSync(DIST_DTS, 'utf8')
-  // Normalize: LF endings, trim trailing whitespace.
-  return raw
-    .replace(/\r\n/g, '\n')
-    .split('\n')
-    .map((l) => l.trimEnd())
-    .join('\n')
 }
 
-describe('public surface — dist/index.d.ts snapshot', () => {
-  it('matches the committed snapshot', () => {
-    const dts = loadDts()
-    expect(dts).toMatchSnapshot()
-  })
-})
-
 function loadAllDts(): string {
-  // Aggregate ALL .d.ts files in dist for banned-symbol scanning. The snapshot
-  // test (loadDts) stays narrow on index.d.ts; this catches leaks in subpaths
-  // and chunked declaration files (e.g. dist/filter-*.d.ts) that are
+  // Aggregate ALL .d.ts files in dist for banned-symbol scanning. Catches leaks
+  // in subpaths and chunked declaration files (e.g. dist/filter-*.d.ts) that are
   // referenced from public entry points via TS chunk imports.
-  // Calls loadDts() purely for its existence + staleness side effects.
-  loadDts()
+  assertDistFresh()
   const distDir = dirname(DIST_DTS)
   const files = readdirSync(distDir)
   const contents: string[] = []
