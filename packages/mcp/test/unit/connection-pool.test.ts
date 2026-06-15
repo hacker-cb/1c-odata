@@ -76,6 +76,17 @@ describe('ConnectionPool.get', () => {
     await expect(pool().get('nopw')).rejects.toThrow(/No password for "nopw"/)
   })
 
+  it('validates a loaded connection (IANA timezone) before downloading $metadata', async () => {
+    // A hand-edited/migrated config.json bypasses the add-path validation; the
+    // pool must reject a bad timezone up front, not after a multi-MB $metadata fetch.
+    write('config.json', {
+      connections: { badtz: { baseUrl: 'http://h/odata/standard.odata', login: 'u', serverTimezone: 'Europe/Mosow' } },
+    })
+    write('credentials.json', { badtz: 'pw' })
+    await expect(pool().get('badtz')).rejects.toThrow(/serverTimezone is not a valid IANA timezone/)
+    expect(vi.mocked(fetchMetadataXml)).not.toHaveBeenCalled()
+  })
+
   it('refresh() drops the cache so the next get re-downloads', async () => {
     const p = pool()
     await p.get('trade')

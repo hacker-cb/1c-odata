@@ -5,6 +5,7 @@ import {
   InvalidArgumentError,
   type MetadataIndex,
   ODataV3Client,
+  validateConnection,
 } from '@1c-odata/client'
 import { buildMetadataIndex, type EdmxModel, fetchMetadataXml, parseEdmx } from '@1c-odata/metadata'
 import { loadConfig } from './config.js'
@@ -120,6 +121,12 @@ export class ConnectionPool {
       serverTimezone: stored.serverTimezone,
       ...(stored.shape !== undefined ? { shape: stored.shape } : {}),
     }
+    // Validate the loaded connection (incl. IANA timezone) BEFORE the multi-MB
+    // $metadata download, so a bad hand-edited config.json fails instantly with a
+    // clear message instead of after a full fetch. upsertConnection validates on
+    // the add path; a hand-edited / migrated config.json bypasses that, and the
+    // client constructor would otherwise only reject it post-download.
+    validateConnection(connection)
 
     // Inline fetch→parse→build (rather than metadata's fetchMetadataIndex) so we
     // keep the intermediate EdmxModel for describe_entity (keys/navigation) —
