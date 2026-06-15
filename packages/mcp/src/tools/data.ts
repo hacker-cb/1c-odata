@@ -99,7 +99,7 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool, limit
     {
       title: 'Query data',
       description:
-        'Read-only OData query against an entity set ($filter, $select, $expand, $orderby, $top/$skip, optional count). Large results are truncated to a byte budget — use select to keep them small. With expand, also include the navigation property in select (e.g. "Партнер/Description") or the expanded data is dropped. For register balances/turnovers/totals use register_query, not raw "*_RecordType" rows.',
+        'Read-only OData query against an entity set ($filter, $select, $expand, $orderby, $top/$skip, optional count). Large results are truncated to a byte budget — use select to keep them small. With expand, also include the navigation property in select (e.g. "Партнер/Description") or the expanded data is dropped. To look up records by key use get_entity (once per id) — do NOT build long "Ref_Key eq … or …" filters; 1С rejects over-long URLs with HTTP 404 (keep any OR-batch ≤ ~10). For register balances/turnovers/totals use register_query, not raw "*_RecordType" rows.',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         entitySet: z.string().describe('Entity set, e.g. Catalog_Валюты'),
@@ -177,7 +177,7 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool, limit
     {
       title: 'Get entity',
       description:
-        'Fetch a single entity by key (Ref_Key GUID). For a projection or $expand of one record, use query with filter "Ref_Key eq guid\'…\'".',
+        'Fetch one entity by key (Ref_Key GUID) — the right way to look up a record by id. For several ids, call this once per id rather than one query with a long "Ref_Key eq … or …" filter (1С rejects over-long URLs with HTTP 404). For a projection or $expand of a single record, use query with filter "Ref_Key eq guid\'…\'".',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         entitySet: z.string().describe('Entity set, e.g. Catalog_Валюты'),
