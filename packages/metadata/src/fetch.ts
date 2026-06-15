@@ -69,7 +69,7 @@ export async function fetchMetadataXml(opts: FetchMetadataXmlOptions): Promise<s
  * status, content-type, and a body snippet otherwise.
  */
 function assertEdmxResponse(raw: { status: number; headers: Record<string, string>; body: string }, url: string): void {
-  const body = raw.body.replace(/^﻿/, '').trimStart()
+  const body = raw.body.replace(/^\uFEFF/, '').trimStart()
   // The EDMX root sits right after the (optional) XML declaration; scan a
   // generous prefix rather than lowercasing a multi-MB document.
   const hasEdmxRoot = body.slice(0, 16_384).toLowerCase().includes('<edmx:edmx')
