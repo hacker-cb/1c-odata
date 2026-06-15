@@ -1,3 +1,4 @@
+import type { DateMode, Int64Mode } from '@1c-odata/client'
 import { type EdmxFunctionImport, type EdmxParameter, groupFunctionImportsByEntitySet } from '@1c-odata/metadata'
 import { compareCyrillic } from '../util.js'
 import { applyNullable, extractCustomSymbols, mapEdmxTypeToTs } from './type-mapper.js'
@@ -5,8 +6,8 @@ import { applyNullable, extractCustomSymbols, mapEdmxTypeToTs } from './type-map
 export interface FunctionImportEmitInput {
   fis: EdmxFunctionImport[]
   schemaNamespace: string
-  int64Mode: 'number' | 'bigint' | 'string'
-  dateMode: 'date' | 'string'
+  int64Mode: Int64Mode
+  dateMode: DateMode
 }
 
 /**

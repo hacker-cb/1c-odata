@@ -1,4 +1,4 @@
-import type { DataShape } from '@1c-odata/client'
+import { type DataShape, DEFAULT_SHAPE } from '@1c-odata/client'
 import {
   classifyEntity,
   computeClosure,
@@ -76,8 +76,8 @@ export function generate(input: GenerateInput): GenerateResult {
   })
 
   const opts = {
-    int64Mode: input.int64Mode ?? 'number',
-    dateMode: input.dateMode ?? 'date',
+    int64Mode: input.int64Mode ?? DEFAULT_SHAPE.int64Mode,
+    dateMode: input.dateMode ?? DEFAULT_SHAPE.dateMode,
   }
 
   const files = new Map<string, string>()

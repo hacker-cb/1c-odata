@@ -1,6 +1,6 @@
 // packages/client/src/parser.ts
 
-import type { DataShape } from './connection.js'
+import { type DataShape, DEFAULT_SHAPE } from './connection.js'
 import { ParseError } from './errors.js'
 import { parseInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
@@ -189,7 +189,7 @@ function convertStringValue(
   // shape without `int64Mode`) means "behave like the documented default", not
   // "leave the wire string untouched".
   if (propType === 'Edm.Int64') {
-    const mode = shape?.int64Mode ?? 'number'
+    const mode = shape?.int64Mode ?? DEFAULT_SHAPE.int64Mode
     if (mode === 'bigint') return BigInt(v)
     if (mode === 'number') return Number(v)
     return v

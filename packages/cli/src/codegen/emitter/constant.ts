@@ -1,3 +1,4 @@
+import type { DateMode, Int64Mode } from '@1c-odata/client'
 import type { EdmxEntityType } from '@1c-odata/metadata'
 import { compareCyrillic } from '../util.js'
 import { applyNullable, mapEdmxTypeToTs } from './type-mapper.js'
@@ -5,8 +6,8 @@ import { applyNullable, mapEdmxTypeToTs } from './type-mapper.js'
 export interface ConstantEmitInput {
   entity: EdmxEntityType
   schemaNamespace: string
-  int64Mode: 'number' | 'bigint' | 'string'
-  dateMode: 'date' | 'string'
+  int64Mode: Int64Mode
+  dateMode: DateMode
 }
 
 /**
