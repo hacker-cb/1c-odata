@@ -1,6 +1,7 @@
 import type {
   BalanceArgs,
   DrCrTurnoversArgs,
+  ReadFiOptions,
   RecordsWithExtDimensionsArgs,
   RegisterHelper,
   SliceArgs,
@@ -277,10 +278,14 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool, limit
     async (args) =>
       toolResult(async () => {
         const { client } = await pool.get(args.connection)
-        // Fetch the whole virtual table and paginate client-side so `total` is
-        // exact and the row array stays bounded. (The client's ReadFiOptions.top
-        // could cap the fetch server-side, but that would forgo the exact total.)
-        const allRows = await runRegisterTable(client.register(args.register), args)
+        // Register FIs return the whole virtual table; bound the server-side fetch
+        // ($top = cap + 1) so a huge register can't OOM us, then paginate
+        // client-side. `total` is exact below the cap; above it we degrade to a
+        // floor with `totalCapped` and a nudge to narrow.
+        const cap = limits.maxRegisterRows
+        const fetched = await runRegisterTable(client.register(args.register), args, { top: cap + 1 })
+        const totalCapped = fetched.length > cap
+        const allRows = totalCapped ? fetched.slice(0, cap) : fetched
         const total = allRows.length
         const offset = args.skip ?? 0
         const limit = clampTop(args.top, limits)
@@ -293,19 +298,23 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool, limit
           limits,
           'narrow with dimensions/condition, set compact:true, or page with skip',
         )
+        const capNote = totalCapped
+          ? ` ⚠ register result capped at ${cap} rows — narrow with dimensions/condition/period for the full set.`
+          : ''
         return {
-          summary: `${rows.length} row(s) of ${total} total from ${args.register}.${args.table}.${note}`,
+          summary: `${rows.length} row(s) of ${total}${totalCapped ? '+' : ''} total from ${args.register}.${args.table}.${note}${capNote}`,
           data: {
             connection: args.connection,
             register: args.register,
             table: args.table,
             total,
+            ...(totalCapped ? { totalCapped: true } : {}),
             pagination: {
               skip: offset,
               top: limit,
               returned: rows.length,
               truncated,
-              hasMore: truncated || offset + page.length < total,
+              hasMore: truncated || totalCapped || offset + page.length < total,
             },
             rows,
           },
@@ -385,23 +394,27 @@ function recordsWithExtDimensionsArgs(args: RegisterQueryArgs): RecordsWithExtDi
 }
 
 /** Dispatch a register virtual-table call. Each arg builder is a small pure function. */
-function runRegisterTable(reg: RegisterHelper<unknown>, args: RegisterQueryArgs): Promise<Record<string, unknown>[]> {
+function runRegisterTable(
+  reg: RegisterHelper<unknown>,
+  args: RegisterQueryArgs,
+  opts: ReadFiOptions,
+): Promise<Record<string, unknown>[]> {
   switch (args.table) {
     case 'balance':
-      return reg.balance(balanceArgs(args))
+      return reg.balance(balanceArgs(args), opts)
     case 'turnovers':
-      return reg.turnovers(turnoversArgs(args))
+      return reg.turnovers(turnoversArgs(args), opts)
     case 'balanceAndTurnovers':
-      return reg.balanceAndTurnovers(turnoversArgs(args))
+      return reg.balanceAndTurnovers(turnoversArgs(args), opts)
     case 'sliceFirst':
-      return reg.sliceFirst(sliceArgs(args))
+      return reg.sliceFirst(sliceArgs(args), opts)
     case 'sliceLast':
-      return reg.sliceLast(sliceArgs(args))
+      return reg.sliceLast(sliceArgs(args), opts)
     case 'drCrTurnovers':
-      return reg.drCrTurnovers(drCrTurnoversArgs(args))
+      return reg.drCrTurnovers(drCrTurnoversArgs(args), opts)
     case 'extDimensions':
-      return reg.extDimensions()
+      return reg.extDimensions(opts)
     case 'recordsWithExtDimensions':
-      return reg.recordsWithExtDimensions(recordsWithExtDimensionsArgs(args))
+      return reg.recordsWithExtDimensions(recordsWithExtDimensionsArgs(args), opts)
   }
 }

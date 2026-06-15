@@ -7,11 +7,14 @@ describe('resolveLimits', () => {
   })
 
   it('reads ONEC_MCP_* overrides', () => {
-    expect(resolveLimits({ ONEC_MCP_DEFAULT_TOP: '10', ONEC_MCP_MAX_TOP: '200', ONEC_MCP_MAX_BYTES: '5000' })).toEqual({
-      defaultTop: 10,
-      maxTop: 200,
-      maxBytes: 5000,
-    })
+    expect(
+      resolveLimits({
+        ONEC_MCP_DEFAULT_TOP: '10',
+        ONEC_MCP_MAX_TOP: '200',
+        ONEC_MCP_MAX_BYTES: '5000',
+        ONEC_MCP_MAX_REGISTER_ROWS: '7777',
+      }),
+    ).toEqual({ defaultTop: 10, maxTop: 200, maxBytes: 5000, maxRegisterRows: 7777 })
   })
 
   it('ignores invalid / out-of-range values and falls back to defaults', () => {
@@ -43,7 +46,7 @@ describe('resolveLimits', () => {
 })
 
 describe('clampTop', () => {
-  const limits = { defaultTop: 50, maxTop: 1000, maxBytes: 24_000 }
+  const limits = { defaultTop: 50, maxTop: 1000, maxBytes: 24_000, maxRegisterRows: 100_000 }
 
   it('defaults when undefined or invalid', () => {
     expect(clampTop(undefined, limits)).toBe(50)

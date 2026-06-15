@@ -95,10 +95,12 @@ export interface FitResult<T> {
 }
 
 /**
- * Keep the longest prefix of `rows` whose compact-JSON size stays within
- * `byteBudget` (UTF-8 bytes). Always keeps at least one row when `rows` is
- * non-empty, so the caller still sees the result shape even if a single row
- * exceeds the budget. `truncated` is `true` when any rows were dropped.
+ * Keep a leading run of `rows` whose compact-JSON size stays within `byteBudget`
+ * (UTF-8 bytes). The estimate counts a 1-byte separator for every row, so it is
+ * slightly conservative — it may stop one row earlier than the strict maximum.
+ * Always keeps at least one row when `rows` is non-empty, so the caller still
+ * sees the result shape even if a single row exceeds the budget. `truncated` is
+ * `true` when any rows were dropped.
  */
 export function fitRows<T>(rows: T[], byteBudget: number): FitResult<T> {
   if (rows.length === 0) return { rows, truncated: false }

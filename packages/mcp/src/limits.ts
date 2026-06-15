@@ -10,10 +10,12 @@ export interface Limits {
   maxTop: number
   /** Byte budget (UTF-8) for a result's row array; rows beyond it are truncated. */
   maxBytes: number
+  /** Safety cap on rows fetched from a register virtual-table FI ($top) before client-side paging. */
+  maxRegisterRows: number
 }
 
 /** Built-in defaults; each is overridable via an `ONEC_MCP_*` env var (see {@link resolveLimits}). */
-export const DEFAULT_LIMITS: Limits = { defaultTop: 50, maxTop: 1000, maxBytes: 24_000 }
+export const DEFAULT_LIMITS: Limits = { defaultTop: 50, maxTop: 1000, maxBytes: 24_000, maxRegisterRows: 100_000 }
 
 function intEnv(raw: string | undefined, fallback: number, min: number): number {
   // Strict decimal only — reject hex ("0x10"), exponential ("1e9"), floats and
@@ -29,6 +31,7 @@ function intEnv(raw: string | undefined, fallback: number, min: number): number 
  * - `ONEC_MCP_DEFAULT_TOP` — default page size (≥ 1)
  * - `ONEC_MCP_MAX_TOP` — page-size ceiling (≥ 1)
  * - `ONEC_MCP_MAX_BYTES` — per-result row-array byte budget (≥ 1024)
+ * - `ONEC_MCP_MAX_REGISTER_ROWS` — cap on rows fetched from a register FI (≥ 1)
  *
  * `defaultTop` is clamped to `maxTop` so a misconfiguration can't exceed the cap.
  */
@@ -36,7 +39,8 @@ export function resolveLimits(env: NodeJS.ProcessEnv = process.env): Limits {
   const maxTop = intEnv(env.ONEC_MCP_MAX_TOP, DEFAULT_LIMITS.maxTop, 1)
   const defaultTop = Math.min(intEnv(env.ONEC_MCP_DEFAULT_TOP, DEFAULT_LIMITS.defaultTop, 1), maxTop)
   const maxBytes = intEnv(env.ONEC_MCP_MAX_BYTES, DEFAULT_LIMITS.maxBytes, 1024)
-  return { defaultTop, maxTop, maxBytes }
+  const maxRegisterRows = intEnv(env.ONEC_MCP_MAX_REGISTER_ROWS, DEFAULT_LIMITS.maxRegisterRows, 1)
+  return { defaultTop, maxTop, maxBytes, maxRegisterRows }
 }
 
 /**

@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type DataShape, InvalidArgumentError } from '@1c-odata/client'
 import envPaths from 'env-paths'
+import { writeFileAtomic } from './atomic-write.js'
 import { stripUrlUserinfo } from './redact.js'
 
 /**
@@ -104,18 +105,5 @@ export function assertValidConnectionName(name: string): void {
 /** Persist `config.json` atomically (tmp + rename), creating `dataDir` if needed. */
 export function saveConfig(dataDir: string, config: McpConfig): void {
   mkdirSync(dataDir, { recursive: true })
-  const target = configPath(dataDir)
-  const tmp = `${target}.${process.pid}.tmp`
-  writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-  try {
-    renameSync(tmp, target)
-  } catch (err) {
-    // Don't leave the 0600 temp file behind on a failed rename (mirrors writeFileSecrets).
-    try {
-      unlinkSync(tmp)
-    } catch {
-      // best effort — surface the original error
-    }
-    throw err
-  }
+  writeFileAtomic(configPath(dataDir), `${JSON.stringify(config, null, 2)}\n`)
 }

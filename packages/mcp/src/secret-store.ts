@@ -1,14 +1,6 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
+import { writeFileAtomic } from './atomic-write.js'
 
 /** Where a connection's password was resolved from (or `none`). */
 export type SecretSource = 'env' | 'keychain' | 'file' | 'none'
@@ -262,24 +254,7 @@ export class SecretStore {
 
   private writeFileSecrets(secrets: FileSecrets): void {
     mkdirSync(this.dataDir, { recursive: true })
-    const tmp = `${this.credentialsPath}.${process.pid}.tmp`
-    writeFileSync(tmp, `${JSON.stringify(secrets, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
-    try {
-      chmodSync(tmp, 0o600)
-    } catch {
-      // best-effort on platforms without POSIX modes (Windows)
-    }
-    try {
-      renameSync(tmp, this.credentialsPath)
-    } catch (err) {
-      // Don't leave a temp file containing the password behind on failure.
-      try {
-        unlinkSync(tmp)
-      } catch {
-        // best effort — surface the original error
-      }
-      throw err
-    }
+    writeFileAtomic(this.credentialsPath, `${JSON.stringify(secrets, null, 2)}\n`)
   }
 }
 
