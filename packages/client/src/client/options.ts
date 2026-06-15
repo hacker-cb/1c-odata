@@ -69,6 +69,29 @@ export interface RetryPolicy {
 }
 
 /**
+ * Ready-made {@link RetryPolicy} for the common case: 3 retries of idempotent
+ * methods on transient gateway statuses (`502/503/504`), exponential backoff
+ * (200 ms → 400 ms → 800 ms, capped at 5 s) with full jitter. `POST` is
+ * intentionally excluded — it is not retry-safe.
+ *
+ * Retries stay OFF unless a policy is supplied; opt in by passing this object
+ * as `ClientOptions.retry` (or per-call `RequestOptions.retry`), and spread it
+ * to tweak a field: `{ ...DEFAULT_RETRY_POLICY, maxRetries: 5 }`. Frozen, so a
+ * direct import cannot mutate the shared default process-wide.
+ *
+ * @public
+ */
+export const DEFAULT_RETRY_POLICY: Readonly<RetryPolicy> = Object.freeze<RetryPolicy>({
+  maxRetries: 3,
+  retryableStatuses: [502, 503, 504],
+  retryableMethods: ['GET', 'PUT', 'DELETE', 'PATCH'],
+  initialDelayMs: 200,
+  maxDelayMs: 5_000,
+  backoffMultiplier: 2,
+  jitter: 'full',
+})
+
+/**
  * Per-mutation options. Extends RequestOptions with optimistic-concurrency
  * support.
  *
