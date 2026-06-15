@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 import { type DataShape, InvalidArgumentError } from '@1c-odata/client'
-import envPaths from 'env-paths'
 import { writeFileAtomic } from './atomic-write.js'
 import { stripUrlUserinfo } from './redact.js'
 
@@ -28,16 +28,42 @@ export interface McpConfig {
 
 const CONFIG_FILE = 'config.json'
 
+/** Application slug — the per-user data dir is named after it. */
+const APP_DIR = '1c-odata'
+
 /**
  * Resolve the data directory holding `config.json` + the fallback
- * `credentials.json`. `ONEC_MCP_DATA_DIR` wins (the Claude Code plugin points
- * it at `${CLAUDE_PLUGIN_DATA}`); otherwise the per-OS user config dir
- * (`~/.config/1c-odata`, `~/Library/Application Support/1c-odata`, `%APPDATA%\1c-odata`).
+ * `credentials.json`. This location is deliberately **agent-independent**: every
+ * MCP client (Claude Code, Claude Desktop, Codex, ChatGPT, …) spawns the same
+ * `@1c-odata/mcp serve` process and resolves the same directory, so a connection
+ * added once (via the CLI) is visible to all of them — no agent should override
+ * `ONEC_MCP_DATA_DIR` per-install, or it would fragment that shared config.
+ *
+ * Resolution order:
+ * 1. `ONEC_MCP_DATA_DIR` — explicit opt-in override (sandboxed / portable / CI).
+ * 2. Otherwise a predictable per-user dir, XDG-style on every platform:
+ *    - macOS / Linux: `$XDG_CONFIG_HOME/1c-odata` when set to an absolute path,
+ *      else `~/.config/1c-odata`.
+ *    - Windows: `%APPDATA%\1c-odata`, else `~\AppData\Roaming\1c-odata`.
  */
 export function resolveDataDir(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.ONEC_MCP_DATA_DIR
   if (override !== undefined && override.trim() !== '') return override
-  return envPaths('1c-odata', { suffix: '' }).config
+  return defaultDataDir(env)
+}
+
+/** Per-user default data dir: XDG on macOS/Linux, `%APPDATA%` on Windows. */
+function defaultDataDir(env: NodeJS.ProcessEnv): string {
+  if (process.platform === 'win32') {
+    const appData = env.APPDATA
+    if (appData !== undefined && appData.trim() !== '') return join(appData, APP_DIR)
+    return join(homedir(), 'AppData', 'Roaming', APP_DIR)
+  }
+  // The XDG Base Directory spec mandates absolute paths; a relative or empty
+  // $XDG_CONFIG_HOME is ignored in favour of ~/.config.
+  const xdg = env.XDG_CONFIG_HOME
+  if (xdg !== undefined && xdg.trim() !== '' && isAbsolute(xdg)) return join(xdg, APP_DIR)
+  return join(homedir(), '.config', APP_DIR)
 }
 
 export function configPath(dataDir: string): string {

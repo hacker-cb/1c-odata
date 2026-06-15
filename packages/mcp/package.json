@@ -59,7 +59,6 @@
     "@1c-odata/metadata": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^15.0.0",
-    "env-paths": "^4.0.0",
     "zod": "^4.4.3"
   },
   "publishConfig": {

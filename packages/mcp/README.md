@@ -78,8 +78,10 @@ Then ask the assistant to `list_connections`, explore the schema, and query data
   - The keychain backend (`@napi-rs/keyring`) is optional; on headless Linux/CI it falls back to a `0600`
     file with a loud warning. Pass `--insecure-storage` to force the file backend.
 
-Both files live in the data directory: `$ONEC_MCP_DATA_DIR` if set, otherwise the per-OS user config dir
-(`~/.config/1c-odata`, `~/Library/Application Support/1c-odata`, `%APPDATA%\1c-odata`).
+Both files live in one **agent-independent** data directory, so a connection added once is shared by every
+MCP client (Claude Code, Claude Desktop, Codex, ChatGPT, …) — they all spawn the same `serve` process and
+resolve the same directory. Resolution: `$ONEC_MCP_DATA_DIR` if set, otherwise the per-user config dir —
+`~/.config/1c-odata` on macOS/Linux (honoring `$XDG_CONFIG_HOME`) or `%APPDATA%\1c-odata` on Windows.
 
 ## Output size
 

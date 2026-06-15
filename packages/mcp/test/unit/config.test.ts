@@ -1,5 +1,5 @@
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { assertValidConnectionName, configPath, loadConfig, resolveDataDir, saveConfig } from '../../src/config.js'
@@ -13,14 +13,38 @@ afterEach(() => {
 })
 
 describe('resolveDataDir', () => {
-  it('prefers ONEC_MCP_DATA_DIR', () => {
-    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '/x/y' })).toBe('/x/y')
+  it('prefers ONEC_MCP_DATA_DIR verbatim, over any platform default', () => {
+    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '/x/y', XDG_CONFIG_HOME: '/other', APPDATA: 'C:\\other' })).toBe('/x/y')
   })
 
-  it('ignores a blank override and falls back to a per-OS dir named after the app', () => {
+  it('ignores a blank override and falls back to a per-user dir named after the app', () => {
     expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '   ' })).toContain('1c-odata')
     expect(resolveDataDir({})).toContain('1c-odata')
   })
+
+  // The default is XDG-style and agent-independent: branches on the host OS.
+  if (process.platform === 'win32') {
+    it('uses %APPDATA%\\1c-odata on Windows', () => {
+      expect(resolveDataDir({ APPDATA: 'C:\\Users\\me\\AppData\\Roaming' })).toBe(
+        join('C:\\Users\\me\\AppData\\Roaming', '1c-odata'),
+      )
+    })
+
+    it('falls back to ~\\AppData\\Roaming when APPDATA is unset', () => {
+      expect(resolveDataDir({})).toBe(join(homedir(), 'AppData', 'Roaming', '1c-odata'))
+    })
+  } else {
+    it('honors an absolute $XDG_CONFIG_HOME on macOS/Linux', () => {
+      expect(resolveDataDir({ XDG_CONFIG_HOME: '/custom/cfg' })).toBe('/custom/cfg/1c-odata')
+    })
+
+    it('ignores a relative or empty $XDG_CONFIG_HOME and uses ~/.config', () => {
+      const expected = join(homedir(), '.config', '1c-odata')
+      expect(resolveDataDir({ XDG_CONFIG_HOME: 'relative/path' })).toBe(expected)
+      expect(resolveDataDir({ XDG_CONFIG_HOME: '' })).toBe(expected)
+      expect(resolveDataDir({})).toBe(expected)
+    })
+  }
 })
 
 describe('loadConfig / saveConfig', () => {
