@@ -22,6 +22,19 @@ describe('parseInZone', () => {
     const d = parseInZone('2025-01-10T15:30:00', 'UTC')
     expect(d.toISOString()).toBe('2025-01-10T15:30:00.000Z')
   })
+
+  it('truncates sub-millisecond fractional digits instead of rounding into the next second', () => {
+    // `.9999` s = 999.9 ms → must truncate to 999 ms, NOT round to 1000 ms
+    // (which would spill into :01). JS Date is millisecond-resolution.
+    const d = parseInZone('2025-06-15T10:00:00.9999', 'UTC')
+    expect(d.toISOString()).toBe('2025-06-15T10:00:00.999Z')
+  })
+
+  it('parses fractional seconds exactly (no binary-float drift)', () => {
+    // `0.123 * 1000` is 122.999… in float — the digit-based parse avoids it.
+    expect(parseInZone('2025-06-15T10:00:00.123', 'UTC').toISOString()).toBe('2025-06-15T10:00:00.123Z')
+    expect(parseInZone('2025-06-15T10:00:00.1', 'UTC').toISOString()).toBe('2025-06-15T10:00:00.100Z')
+  })
 })
 
 describe('formatInZone', () => {

@@ -47,10 +47,18 @@ function secondsOnly(naive: string): string {
   return naive.replace(/\.\d+$/, '')
 }
 
-/** Parse a naive datetime's fractional-seconds suffix into milliseconds (0 if none). */
+/**
+ * Parse a naive datetime's fractional-seconds suffix into milliseconds (0 if
+ * none). Reads the first three fractional digits directly — `.5` → 500, `.25`
+ * → 250, `.1234` → 123. Digits beyond millisecond precision are TRUNCATED, not
+ * rounded: JS `Date` is millisecond-resolution, and rounding `.9999` up to
+ * 1000ms would spill into the next second and shift the instant. Avoiding the
+ * float multiply also dodges `0.123 * 1000 = 122.999…` representation errors.
+ */
 function parseFractionMs(naive: string): number {
   const m = /\.(\d+)$/.exec(naive)
-  return m === null ? 0 : Math.round(Number(`0.${m[1]}`) * 1000)
+  if (m === null) return 0
+  return Number.parseInt((m[1] ?? '').slice(0, 3).padEnd(3, '0'), 10)
 }
 
 /**
