@@ -33,14 +33,17 @@ Workspace deps use `workspace:*`. When `@1c-odata/client` introduces a breaking 
 
 ## Error contract
 
-`ODataError` and its subclasses (`HTTPError`, `BusinessError`, `ConcurrencyError`, `PermissionError`, `NetworkError`, `TimeoutError`, `ParseError`, `ValidationError`, `InvalidArgumentError`) are part of the stable public API.
+`ODataError` and its subclasses (`HTTPError`, `BusinessError`, `ConcurrencyError`, `PermissionError`, `NetworkError`, `TimeoutError`, `ParseError`, `MetadataError`, `ValidationError`, `InvalidArgumentError`) are part of the stable public API.
 
 Guaranteed:
 
-- `instanceof ODataError` succeeds for every error the library originates. Caller-supplied `AbortSignal` aborts are the one carve-out: the underlying `AbortError` is rethrown unchanged (library-issued timeout aborts still surface as `TimeoutError`).
+- `instanceof ODataError` succeeds for every error the library originates. Caller-supplied `AbortSignal` aborts are the one carve-out: the underlying `AbortError` is rethrown unchanged — deliberately, so consumer `signal.aborted` / `e.name === 'AbortError'` checks keep working (library-issued timeout aborts still surface as `TimeoutError`).
 - Subclass identity is stable across minor versions.
 - Constructor signature `(message, options)` with `options extends { cause?: unknown }`. ES2022 `cause` chain is always forwarded.
-- Structured fields on subclasses (`HTTPError.status/code/body`, `TimeoutError.timeoutMs`, `ValidationError.issues`, `InvalidArgumentError.argument/received`) are stable.
+- `ODataError.request` (`{ method, url }`) is set on errors that originate from an HTTP request (`HTTPError`, `NetworkError`, `TimeoutError`) and `undefined` otherwise. It deliberately excludes headers, so the `Authorization` header never reaches a log.
+- Structured fields on subclasses are stable. On `HTTPError`, `status` and `errorFormat` are always present; `code` and `odata` (the parsed 1С envelope) are present **only** when the server returned a recognizable `odata.error` (`errorFormat` `'json'`/`'xml'`) and are `undefined` for a non-OData response (`errorFormat: 'none'`), where `rawBody` instead holds a truncated snippet. Also stable: `TimeoutError.timeoutMs`, `ValidationError.issues`, `InvalidArgumentError.argument/received`.
+- A non-2xx whose body is not a recognizable OData envelope (wrong entity-set path, over-long URL, HTML/proxy error page) surfaces as a generic `HTTPError` with the real `status` and `errorFormat: 'none'` — not a category subclass. A 401/412 *without* an envelope therefore arrives as `HTTPError` (with `status` 401/412), not `PermissionError`/`ConcurrencyError`.
+- Schema-metadata failures — loading/validating a local `__metadata.json` (`loadMetadataIndex` / `parseMetadataIndex`) or parsing an EDMX `$metadata` document (`parseEdmx`) — throw `MetadataError`, distinct from the HTTP response-body `ParseError`.
 
 NOT covered: internal errors of `@1c-odata/cli` (CLI output may change between versions); exact error message text — use class identity and structured fields for programmatic handling.
 

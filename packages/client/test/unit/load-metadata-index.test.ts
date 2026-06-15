@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { ParseError } from '../../src/errors.js'
+import { MetadataError } from '../../src/errors.js'
 import { loadMetadataIndex } from '../../src/load-metadata-index.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -70,14 +70,14 @@ describe('loadMetadataIndex', () => {
     expect(idx.schemaNamespace).toBe('StandardODATA')
   })
 
-  it('throws ParseError on bad JSON', async () => {
+  it('throws MetadataError on bad JSON', async () => {
     const path = join(tmp, 'bad.json')
     await writeFile(path, '{not valid json', 'utf8')
-    await expect(loadMetadataIndex(path)).rejects.toThrow(ParseError)
+    await expect(loadMetadataIndex(path)).rejects.toThrow(MetadataError)
     await expect(loadMetadataIndex(path)).rejects.toThrow(/Invalid JSON/)
   })
 
-  it('throws ParseError with breadcrumb on missing schemaNamespace', async () => {
+  it('throws MetadataError with breadcrumb on missing schemaNamespace', async () => {
     const path = await writeJson('missing-ns.json', { schemas: {}, entitySetToType: {} })
     await expect(loadMetadataIndex(path)).rejects.toThrow(/\$\.schemaNamespace/)
     await expect(loadMetadataIndex(path)).rejects.toThrow(/Invalid metadata at /)
@@ -106,7 +106,7 @@ describe('loadMetadataIndex', () => {
     expect(idx.shape).toEqual({})
   })
 
-  it('throws ParseError on non-string property.type', async () => {
+  it('throws MetadataError on non-string property.type', async () => {
     const path = await writeJson('bad-prop.json', {
       schemaNamespace: 'X',
       schemas: { E: { properties: { F: { type: 123, nullable: true } } } },
@@ -115,7 +115,7 @@ describe('loadMetadataIndex', () => {
     await expect(loadMetadataIndex(path)).rejects.toThrow(/properties\.F\.type/)
   })
 
-  it('throws ParseError on bad enum shape (members not array)', async () => {
+  it('throws MetadataError on bad enum shape (members not array)', async () => {
     const path = await writeJson('bad-enum.json', {
       schemaNamespace: 'X',
       schemas: {},
@@ -125,8 +125,8 @@ describe('loadMetadataIndex', () => {
     await expect(loadMetadataIndex(path)).rejects.toThrow(/enums\.E\.members/)
   })
 
-  it('throws ParseError on file not found', async () => {
-    await expect(loadMetadataIndex(join(tmp, 'does-not-exist.json'))).rejects.toThrow(ParseError)
+  it('throws MetadataError on file not found', async () => {
+    await expect(loadMetadataIndex(join(tmp, 'does-not-exist.json'))).rejects.toThrow(MetadataError)
   })
 
   // `examples/basic/generated/` is .gitignored. On CI this assertion runs in

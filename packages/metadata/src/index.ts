@@ -4,6 +4,9 @@
 // building. Consumed by @1c-odata/cli for codegen and usable directly to run
 // @1c-odata/client against any base at runtime (no generated files).
 
+// ── error types (re-exported from @1c-odata/client so consumers can catch
+//    metadata/EDMX failures without a separate client import) ──
+export { MetadataError, ODataError } from '@1c-odata/client'
 // ── schema analysis ──
 export { type ClosureAddition, type ClosureResult, computeClosure } from './analysis/closure.js'
 export { groupFunctionImportsByEntitySet } from './analysis/function-bindings.js'

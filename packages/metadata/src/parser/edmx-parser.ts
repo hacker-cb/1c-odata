@@ -1,3 +1,4 @@
+import { MetadataError } from '@1c-odata/client'
 import { XMLParser } from 'fast-xml-parser'
 import type {
   EdmxAssociation,
@@ -16,12 +17,12 @@ import type {
 function readProperty(raw: Record<string, unknown>): EdmxProperty {
   const nameRaw = raw['@_Name']
   if (typeof nameRaw !== 'string' || nameRaw.length === 0) {
-    throw new Error('<Property> missing or empty Name attribute')
+    throw new MetadataError('<Property> missing or empty Name attribute')
   }
   const name = nameRaw
   const typeRaw = raw['@_Type']
   if (typeof typeRaw !== 'string' || typeRaw.length === 0) {
-    throw new Error(`<Property Name="${name}"> missing or empty Type attribute`)
+    throw new MetadataError(`<Property Name="${name}"> missing or empty Type attribute`)
   }
   const type = typeRaw
   const nullable = raw['@_Nullable'] !== 'false' // EDMX default is true
@@ -75,11 +76,11 @@ function readEntitySet(raw: Record<string, unknown>): EdmxEntitySet {
 function readParameter(raw: Record<string, unknown>): EdmxParameter {
   const nameRaw = raw['@_Name']
   if (typeof nameRaw !== 'string' || nameRaw.length === 0) {
-    throw new Error('<Parameter> missing or empty Name attribute')
+    throw new MetadataError('<Parameter> missing or empty Name attribute')
   }
   const typeRaw = raw['@_Type']
   if (typeof typeRaw !== 'string' || typeRaw.length === 0) {
-    throw new Error(`<Parameter Name="${nameRaw}"> missing or empty Type attribute`)
+    throw new MetadataError(`<Parameter Name="${nameRaw}"> missing or empty Type attribute`)
   }
   const modeRaw = raw['@_Mode']
   const out: EdmxParameter = {
@@ -210,27 +211,27 @@ export function parseEdmx(xml: string): EdmxModel {
   try {
     parsed = parser.parse(xml)
   } catch (e) {
-    throw new Error(`Failed to parse EDMX XML: ${(e as Error).message}`)
+    throw new MetadataError(`Failed to parse EDMX XML: ${(e as Error).message}`)
   }
   const root = (parsed as Record<string, unknown>)['edmx:Edmx']
   if (!root || typeof root !== 'object') {
-    throw new Error('Expected <edmx:Edmx> root element')
+    throw new MetadataError('Expected <edmx:Edmx> root element')
   }
   const dataServices = (root as Record<string, unknown>)['edmx:DataServices']
   if (dataServices === undefined || dataServices === null) {
-    throw new Error('Expected <edmx:DataServices> child containing a <Schema>')
+    throw new MetadataError('Expected <edmx:DataServices> child containing a <Schema>')
   }
   const schemas = typeof dataServices === 'object' ? (dataServices as Record<string, unknown>).Schema : undefined
   if (!Array.isArray(schemas) || schemas.length === 0) {
-    throw new Error('Expected at least one <Schema> element inside <edmx:DataServices>')
+    throw new MetadataError('Expected at least one <Schema> element inside <edmx:DataServices>')
   }
   if (schemas.length > 1) {
-    throw new Error(`Expected exactly 1 <Schema>, got ${schemas.length}`)
+    throw new MetadataError(`Expected exactly 1 <Schema>, got ${schemas.length}`)
   }
   const schema = schemas[0] as Record<string, unknown>
   const ns = schema['@_Namespace']
   if (typeof ns !== 'string' || ns.length === 0) {
-    throw new Error('Expected <Schema Namespace="..."> attribute')
+    throw new MetadataError('Expected <Schema Namespace="..."> attribute')
   }
   const rawEntityTypes = (schema.EntityType as Record<string, unknown>[] | undefined) ?? []
   const entityTypes = rawEntityTypes.map(readEntityType)

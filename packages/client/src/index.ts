@@ -14,6 +14,7 @@ export type {
   InvalidArgumentErrorOptions,
   ODataErrorBody,
   ODataErrorOptions,
+  RequestContext,
   TimeoutErrorOptions,
 } from './errors.js'
 export {
@@ -21,6 +22,7 @@ export {
   ConcurrencyError,
   HTTPError,
   InvalidArgumentError,
+  MetadataError,
   NetworkError,
   ODataError,
   ParseError,

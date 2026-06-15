@@ -13,8 +13,10 @@ import { buildV3KeyUrl, type EntityKey } from './url-builder.js'
  * is set.
  *
  * Spec §2.5: 1С silently ignores the `If-Match` header, so optimistic
- * concurrency must be enforced client-side. We synthesise an HTTP-412-shaped
- * `ConcurrencyError` even though no HTTP call actually returned 412.
+ * concurrency must be enforced client-side. We synthesise a 412-shaped
+ * `ConcurrencyError` even though no HTTP call actually returned 412 — hence
+ * `errorFormat: 'none'` and no `odata` envelope (there was no server response);
+ * `request` points at the guard's own GET.
  *
  * @internal
  */
@@ -29,16 +31,12 @@ export async function assertExpectedVersion(
   const raw = await client.transportGet(url, opts)
   const fresh = parseV3Single<{ DataVersion?: string }>(raw.body, { serverTimezone: client.serverTimezone })
   if (fresh.DataVersion !== expected) {
-    const body = {
-      code: '0',
-      message: `expectVersion mismatch: got DataVersion=${JSON.stringify(fresh.DataVersion)}, expected ${JSON.stringify(expected)}`,
-    }
-    throw new ConcurrencyError(`HTTP 412 Precondition Failed: ${body.message}`, {
+    const detail = `expectVersion mismatch: got DataVersion=${JSON.stringify(fresh.DataVersion)}, expected ${JSON.stringify(expected)}`
+    throw new ConcurrencyError(`HTTP 412 Precondition Failed: ${detail}`, {
       status: 412,
       statusText: 'Precondition Failed',
-      code: '0',
-      errorFormat: 'json',
-      body,
+      errorFormat: 'none',
+      request: { method: 'GET', url },
     })
   }
 }

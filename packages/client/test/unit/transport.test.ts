@@ -1,4 +1,4 @@
-import { BasicAuth, type RequestEvent, TimeoutError } from '@1c-odata/client'
+import { BasicAuth, HTTPError, type RequestEvent, TimeoutError } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { request } from '../../src/http/transport.js'
@@ -42,7 +42,7 @@ describe('transport.request', () => {
     expect(captured['dataserviceversion']).toBe('3.0')
   })
 
-  it('throws TimeoutError when timeout fires', async () => {
+  it('throws TimeoutError (carrying request context) when timeout fires', async () => {
     server.use(
       http.get(`${base}/Slow`, async () => {
         await new Promise((r) => setTimeout(r, 200))
@@ -50,9 +50,31 @@ describe('transport.request', () => {
       }),
     )
 
-    await expect(
-      request({ method: 'GET', url: `${base}/Slow`, headers: { Authorization: auth.header } }, { timeout: 50 }),
-    ).rejects.toThrow(TimeoutError)
+    const err = await request(
+      { method: 'GET', url: `${base}/Slow`, headers: { Authorization: auth.header } },
+      { timeout: 50 },
+    ).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TimeoutError)
+    expect((err as TimeoutError).request).toEqual({ method: 'GET', url: `${base}/Slow` })
+  })
+
+  it('thrown HTTPError carries request context (method + url)', async () => {
+    server.use(
+      http.get(`${base}/Missing`, () =>
+        HttpResponse.json(
+          { 'odata.error': { code: '9', message: { lang: 'ru', value: 'не найдено' } } },
+          { status: 404 },
+        ),
+      ),
+    )
+
+    const err = await request(
+      { method: 'GET', url: `${base}/Missing`, headers: { Authorization: auth.header } },
+      {},
+    ).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(HTTPError)
+    expect((err as HTTPError).status).toBe(404)
+    expect((err as HTTPError).request).toEqual({ method: 'GET', url: `${base}/Missing` })
   })
 
   it('respects per-call AbortSignal', async () => {

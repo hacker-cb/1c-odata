@@ -4,6 +4,7 @@ import {
   HTTPError,
   type HTTPErrorOptions,
   InvalidArgumentError,
+  MetadataError,
   NetworkError,
   ODataError,
   ParseError,
@@ -18,7 +19,7 @@ const httpOpts: HTTPErrorOptions = {
   statusText: 'Internal Server Error',
   code: '-1',
   errorFormat: 'json',
-  body: { code: '-1', message: 'Boom' },
+  odata: { code: '-1', message: 'Boom' },
 }
 
 describe('error hierarchy: instanceof', () => {
@@ -61,6 +62,10 @@ describe('error hierarchy: instanceof', () => {
   it('InvalidArgumentError extends ODataError', () => {
     expect(new InvalidArgumentError('x')).toBeInstanceOf(ODataError)
   })
+
+  it('MetadataError extends ODataError', () => {
+    expect(new MetadataError('bad metadata')).toBeInstanceOf(ODataError)
+  })
 })
 
 describe('error contract: cause propagation', () => {
@@ -74,6 +79,7 @@ describe('error contract: cause propagation', () => {
     { name: 'ParseError', make: (cause) => new ParseError('msg', { cause }) },
     { name: 'ValidationError', make: (cause) => new ValidationError('msg', { issues: [], cause }) },
     { name: 'InvalidArgumentError', make: (cause) => new InvalidArgumentError('msg', { cause }) },
+    { name: 'MetadataError', make: (cause) => new MetadataError('msg', { cause }) },
   ]
 
   for (const { name, make } of cases) {
@@ -96,6 +102,7 @@ describe('error contract: name property', () => {
     ['ParseError', new ParseError('x')],
     ['ValidationError', new ValidationError('x', { issues: [] })],
     ['InvalidArgumentError', new InvalidArgumentError('x')],
+    ['MetadataError', new MetadataError('x')],
   ]
 
   for (const [expected, err] of cases) {
@@ -106,13 +113,13 @@ describe('error contract: name property', () => {
 })
 
 describe('HTTPError fields', () => {
-  it('exposes status, statusText, code, errorFormat, body', () => {
+  it('exposes status, statusText, code, errorFormat, odata', () => {
     const e = new HTTPError('msg', httpOpts)
     expect(e.status).toBe(500)
     expect(e.statusText).toBe('Internal Server Error')
     expect(e.code).toBe('-1')
     expect(e.errorFormat).toBe('json')
-    expect(e.body).toEqual({ code: '-1', message: 'Boom' })
+    expect(e.odata).toEqual({ code: '-1', message: 'Boom' })
   })
 
   it('BusinessError carries 1C error code "-1"', () => {
@@ -121,7 +128,7 @@ describe('HTTPError fields', () => {
       statusText: 'Internal Server Error',
       code: '-1',
       errorFormat: 'json',
-      body: { code: '-1', message: 'Не удалось провести' },
+      odata: { code: '-1', message: 'Не удалось провести' },
     })
     expect(err.code).toBe('-1')
     expect(err.status).toBe(500)
@@ -134,7 +141,7 @@ describe('HTTPError fields', () => {
       statusText: 'Not Found',
       code: '9',
       errorFormat: 'json',
-      body: { code: '9', message: 'Экземпляр сущности не найден' },
+      odata: { code: '9', message: 'Экземпляр сущности не найден' },
     })
     const obj = JSON.parse(JSON.stringify({ name: err.name, status: err.status, code: err.code, message: err.message }))
     expect(obj).toEqual({
@@ -143,6 +150,35 @@ describe('HTTPError fields', () => {
       code: '9',
       message: 'HTTP 404 Not Found: Экземпляр сущности не найден',
     })
+  })
+
+  it('no-envelope shape: errorFormat "none" omits code/odata, carries rawBody', () => {
+    const e = new HTTPError('HTTP 404 Not Found: server returned no OData error envelope', {
+      status: 404,
+      statusText: 'Not Found',
+      errorFormat: 'none',
+      rawBody: '<html>404</html>',
+    })
+    expect(e.status).toBe(404)
+    expect(e.errorFormat).toBe('none')
+    expect(e.code).toBeUndefined()
+    expect(e.odata).toBeUndefined()
+    expect(e.rawBody).toBe('<html>404</html>')
+  })
+})
+
+describe('ODataError request context', () => {
+  it('carries request on request-originated errors', () => {
+    const request = { method: 'GET', url: 'http://x/Catalog_X' }
+    expect(new HTTPError('boom', { ...httpOpts, request }).request).toEqual(request)
+    expect(new NetworkError('ECONNRESET', { request }).request).toEqual(request)
+    expect(new TimeoutError('timed out', { timeoutMs: 1, request }).request).toEqual(request)
+  })
+
+  it('is undefined on errors not tied to a request', () => {
+    expect(new InvalidArgumentError('x').request).toBeUndefined()
+    expect(new ValidationError('x', { issues: [] }).request).toBeUndefined()
+    expect(new MetadataError('x').request).toBeUndefined()
   })
 })
 

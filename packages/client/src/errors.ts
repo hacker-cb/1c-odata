@@ -23,11 +23,30 @@ export interface ODataErrorBody {
 }
 
 /**
- * Format of the wire-level error body — JSON `odata.error` (default) or XML
- * `<m:error>` (only for `$batch` and a few legacy endpoints).
+ * Format of the wire-level error body:
+ * - `'json'` — `odata.error` envelope (default for 1С OData V3).
+ * - `'xml'` — `<m:error>` (only for `$batch` and a few legacy endpoints).
+ * - `'none'` — the server returned a non-2xx with no recognizable OData error
+ *   envelope (wrong entity-set path, over-long URL, HTML/proxy error page).
+ *   `HTTPError.code`/`.odata` are then `undefined`; `.rawBody` holds a
+ *   truncated snippet of the raw response.
  * @public
  */
-export type ErrorFormat = 'json' | 'xml'
+export type ErrorFormat = 'json' | 'xml' | 'none'
+
+/**
+ * Minimal descriptor of the HTTP request that produced an error. Attached to
+ * errors that originate from a request (`HTTPError`, `NetworkError`,
+ * `TimeoutError`). Carries only `method` + `url` — never headers — so logging
+ * an error can never leak the `Authorization` header. Absent on errors not tied
+ * to a request (`InvalidArgumentError`, `ValidationError`, file-load
+ * `MetadataError`).
+ * @public
+ */
+export interface RequestContext {
+  method: string
+  url: string
+}
 
 /**
  * Common options accepted by every `ODataError` subclass.
@@ -36,6 +55,8 @@ export type ErrorFormat = 'json' | 'xml'
 export interface ODataErrorOptions {
   /** Underlying cause (per ES2022 `Error.cause`). */
   cause?: unknown
+  /** Request that produced this error, when it originated from an HTTP call. */
+  request?: RequestContext
 }
 
 /**
@@ -45,8 +66,11 @@ export interface ODataErrorOptions {
  */
 export abstract class ODataError extends Error {
   override readonly name: string = 'ODataError'
+  /** Request that produced this error; `undefined` for non-request errors. */
+  readonly request: RequestContext | undefined
   constructor(message: string, options?: ODataErrorOptions) {
     super(message, options)
+    this.request = options?.request
   }
 }
 
@@ -57,26 +81,32 @@ export abstract class ODataError extends Error {
 export interface HTTPErrorOptions extends ODataErrorOptions {
   status: number
   statusText: string
-  code: string
   errorFormat: ErrorFormat
-  body: ODataErrorBody
+  /** 1С error code — present only when a real OData envelope was parsed. */
+  code?: string
+  /** Parsed OData error envelope — present only with `errorFormat` `'json'`/`'xml'`. */
+  odata?: ODataErrorBody
+  /** Truncated raw response text — set when the body was not an OData envelope. */
+  rawBody?: string
 }
 
 export class HTTPError extends ODataError {
   override readonly name: string = 'HTTPError'
   readonly status: number
   readonly statusText: string
-  readonly code: string
   readonly errorFormat: ErrorFormat
-  readonly body: ODataErrorBody
+  readonly code: string | undefined
+  readonly odata: ODataErrorBody | undefined
+  readonly rawBody: string | undefined
 
   constructor(message: string, opts: HTTPErrorOptions) {
     super(message, opts)
     this.status = opts.status
     this.statusText = opts.statusText
-    this.code = opts.code
     this.errorFormat = opts.errorFormat
-    this.body = opts.body
+    this.code = opts.code
+    this.odata = opts.odata
+    this.rawBody = opts.rawBody
   }
 }
 
@@ -140,11 +170,27 @@ export class TimeoutError extends ODataError {
 }
 
 /**
- * Response body could not be parsed (invalid JSON / malformed XML).
+ * HTTP **response** body could not be parsed (invalid JSON / malformed XML in a
+ * server reply). For failures loading or parsing schema metadata — a local
+ * `__metadata.json` or an EDMX `$metadata` document — see `MetadataError`.
  * @public
  */
 export class ParseError extends ODataError {
   override readonly name = 'ParseError'
+  constructor(message: string, opts?: ODataErrorOptions) {
+    super(message, opts)
+  }
+}
+
+/**
+ * Failure loading or parsing schema metadata: a local `__metadata.json`
+ * (read / JSON / shape validation via `loadMetadataIndex` / `parseMetadataIndex`)
+ * or an EDMX `$metadata` document (`parseEdmx`). Distinct from `ParseError`,
+ * which is reserved for HTTP response-body parse failures.
+ * @public
+ */
+export class MetadataError extends ODataError {
+  override readonly name = 'MetadataError'
   constructor(message: string, opts?: ODataErrorOptions) {
     super(message, opts)
   }
