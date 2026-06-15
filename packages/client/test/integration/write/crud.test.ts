@@ -3,7 +3,6 @@ import { activeFixtures, makeClient, testPrefix, writesAllowed } from '../helper
 
 for (const { fixture, profile } of activeFixtures()) {
   describe.skipIf(!writesAllowed() || !profile.crud)(`live write CRUD: ${fixture.id}`, () => {
-    // biome-ignore lint/style/noNonNullAssertion: gated by describe.skipIf above
     const crud = profile.crud!
     let client: ReturnType<typeof makeClient>
     const created: string[] = []

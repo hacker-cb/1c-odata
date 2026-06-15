@@ -58,7 +58,7 @@ export function computeClosure(model: EdmxModel, filter: (name: string) => boole
   }
   const innerOfCollection = (t: string): string => {
     const m = /^Collection\((.+)\)$/.exec(t)
-    return m ? m[1]! : t
+    return m?.[1] ?? t
   }
 
   let changed = true

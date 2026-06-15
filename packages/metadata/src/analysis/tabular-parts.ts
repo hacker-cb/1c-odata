@@ -43,8 +43,8 @@ export function linkTabularParts(entities: EdmxEntityType[]): {
     const parts = e.name.split('_')
     for (let i = parts.length - 1; i >= 1; i--) {
       const candidate = parts.slice(0, i).join('_')
-      if (!byName.has(candidate)) continue
-      const parent = byName.get(candidate)!
+      const parent = byName.get(candidate)
+      if (!parent) continue
       if (parent.key.length !== 1) continue // parent must be a header
       const existing = headerToTabulars.get(candidate) ?? []
       existing.push(e.name)

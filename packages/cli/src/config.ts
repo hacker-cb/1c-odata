@@ -135,7 +135,7 @@ export async function loadConfig(opts: { cwd: string; configFile?: string }): Pr
     throw new Error(`No 1c-odata.config.{ts,js,mjs} found in ${opts.cwd}`)
   }
   const config = result.config
-  if (!config || !config.targets || Object.keys(config.targets).length === 0) {
+  if (!config?.targets || Object.keys(config.targets).length === 0) {
     throw new Error(`Config at ${result.configFile} must declare at least one target`)
   }
   // Validate each target's connection — per-target so CLI output names the

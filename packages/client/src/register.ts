@@ -261,7 +261,7 @@ export class RegisterHelper<T> {
     let url = buildFunctionUrl(this.client.baseUrl, this.entitySet, funcName, {}, args, this.client.serverTimezone)
     if (top !== undefined) {
       assertNonNegativeInt(top, 'ReadFiOptions.top')
-      url += (url.includes('?') ? '&' : '?') + `$top=${top}`
+      url += `${url.includes('?') ? '&' : '?'}$top=${top}`
     }
     const raw = await this.client.transportGet(url, reqOpts)
     // withTypeHint=false: virtual-table FI results have a different shape than the entity type itself.

@@ -31,7 +31,8 @@ export interface ResponseEvent {
  */
 export interface RequestHooks {
   /** Before request goes on the wire. Return a (possibly modified) RequestEvent to inject headers / correlation IDs. */
-  beforeRequest?: (req: RequestEvent) => void | RequestEvent | Promise<undefined | RequestEvent>
+  // biome-ignore lint/suspicious/noConfusingVoidType: void is intentional — it keeps side-effect-only `(req) => void` hooks assignable; the RequestEvent return is the optional "replace the event" path.
+  beforeRequest?: (req: RequestEvent) => void | RequestEvent | Promise<void | RequestEvent>
   /** After response is received and parsed. */
   afterResponse?: (req: RequestEvent, res: ResponseEvent) => void | Promise<void>
   /** When an error (network/timeout/HTTP) is about to be thrown. */

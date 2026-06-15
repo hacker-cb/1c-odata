@@ -13,7 +13,7 @@ export interface TypeMapperOptions {
 export function mapEdmxTypeToTs(edmxType: string, opts: TypeMapperOptions): string {
   // Collection(...) wraps an inner type — recurse and append `[]`
   const collectionMatch = /^Collection\((.+)\)$/.exec(edmxType)
-  if (collectionMatch) return `${mapEdmxTypeToTs(collectionMatch[1]!, opts)}[]`
+  if (collectionMatch?.[1]) return `${mapEdmxTypeToTs(collectionMatch[1], opts)}[]`
 
   switch (edmxType) {
     case 'Edm.String':
