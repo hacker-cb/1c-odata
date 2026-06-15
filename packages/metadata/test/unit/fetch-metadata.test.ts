@@ -104,6 +104,44 @@ describe('fetchMetadataXml', () => {
       }),
     ).rejects.toThrow(MetadataError)
   })
+
+  it('rejects a non-EDMX body that merely contains the <edmx:Edmx> substring (not the root)', async () => {
+    // The root is <other>; <edmx:Edmx> appears only inside CDATA. An unanchored
+    // substring scan would wrongly accept this — the root must actually be it.
+    server.use(
+      http.get('http://example.test/odata/$metadata', () =>
+        HttpResponse.text('<other><![CDATA[<edmx:Edmx>]]></other>', {
+          status: 200,
+          headers: { 'Content-Type': 'application/xml' },
+        }),
+      ),
+    )
+    await expect(
+      fetchMetadataXml({
+        baseUrl: 'http://example.test/odata',
+        auth: BasicAuth({ username: 'u', password: 'p' }),
+        timeout: 30_000,
+      }),
+    ).rejects.toThrow(MetadataError)
+  })
+
+  it('accepts EDMX preceded by an XML declaration and a leading comment', async () => {
+    server.use(
+      http.get('http://example.test/odata/$metadata', () =>
+        HttpResponse.text('<?xml version="1.0" encoding="UTF-8"?>\n<!-- generated --><edmx:Edmx Version="1.0"/>', {
+          status: 200,
+          headers: { 'Content-Type': 'application/xml' },
+        }),
+      ),
+    )
+    await expect(
+      fetchMetadataXml({
+        baseUrl: 'http://example.test/odata',
+        auth: BasicAuth({ username: 'u', password: 'p' }),
+        timeout: 30_000,
+      }),
+    ).resolves.toContain('<edmx:Edmx')
+  })
 })
 
 describe('fetchMetadataIndex', () => {

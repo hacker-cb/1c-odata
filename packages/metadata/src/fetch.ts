@@ -58,6 +58,12 @@ export async function fetchMetadataXml(opts: FetchMetadataXmlOptions): Promise<s
 }
 
 /**
+ * `<edmx:Edmx>` as the document root: optional XML declaration, optional leading
+ * comments, then the root open tag (followed by whitespace, `/`, or `>`).
+ */
+const EDMX_ROOT_RE = /^(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<edmx:Edmx[\s/>]/
+
+/**
  * Guard against a non-EDMX 2xx response — the most common dynamic-path failure
  * is an unauthenticated request being redirected to an HTML login/portal page,
  * or a wrong base URL serving `index.html` / an OData service document. Without
@@ -70,10 +76,13 @@ export async function fetchMetadataXml(opts: FetchMetadataXmlOptions): Promise<s
  */
 function assertEdmxResponse(raw: { status: number; headers: Record<string, string>; body: string }, url: string): void {
   const body = raw.body.replace(/^\uFEFF/, '').trimStart()
-  // The EDMX root sits right after the (optional) XML declaration; scan a
-  // generous prefix rather than lowercasing a multi-MB document.
-  const hasEdmxRoot = body.slice(0, 16_384).toLowerCase().includes('<edmx:edmx')
-  if (hasEdmxRoot) return
+  // Require `<edmx:Edmx>` as the ROOT element (case-sensitive \u2014 exactly what
+  // `parseEdmx`/fast-xml-parser key on), anchored after an optional XML
+  // declaration and leading comments. An unanchored substring scan would let a
+  // non-EDMX body that merely contains the text slip through; a case-insensitive
+  // one would accept a root `parseEdmx` then rejects. Bounded slice keeps this
+  // off the multi-MB tail (the root always sits at the very top).
+  if (EDMX_ROOT_RE.test(body.slice(0, 8192))) return
   const contentType = raw.headers['content-type'] ?? '(none)'
   const snippet = body.slice(0, 200).replace(/\s+/g, ' ').trim()
   throw new MetadataError(
