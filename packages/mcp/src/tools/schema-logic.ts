@@ -59,20 +59,23 @@ export interface EntityDescription {
  * from the {@link EdmxModel}. Throws when the name resolves to neither.
  */
 export function describeEntity(index: MetadataIndex, edmx: EdmxModel, entity: string): EntityDescription {
-  const mappedType = index.entitySetToType[entity]
+  // hasOwn guards: `entity` is a tool argument and these maps are plain objects,
+  // so a key like "__proto__"/"constructor" would otherwise resolve up the
+  // prototype chain to a non-string and crash the type/name logic below.
+  const mappedType = Object.hasOwn(index.entitySetToType, entity) ? index.entitySetToType[entity] : undefined
   let entityType: string
   let entitySet: string | null
   if (mappedType !== undefined) {
     entitySet = entity
     entityType = mappedType
-  } else if (index.schemas[entity] !== undefined) {
+  } else if (Object.hasOwn(index.schemas, entity)) {
     entityType = entity
     entitySet = Object.keys(index.entitySetToType).find((s) => index.entitySetToType[s] === entity) ?? null
   } else {
     throw new Error(`Unknown entity "${entity}". Use list_entities to discover names.`)
   }
 
-  const schema = index.schemas[entityType]
+  const schema = Object.hasOwn(index.schemas, entityType) ? index.schemas[entityType] : undefined
   const properties: EntityProperty[] = Object.entries(schema?.properties ?? {}).map(([propName, p]) => ({
     name: propName,
     type: p.type,

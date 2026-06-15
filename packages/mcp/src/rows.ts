@@ -49,21 +49,27 @@ export function stripNoise(value: unknown): unknown {
 
 /**
  * Recursively cap oversized string leaf values: any string whose UTF-8 size
- * exceeds `capBytes` is replaced with a short head plus a `…(N bytes truncated)`
- * marker. This keeps the byte budget binding for the cases {@link fitRows} can't
- * help with — a single row whose size is dominated by one huge field (a base64
- * `ValueStorage`, a large text/HTML field), and single-entity `get_entity`
- * reads. Preserves `Date`/`bigint` and object/array structure.
+ * exceeds `capBytes` is replaced with a head plus a `…(truncated, N bytes)`
+ * marker, budgeted so the replacement's own UTF-8 size stays within `capBytes`
+ * (and therefore never exceeds the original). This keeps the byte budget binding
+ * for the cases {@link fitRows} can't help with — a single row whose size is
+ * dominated by one huge field (a base64 `ValueStorage`, a large text/HTML
+ * field), and single-entity `get_entity` reads. Preserves `Date`/`bigint` and
+ * object/array structure.
  */
 export function capLongStrings(value: unknown, capBytes: number): unknown {
   if (typeof value === 'string') {
     const total = Buffer.byteLength(value, 'utf8')
     if (total <= capBytes) return value
-    // Head trimmed by UTF-8 bytes (never larger than the cap) so capping always
-    // shrinks the field, even for multi-byte Cyrillic. No retrieval hint — the
-    // MCP server exposes no way to fetch the full blob.
-    const head = sliceUtf8(value, Math.min(120, capBytes))
-    return `${head}…(truncated, ${total} bytes)`
+    // Budget the head so head + marker stays within capBytes — and therefore
+    // never exceeds the original, since we only reach here when total > capBytes.
+    // A 120-byte preview by default, less when capBytes is tight; if the marker
+    // alone can't fit, drop the head (the marker is the smallest useful form).
+    // No retrieval hint — the MCP server exposes no way to fetch the full blob.
+    const marker = `…(truncated, ${total} bytes)`
+    const headBudget = Math.min(120, capBytes - Buffer.byteLength(marker, 'utf8'))
+    const head = headBudget > 0 ? sliceUtf8(value, headBudget) : ''
+    return `${head}${marker}`
   }
   if (value instanceof Date) return value
   if (Array.isArray(value)) return value.map((v) => capLongStrings(v, capBytes))

@@ -106,6 +106,19 @@ describe('capLongStrings', () => {
     expect(out.small).toBe('ok')
     expect(out.big ?? '').toContain('truncated')
     expect((out.big ?? '').length).toBeLessThan(5000)
+    // The replacement (head + marker) must itself stay within the cap.
+    expect(Buffer.byteLength(out.big ?? '', 'utf8')).toBeLessThanOrEqual(1000)
+  })
+
+  it('keeps the replacement within capBytes (and below the original) when only slightly over', () => {
+    // 60-byte Cyrillic value, cap 50: a naive head(50) + marker would exceed both
+    // 50 and the original 60 — the marker budget prevents that.
+    const original = Buffer.byteLength('я'.repeat(30), 'utf8') // 60
+    const out = capLongStrings({ s: 'я'.repeat(30) }, 50) as Record<string, string>
+    const capped = out.s ?? ''
+    expect(capped).toContain('truncated')
+    expect(Buffer.byteLength(capped, 'utf8')).toBeLessThanOrEqual(50)
+    expect(Buffer.byteLength(capped, 'utf8')).toBeLessThan(original)
   })
 
   it('recurses into nested objects and arrays', () => {
