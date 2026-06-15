@@ -210,7 +210,12 @@ export function generate(input: GenerateInput): GenerateResult {
     int64Mode: opts.int64Mode,
     dateMode: opts.dateMode,
   }
-  files.set('__metadata.json', normalizeModel(model, headerCountsByKind, closure, shape, input.inputs))
+  // Narrow the runtime index to the SAME closure as the emitted `.ts` ONLY for
+  // an `include` run. With no include the filter matches everything, so the
+  // narrowed index is byte-identical to the unfiltered build — skip the filter
+  // to avoid a redundant full-model closure walk on the common path.
+  const indexFilter = input.include !== undefined && input.include.length > 0 ? filter : undefined
+  files.set('__metadata.json', normalizeModel(model, headerCountsByKind, closure, indexFilter, shape, input.inputs))
 
   return { files }
 }

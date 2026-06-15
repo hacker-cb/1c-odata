@@ -5,6 +5,7 @@ import type { DataShape, MetadataIndex } from '@1c-odata/client'
 import { buildMetadataIndex, parseEdmx } from '@1c-odata/metadata'
 import { describe, expect, it } from 'vitest'
 import { generate } from '../../../src/codegen/index.js'
+import { buildNameFilter } from '../../../src/codegen/name-filter.js'
 
 // Pins the "single source of truth" invariant: the runtime-facing sections of
 // the codegen-emitted `__metadata.json` must be EXACTLY what
@@ -46,6 +47,29 @@ describe('integration: __metadata.json ≡ buildMetadataIndex (single source of 
           expect(emitted.shape).toEqual(built.shape)
         }, 120_000)
       }
+
+      // With `include`, the emitted `__metadata.json` must be narrowed to the
+      // SAME dependency closure as the generated `.ts` — i.e. exactly what
+      // `buildMetadataIndex(model, { filter })` produces for the same filter,
+      // matching `fetchMetadataIndex(conn, { filter })`. Pins the include-path
+      // half of the single-source-of-truth invariant (the loop above only
+      // covers the unfiltered full-base path).
+      it('narrows __metadata.json to the include closure (matches buildMetadataIndex filter)', () => {
+        const include = ['Catalog_*']
+        const filter = buildNameFilter({ include })
+        const emitted = JSON.parse(generate({ metadata: xml, include }).files.get('__metadata.json')!) as Record<
+          string,
+          unknown
+        >
+        const built: MetadataIndex = buildMetadataIndex(model, { filter })
+
+        expect(emitted.schemas).toEqual(built.schemas)
+        expect(emitted.entitySetToType).toEqual(built.entitySetToType)
+        // Narrowing actually happened — the closure is far smaller than the base.
+        const full = buildMetadataIndex(model)
+        expect(Object.keys(built.schemas).length).toBeLessThan(Object.keys(full.schemas).length)
+        expect(Object.keys(built.entitySetToType).length).toBeLessThan(Object.keys(full.entitySetToType).length)
+      }, 120_000)
     })
   }
 })
