@@ -85,7 +85,9 @@ Both files live in the data directory: `$ONEC_MCP_DATA_DIR` if set, otherwise th
 
 Every read tool keeps its result within a byte budget so a large query can't overflow the model's context:
 row sets are truncated to a usable sample (the response carries `truncated` / `hasMore` and a hint to narrow
-the request), and an oversized individual field (e.g. a base64 `ValueStorage`) is capped with a marker. Tune
+the request), and an oversized individual field (e.g. a base64 `ValueStorage`) is capped with a marker. One
+row is always returned even if it alone exceeds the budget, so you still see the shape (narrow with `select`
+or `compact`); `get_entity` instead refuses an over-budget entity and points you to `query` + `$select`. Tune
 it with env vars (all optional):
 
 | Variable | Default | Meaning |

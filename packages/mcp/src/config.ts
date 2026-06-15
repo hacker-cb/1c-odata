@@ -70,7 +70,7 @@ function normalizeConfig(data: unknown): McpConfig {
   // Drop structurally-invalid entries (a hand-edited config may have non-objects
   // or miss required string fields — keeping them would crash later paths). For
   // valid ones, strip any userinfo the baseUrl might carry (defense in depth).
-  const sanitized: Record<string, StoredConnection> = {}
+  const sanitized: Record<string, StoredConnection> = Object.create(null)
   for (const [name, conn] of Object.entries(connections as Record<string, unknown>)) {
     if (conn === null || typeof conn !== 'object') continue
     const c = conn as Partial<StoredConnection>

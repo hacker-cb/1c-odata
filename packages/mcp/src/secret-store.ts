@@ -245,7 +245,7 @@ export class SecretStore {
       throw new Error(`Malformed JSON in ${this.credentialsPath} — fix or delete the file.`)
     }
     if (parsed === null || typeof parsed !== 'object') return {}
-    const result: FileSecrets = {}
+    const result: FileSecrets = Object.create(null)
     for (const [key, value] of Object.entries(parsed)) {
       if (typeof value === 'string') result[key] = value
     }

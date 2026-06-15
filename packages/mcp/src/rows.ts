@@ -14,7 +14,7 @@ export function toJsonSafe(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString()
   if (Array.isArray(value)) return value.map(toJsonSafe)
   if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {}
+    const out: Record<string, unknown> = Object.create(null)
     for (const [key, val] of Object.entries(value)) out[key] = toJsonSafe(val)
     return out
   }
@@ -37,7 +37,7 @@ export function stripNoise(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripNoise)
   if (value instanceof Date) return value
   if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {}
+    const out: Record<string, unknown> = Object.create(null)
     for (const [key, val] of Object.entries(value)) {
       if (key.endsWith('_Type') || key.startsWith('@odata') || key === '__metadata') continue
       out[key] = stripNoise(val)
@@ -68,7 +68,7 @@ export function capLongStrings(value: unknown, capBytes: number): unknown {
   if (value instanceof Date) return value
   if (Array.isArray(value)) return value.map((v) => capLongStrings(v, capBytes))
   if (value !== null && typeof value === 'object') {
-    const out: Record<string, unknown> = {}
+    const out: Record<string, unknown> = Object.create(null)
     for (const [key, val] of Object.entries(value)) out[key] = capLongStrings(val, capBytes)
     return out
   }

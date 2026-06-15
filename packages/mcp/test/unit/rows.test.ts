@@ -13,6 +13,16 @@ describe('toJsonSafe', () => {
   it('recurses into arrays and nested objects', () => {
     expect(toJsonSafe([{ a: 1n }, { b: [2n] }])).toEqual([{ a: '1' }, { b: ['2'] }])
   })
+
+  it('treats a __proto__ key as ordinary data without polluting the prototype', () => {
+    // JSON.parse yields an OWN "__proto__" key — a null-proto accumulator keeps it
+    // as data instead of mutating the object's prototype.
+    const evil = JSON.parse('{"__proto__": "x", "keep": 1}')
+    const out = toJsonSafe(evil) as Record<string, unknown>
+    expect(Object.getPrototypeOf(out)).toBeNull()
+    expect(out.keep).toBe(1)
+    expect(({} as Record<string, unknown>).x).toBeUndefined() // no global pollution
+  })
 })
 
 describe('stripNoise', () => {
