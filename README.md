@@ -59,7 +59,7 @@ Use the typed client:
 import { clientOptionsFromConnection, defineConnection, parseConnectionUrl } from '@1c-odata/client'
 import { and, any } from '@1c-odata/client/filter'
 import { createClient } from '../generated/trade/client.js'
-import type { Document_РТУ } from '../generated/trade/index.js'
+import type { Document_РеализацияТоваровУслуг } from '../generated/trade/index.js'
 
 // The runtime builds its own Connection (from env, DB, vault, …) — it does NOT
 // import 1c-odata.config.ts, which exists only for the CLI.
@@ -72,7 +72,7 @@ const conn = defineConnection({ ...parseConnectionUrl(url), serverTimezone: 'Eur
 const trade = await createClient(clientOptionsFromConnection(conn))
 
 const { value: docs } = await trade
-  .query<Document_РТУ>('Document_РТУ')
+  .query<Document_РеализацияТоваровУслуг>('Document_РеализацияТоваровУслуг')
   .filter((f) => and(f.Date.year().eq(2025), any(f.Товары, (t) => t.Сумма.gt(10000))))
   .top(50)
   .get()
