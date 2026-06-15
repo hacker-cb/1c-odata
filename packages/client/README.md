@@ -21,7 +21,7 @@ Assuming this file lives at `src/main.ts` (so `../generated/` resolves to the si
 import { clientOptionsFromConnection, defineConnection, parseConnectionUrl } from '@1c-odata/client'
 import { and, any } from '@1c-odata/client/filter'
 import { createClient } from '../generated/trade/client.js'
-import type { Document_РТУ } from '../generated/trade/index.js'
+import type { Document_РеализацияТоваровУслуг } from '../generated/trade/index.js'
 
 const url = process.env.ONEC_URL
 if (!url) throw new Error('Set ONEC_URL')
@@ -31,7 +31,7 @@ const conn = defineConnection({ ...parseConnectionUrl(url), serverTimezone: 'Eur
 const trade = await createClient(clientOptionsFromConnection(conn))
 
 const { value: docs } = await trade
-  .query<Document_РТУ>('Document_РТУ')
+  .query<Document_РеализацияТоваровУслуг>('Document_РеализацияТоваровУслуг')
   .filter((f) => and(f.Date.year().eq(2025), any(f.Товары, (t) => t.Сумма.gt(10000))))
   .top(50)
   .get()
@@ -47,7 +47,7 @@ All errors extend `ODataError`; narrow with subclasses (`HTTPError`, `BusinessEr
 import { HTTPError, ODataError } from '@1c-odata/client'
 
 try {
-  await trade.query('Document_РТУ').get()
+  await trade.query('Document_РеализацияТоваровУслуг').get()
 } catch (e) {
   if (e instanceof HTTPError) console.error(`HTTP ${e.status}`, e.request) // { method, url }, no headers
   else if (e instanceof ODataError) console.error(e.name, e.message)

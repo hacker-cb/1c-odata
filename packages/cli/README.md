@@ -72,6 +72,10 @@ Both commands default to **all** targets; pass `-t` to pick one.
 
 Each target is `{ connection, include?, fetchTimeout? }` — `include` is a glob whitelist of entity-type names (`Catalog_*`), and the dependency closure auto-expands.
 
+## Programmatic use
+
+`runFetch` / `runGenerate` / `loadConfig` are exported from `@1c-odata/cli` (and `generate` from `@1c-odata/cli/codegen`) for scripting the pipeline without the bin.
+
 See [the repo README](https://github.com/hacker-cb/1c-odata#readme) for project-wide setup and [`examples/basic`](https://github.com/hacker-cb/1c-odata/tree/master/examples/basic) for a runnable consumer.
 
 ## License
