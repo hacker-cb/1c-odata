@@ -57,9 +57,12 @@ export interface DataShape {
  * the runtime parser. Changing a default here keeps all three in lock-step
  * (the `metadata-parity` test pins their agreement).
  *
+ * Frozen and `readonly`: it's a public export, so a consumer mutating it would
+ * otherwise silently retune the library's default conversions process-wide.
+ *
  * @public
  */
-export const DEFAULT_SHAPE: Required<DataShape> = { int64Mode: 'number', dateMode: 'date' }
+export const DEFAULT_SHAPE: Readonly<Required<DataShape>> = Object.freeze({ int64Mode: 'number', dateMode: 'date' })
 
 /**
  * Runtime connection descriptor — the clean value-object passed to
