@@ -2,6 +2,7 @@ import {
   type AuthOptions,
   type Connection,
   connectionAuth,
+  MetadataError,
   type MetadataIndex,
   normalizeBaseUrl,
 } from '@1c-odata/client'
@@ -52,7 +53,42 @@ export async function fetchMetadataXml(opts: FetchMetadataXmlOptions): Promise<s
     },
     { timeout: opts.timeout ?? DEFAULT_FETCH_TIMEOUT },
   )
+  assertEdmxResponse(raw, url)
   return raw.body
+}
+
+/**
+ * `<edmx:Edmx>` as the document root: optional XML declaration, optional leading
+ * comments, then the root open tag (followed by whitespace, `/`, or `>`).
+ */
+const EDMX_ROOT_RE = /^(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<edmx:Edmx[\s/>]/
+
+/**
+ * Guard against a non-EDMX 2xx response — the most common dynamic-path failure
+ * is an unauthenticated request being redirected to an HTML login/portal page,
+ * or a wrong base URL serving `index.html` / an OData service document. Without
+ * this the body flows into `parseEdmx` and surfaces as a cryptic "Expected
+ * <edmx:Edmx> root element"; worse, `fetchMetadataXml`'s raw callers (including
+ * `1c-odata fetch`, which writes the body straight to disk) never parse it and
+ * would persist the wrong document silently. So require the `<edmx:Edmx>` root
+ * here — exactly what `parseEdmx` looks for — and fail loudly with the URL,
+ * status, content-type, and a body snippet otherwise.
+ */
+function assertEdmxResponse(raw: { status: number; headers: Record<string, string>; body: string }, url: string): void {
+  const body = raw.body.replace(/^\uFEFF/, '').trimStart()
+  // Require `<edmx:Edmx>` as the ROOT element (case-sensitive \u2014 exactly what
+  // `parseEdmx`/fast-xml-parser key on), anchored after an optional XML
+  // declaration and leading comments. An unanchored substring scan would let a
+  // non-EDMX body that merely contains the text slip through; a case-insensitive
+  // one would accept a root `parseEdmx` then rejects. Bounded slice keeps this
+  // off the multi-MB tail (the root always sits at the very top).
+  if (EDMX_ROOT_RE.test(body.slice(0, 8192))) return
+  const contentType = raw.headers['content-type'] ?? '(none)'
+  const snippet = body.slice(0, 200).replace(/\s+/g, ' ').trim()
+  throw new MetadataError(
+    `Expected an EDMX ($metadata) document from ${url}, but the response was not EDMX (status ${raw.status}, content-type ${contentType}). The base URL is likely wrong, or an unauthenticated request was redirected to a login/portal page. First bytes: ${snippet}`,
+    { request: { method: 'GET', url } },
+  )
 }
 
 /**
@@ -94,9 +130,26 @@ export async function fetchMetadataIndex(
     timeout: opts.timeout ?? DEFAULT_FETCH_TIMEOUT,
     ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
   })
-  const model = parseEdmx(xml)
+  const model = parseEdmxWithContext(xml, `${normalizeBaseUrl(conn.baseUrl)}/$metadata`)
   return buildMetadataIndex(model, {
     ...(conn.shape !== undefined ? { shape: conn.shape } : {}),
     ...(opts.filter !== undefined ? { filter: opts.filter } : {}),
   })
+}
+
+/**
+ * Parse fetched EDMX, attaching the source URL to any `MetadataError` that
+ * doesn't already carry request context. Without this, a parse failure on a
+ * live `$metadata` gives no hint which base produced the bad XML — the first
+ * thing you need in a multi-target / multi-tenant setup.
+ */
+function parseEdmxWithContext(xml: string, url: string): ReturnType<typeof parseEdmx> {
+  try {
+    return parseEdmx(xml)
+  } catch (e) {
+    if (e instanceof MetadataError && e.request === undefined) {
+      throw new MetadataError(e.message, { request: { method: 'GET', url }, cause: e })
+    }
+    throw e
+  }
 }

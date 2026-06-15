@@ -181,6 +181,10 @@ export class ParseError extends ODataError {
  * (read / JSON / shape validation via `loadMetadataIndex` / `parseMetadataIndex`)
  * or an EDMX `$metadata` document (`parseEdmx`). Distinct from `ParseError`,
  * which is reserved for HTTP response-body parse failures.
+ *
+ * Carries a `request` {@link RequestContext} when the metadata was fetched over
+ * the network (`fetchMetadataIndex`) — so a parse failure points at the base it
+ * came from; `undefined` for local file-load failures.
  * @public
  */
 export class MetadataError extends ODataError {
