@@ -79,9 +79,30 @@ describe('fetchMetadataXml', () => {
       })
     } catch (e) {
       expect(e).toBeInstanceOf(MetadataError)
-      expect((e as Error).message).toMatch(/not XML/i)
+      expect((e as Error).message).toMatch(/not EDMX/i)
       expect((e as MetadataError).request?.url).toBe('http://example.test/odata/$metadata')
     }
+  })
+
+  it('rejects an XML-shaped response that is not EDMX (no <edmx:Edmx> root)', async () => {
+    // e.g. an OData service document or some other XML page at the wrong URL —
+    // XML-shaped, so it must be caught by the EDMX-root check, not just a
+    // "looks like XML" heuristic (raw callers write this straight to disk).
+    server.use(
+      http.get('http://example.test/odata/$metadata', () =>
+        HttpResponse.text('<service xml:base="http://example.test/odata/"/>', {
+          status: 200,
+          headers: { 'Content-Type': 'application/xml' },
+        }),
+      ),
+    )
+    await expect(
+      fetchMetadataXml({
+        baseUrl: 'http://example.test/odata',
+        auth: BasicAuth({ username: 'u', password: 'p' }),
+        timeout: 30_000,
+      }),
+    ).rejects.toThrow(MetadataError)
   })
 })
 
@@ -92,10 +113,12 @@ describe('fetchMetadataIndex', () => {
     serverTimezone: 'UTC',
   }
 
-  it('attaches request context to a MetadataError from malformed (non-EDMX) XML', async () => {
+  it('attaches request context to a MetadataError from malformed EDMX (valid root, bad body)', async () => {
+    // Passes the <edmx:Edmx> root guard but parseEdmx fails deeper (no
+    // DataServices/Schema) — exercises parseEdmxWithContext's context attach.
     server.use(
       http.get('http://example.test/odata/$metadata', () =>
-        HttpResponse.text('<NotEdmx/>', { status: 200, headers: { 'Content-Type': 'application/xml' } }),
+        HttpResponse.text('<edmx:Edmx></edmx:Edmx>', { status: 200, headers: { 'Content-Type': 'application/xml' } }),
       ),
     )
     expect.assertions(2)
