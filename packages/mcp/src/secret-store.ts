@@ -119,13 +119,13 @@ export class SecretStore {
           return { backend: 'keychain' }
         } catch (err) {
           this.warn(
-            `⚠ OS keychain unavailable (${errMessage(err)}); storing password in plaintext ${this.credentialsPath} (0600). ` +
+            `⚠ OS keychain unavailable (${errMessage(err)}); falling back to plaintext ${this.credentialsPath} (0600). ` +
               `Set ${passwordEnvVar(name)} or fix the keychain to avoid this.`,
           )
         }
       } else {
         this.warn(
-          `⚠ @napi-rs/keyring not installed; storing password in plaintext ${this.credentialsPath} (0600). ` +
+          `⚠ @napi-rs/keyring not installed; falling back to plaintext ${this.credentialsPath} (0600). ` +
             `Set ${passwordEnvVar(name)} or install the keychain backend to avoid this.`,
         )
       }
@@ -174,7 +174,8 @@ export class SecretStore {
   }
 
   private fileWrite(name: string, password: string): void {
-    // About to overwrite with 0600 — tolerate a pre-existing too-open/malformed file.
+    // Read existing secrets (tolerates too-open perms; throws on malformed JSON so a
+    // write never clobbers unparseable siblings), add ours, then rewrite at 0600.
     const secrets = this.readFileSecrets(false)
     secrets[name] = password
     this.writeFileSecrets(secrets)
