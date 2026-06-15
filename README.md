@@ -1,6 +1,6 @@
 # 1c-odata
 
-TypeScript library for the REST/OData interface of 1С:Enterprise 8 (V3 only — the only version 1С ships as of 2026). Ergonomic filter API, schema-driven date / Int64 / ValueStorage handling, and a single source of truth between schema and runtime. Codegen is the optional DX layer on top: generate types for full IDE completion, or [run against any base with zero generated files](#usage-without-codegen).
+TypeScript library for the standard OData interface of 1С:Enterprise 8 — OData protocol **version 3.0** (the dialect any modern 1С 8.3 base exposes; 1С does not offer an OData 4.0 interface). Ergonomic filter API, schema-driven date / Int64 / ValueStorage handling, and a single source of truth between schema and runtime. Codegen is the optional DX layer on top: generate types for full IDE completion, or [run against any base with zero generated files](#schema-sources).
 
 > **Server-side only.** Uses Node 22+ APIs (`globalThis.fetch`, `Buffer`, `fs`). Minimum Node: **22.21.0**. Pure ESM.
 >
@@ -11,7 +11,7 @@ TypeScript library for the REST/OData interface of 1С:Enterprise 8 (V3 only —
 | Package | Role |
 |---|---|
 | [`@1c-odata/client`](./packages/client/src) | Typed runtime — `ODataV3Client`, query builder, filter, value-storage, register helpers |
-| [`@1c-odata/metadata`](./packages/metadata/src) | Schema toolkit — parse `$metadata` (EDMX), build a runtime `MetadataIndex`, `createDynamicClient` for any base without codegen |
+| [`@1c-odata/metadata`](./packages/metadata/src) | Run the client against any base at runtime — `createDynamicClient` / `fetchMetadataIndex`, no codegen; also the EDMX (`$metadata`) parser + `buildMetadataIndex` schema toolkit |
 | [`@1c-odata/cli`](./packages/cli/src) | `1c-odata fetch` + `1c-odata generate` binaries; codegen lib at [`@1c-odata/cli/codegen`](./packages/cli/src/codegen) |
 
 JSDoc on the public API is the canonical reference. Hover anything imported from `@1c-odata/client` in your IDE.
@@ -56,19 +56,20 @@ pnpm 1c-odata generate
 Use the typed client:
 
 ```ts
-import { clientOptionsFromConnection, defineConnection, ODataV3Client, parseConnectionUrl } from '@1c-odata/client'
+import { clientOptionsFromConnection, defineConnection, parseConnectionUrl } from '@1c-odata/client'
 import { and, any } from '@1c-odata/client/filter'
+import { createClient } from '../generated/trade/client.js'
 import type { Document_РТУ } from '../generated/trade/index.js'
 
 // The runtime builds its own Connection (from env, DB, vault, …) — it does NOT
 // import 1c-odata.config.ts, which exists only for the CLI.
 const url = process.env.ONEC_URL
 if (!url) throw new Error('Set ONEC_URL')
-const trade = new ODataV3Client(
-  clientOptionsFromConnection(
-    defineConnection({ ...parseConnectionUrl(url), serverTimezone: 'Europe/Moscow' }),
-  ),
-)
+const conn = defineConnection({ ...parseConnectionUrl(url), serverTimezone: 'Europe/Moscow' })
+
+// `createClient` is generated: it auto-loads the sibling `__metadata.json` and
+// wires the `Functions` generic, so DateTime / Int64 / ValueStorage handling is on.
+const trade = await createClient(clientOptionsFromConnection(conn))
 
 const { value: docs } = await trade
   .query<Document_РТУ>('Document_РТУ')
@@ -79,11 +80,20 @@ const { value: docs } = await trade
 
 See [`examples/basic`](./examples/basic) for a runnable end-to-end consumer.
 
-## Usage without codegen
+## Schema sources
 
-Codegen gives you TypeScript types — but every schema-driven runtime feature works from a `MetadataIndex` that can also be built **at runtime**. Two modes below, both runnable in [`examples/dynamic`](./examples/dynamic).
+Every schema-driven runtime feature (DateTime / Int64 / ValueStorage handling, `validateOnWrite`) is powered by a `MetadataIndex`. The client doesn't care where it comes from — these are **peer sources, all producing identical runtime behavior**:
 
-### Runtime metadata (recommended): any base, zero generated files
+| Source | How | Compile-time types? |
+|---|---|---|
+| **Codegen** | `1c-odata generate` → the generated `createClient` auto-loads `__metadata.json` (the [Quick start](#quick-start) above) | ✅ full IDE completion |
+| **Runtime fetch** | `createDynamicClient` / `fetchMetadataIndex` — download `$metadata` once, build the index | ❌ unless you pass a codegen `Functions` type |
+| **Pinned cache** | `1c-odata generate --metadata-only` → `loadMetadataIndex`, or cache `fetchMetadataIndex` JSON → `parseMetadataIndex` | matches whichever produced it |
+| **None (schema-less)** | just a URL + credentials | ❌ — `UntypedEntity` |
+
+**The only difference between sources is compile-time types** — codegen adds them, the runtime path doesn't (unless handed a codegen `Functions` type). The schema-driven runtime behavior is the same code regardless of source. The runtime-fetch and schema-less modes below are both runnable in [`examples/dynamic`](./examples/dynamic).
+
+### Runtime fetch: any base, zero generated files
 
 ```bash
 pnpm add @1c-odata/client @1c-odata/metadata
@@ -144,7 +154,62 @@ Everything URL-shaped works without a schema: query builder + filter DSL, CRUD, 
 | Clearing a date on write | `null` → sentinel automatically | pass `ONEC_EMPTY_DATE` explicitly (`null` stays `null`) |
 | `validateOnWrite` | ✅ | ❌ (throws at construction) |
 
-Recipes: opt out of all date handling with `shape: { dateMode: 'string' }` and convert manually via `parseInZone` / `formatInZone`. With a runtime index (previous section) you can also introspect the base: `Object.keys(client.metadataIndex.entitySetToType)` lists every entity set.
+Recipes: opt out of all date handling with `shape: { dateMode: 'string' }` and convert manually via `parseInZone` / `formatInZone`. With a runtime index (previous section) you can also introspect the base: `Object.keys(client.metadataIndex?.entitySetToType ?? {})` lists every entity set.
+
+## Error handling
+
+Every error the library throws extends `ODataError`. Catch broadly with `instanceof ODataError`, narrow with a subclass:
+
+```ts
+import { ODataError, HTTPError, BusinessError, ConcurrencyError, TimeoutError, ValidationError } from '@1c-odata/client'
+
+try {
+  await client.entity('Document_Заказ', key).patch({ Проведен: true }, { expectVersion })
+} catch (e) {
+  if (e instanceof ConcurrencyError) {
+    // optimistic-concurrency guard tripped: DataVersion changed — refetch and retry
+  } else if (e instanceof BusinessError) {
+    console.error(`1С business rule: ${e.code} ${e.odata?.message}`) // HTTP 500, code "-1"
+  } else if (e instanceof TimeoutError) {
+    console.error(`timed out after ${e.timeoutMs}ms`)
+  } else if (e instanceof HTTPError) {
+    console.error(`HTTP ${e.status} ${e.statusText} (${e.errorFormat})`)
+  } else if (e instanceof ValidationError) {
+    console.error(e.issues) // only with validateOnWrite — thrown before any HTTP request
+  } else if (e instanceof ODataError) {
+    console.error(`${e.name}: ${e.message}`, e.request) // request is { method, url } — never headers
+  }
+}
+```
+
+Narrow before broad: `ConcurrencyError` / `BusinessError` / `PermissionError` extend `HTTPError`, so check them first. Caller-supplied `AbortSignal` aborts are rethrown unchanged (the native `AbortError`); library-issued timeouts surface as `TimeoutError`. The full hierarchy and field-level guarantees are in [`STABILITY.md`](./STABILITY.md#error-contract).
+
+## Registers
+
+`client.register(set)` is a typed facade over 1С register virtual tables — balances, turnovers, and slices. Turnover-style tables take a `{ from, to }` period **range** (mapped to `StartPeriod` / `EndPeriod`); `balance()` and slices take a single `Period` point. Every method accepts an optional trailing `ReadFiOptions` (`$top` + per-call `signal` / `timeout` / `retry`) and returns the rows directly (`Promise<R[]>`):
+
+```ts
+// AccumulationRegister — stock balance at a date, turnovers over a range
+const balance = await client
+  .register('AccumulationRegister_ТоварыНаСкладах')
+  .balance({ Period: new Date('2025-01-01') }, { top: 100 })
+
+const turnovers = await client
+  .register('AccumulationRegister_ТоварыНаСкладах')
+  .turnovers({ Period: { from: new Date('2025-01-01'), to: new Date('2025-12-31') } })
+
+// InformationRegister — last slice at/before a date
+const prices = await client
+  .register('InformationRegister_ЦеныНоменклатуры')
+  .sliceLast({ Period: new Date('2025-06-01') })
+
+// AccountingRegister — debit/credit turnovers over a range
+const drcr = await client
+  .register('AccountingRegister_Хозрасчетный')
+  .drCrTurnovers({ Period: { from: new Date('2025-01-01'), to: new Date('2025-03-31') } })
+```
+
+Also available: `balanceAndTurnovers`, `sliceFirst`, `extDimensions`, `recordsWithExtDimensions`, plus `recordsets()` / `records()` for the raw record sets — see [`packages/client/src/register.ts`](./packages/client/src/register.ts).
 
 ## Network configuration
 
