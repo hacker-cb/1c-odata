@@ -79,4 +79,4 @@ Guaranteed:
 - A `<kind>/index.ts` re-export is emitted for every entity kind, always — kinds with no entities get an `export {}` stub so the import path stays stable.
 - `enums.ts`: one `as const` object + literal-union type alias per `EnumType`. Names and member sets track the EDMX verbatim. Consumers cast property values explicitly because 1С V3 EDMX does not link `Edm.String` fields to their `EnumType`.
 
-Layout / naming changes in `@1c-odata/cli/codegen` bump major. Consumer re-runs `1c-odata generate` and gets a diff in their repo.
+Layout / naming changes in `@1c-odata/cli/codegen` are a breaking change, versioned per the [Versioning](#versioning) policy above (a minor bump in v0.x, a major from v1.0). A consumer re-runs `1c-odata generate` and gets a diff in their repo.
