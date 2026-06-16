@@ -1,5 +1,9 @@
 # 1c-odata
 
+[![CI](https://github.com/hacker-cb/1c-odata/actions/workflows/ci.yml/badge.svg)](https://github.com/hacker-cb/1c-odata/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/@1c-odata/client)](https://nodejs.org)
+[![license](https://img.shields.io/npm/l/@1c-odata/client)](./LICENSE)
+
 TypeScript library for the standard OData interface of 1С:Enterprise 8 — OData protocol **version 3.0** (the dialect any modern 1С 8.3 base exposes; 1С does not offer an OData 4.0 interface). Ergonomic filter API, schema-driven date / Int64 / ValueStorage handling, and a single source of truth between schema and runtime. Codegen is the optional DX layer on top: generate types for full IDE completion, or [run against any base with zero generated files](#schema-sources).
 
 > **Server-side only.** Uses Node 22+ APIs (`globalThis.fetch`, `Buffer`, `fs`). Minimum Node: **22.21.0**. Pure ESM.
@@ -8,11 +12,12 @@ TypeScript library for the standard OData interface of 1С:Enterprise 8 — ODat
 
 ## Packages
 
-| Package | Role |
-|---|---|
-| [`@1c-odata/client`](./packages/client/src) | Typed runtime — `ODataV3Client`, query builder, filter, value-storage, register helpers |
-| [`@1c-odata/metadata`](./packages/metadata/src) | Run the client against any base at runtime — `createDynamicClient` / `fetchMetadataIndex`, no codegen; also the EDMX (`$metadata`) parser + `buildMetadataIndex` schema toolkit |
-| [`@1c-odata/cli`](./packages/cli/src) | `1c-odata fetch` + `1c-odata generate` binaries; codegen lib at [`@1c-odata/cli/codegen`](./packages/cli/src/codegen) |
+| Package | npm | Role |
+|---|---|---|
+| [`@1c-odata/client`](./packages/client/src) | [![npm](https://img.shields.io/npm/v/@1c-odata/client)](https://www.npmjs.com/package/@1c-odata/client) | Typed runtime — `ODataV3Client`, query builder, filter, value-storage, register helpers |
+| [`@1c-odata/metadata`](./packages/metadata/src) | [![npm](https://img.shields.io/npm/v/@1c-odata/metadata)](https://www.npmjs.com/package/@1c-odata/metadata) | Run the client against any base at runtime — `createDynamicClient` / `fetchMetadataIndex`, no codegen; also the EDMX (`$metadata`) parser + `buildMetadataIndex` schema toolkit |
+| [`@1c-odata/cli`](./packages/cli/src) | [![npm](https://img.shields.io/npm/v/@1c-odata/cli)](https://www.npmjs.com/package/@1c-odata/cli) | `1c-odata fetch` + `1c-odata generate` binaries; codegen lib at [`@1c-odata/cli/codegen`](./packages/cli/src/codegen) |
+| [`@1c-odata/mcp`](./packages/mcp) | [![npm](https://img.shields.io/npm/v/@1c-odata/mcp)](https://www.npmjs.com/package/@1c-odata/mcp) | MCP server for AI agents — read-only schema introspection + OData queries against any base via live `$metadata`, plus a connection-manager CLI. Built on `client` + `metadata` |
 
 JSDoc on the public API is the canonical reference. Hover anything imported from `@1c-odata/client` in your IDE.
 

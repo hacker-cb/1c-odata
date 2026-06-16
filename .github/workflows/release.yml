@@ -94,7 +94,14 @@ jobs:
               continue
             fi
             echo "publishing $pkg@$ver"
-            ( cd "$dir" && npm publish --provenance --access public )
+            # `npm publish` does NOT rewrite the `workspace:` protocol, so publishing
+            # a package dir directly ships `"<dep>": "workspace:*"` in the manifest —
+            # uninstallable from npm (EUNSUPPORTEDPROTOCOL). `pnpm pack` rewrites those
+            # to the concrete version in the tarball; publish THAT via npm so OIDC
+            # Trusted Publishing + provenance still apply (npm CLI, not pnpm).
+            ( cd "$dir" && pnpm pack --pack-destination "$RUNNER_TEMP" )
+            tgz="$RUNNER_TEMP/$(printf '%s' "$pkg" | sed -e 's|^@||' -e 's|/|-|')-$ver.tgz"
+            npm publish "$tgz" --provenance --access public
           done
           # Tag the release commit. The packages are a changesets `fixed` group
           # (always identical versions), so a single `v<version>` tag is
