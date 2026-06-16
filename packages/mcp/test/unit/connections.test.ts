@@ -61,6 +61,11 @@ describe('upsertConnection', () => {
     expect(await fileStore().read('trade')).toBeNull()
   })
 
+  it('trims surrounding whitespace from serverTimezone (so a valid zone is not rejected)', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', serverTimezone: '  Europe/Moscow  ' })
+    expect(loadConfig(dir).connections.trade?.serverTimezone).toBe('Europe/Moscow')
+  })
+
   it('strips userinfo from baseUrl before saving', async () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'trade', baseUrl: 'http://u:p@host/odata' })
     expect(loadConfig(dir).connections.trade?.baseUrl).toBe('http://host/odata')

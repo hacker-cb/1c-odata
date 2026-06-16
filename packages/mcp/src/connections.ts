@@ -64,6 +64,10 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
   assertValidConnectionName(input.name)
   const baseUrl = normalizeBaseUrl(stripUrlUserinfo(input.baseUrl.trim()))
   const login = input.login.trim()
+  // Trim the timezone too (non-interactive --timezone / MCP tool args aren't
+  // trimmed by their callers): surrounding whitespace would fail the IANA check
+  // even for an otherwise-valid zone.
+  const serverTimezone = input.serverTimezone.trim()
   const password = input.password // opaque credential — stored verbatim, never trimmed
 
   // Validate baseUrl / login / timezone. When only the non-secret config is
@@ -72,7 +76,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
   validateConnection({
     baseUrl,
     auth: { username: login, password: password !== undefined && password !== '' ? password : 'x' },
-    serverTimezone: input.serverTimezone,
+    serverTimezone,
   })
 
   return withConfigLock(async () => {
@@ -116,7 +120,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
     config.connections[input.name] = {
       baseUrl,
       login,
-      serverTimezone: input.serverTimezone,
+      serverTimezone,
       ...(input.shape !== undefined ? { shape: input.shape } : {}),
     } satisfies StoredConnection
     saveConfig(input.dataDir, config)
