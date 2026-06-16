@@ -43,6 +43,18 @@ describe('resolveLimits', () => {
     expect(resolveLimits({ ONEC_MCP_MAX_TOP: '10.5' }).maxTop).toBe(DEFAULT_LIMITS.maxTop)
     expect(resolveLimits({ ONEC_MCP_MAX_TOP: '  200  ' }).maxTop).toBe(200)
   })
+
+  it('rejects values above MAX_SAFE_INTEGER so a giant typo cannot defeat the cap', () => {
+    // Number('99999999999999999999') === 1e20 — Number.isInteger() accepts it, so
+    // the cap must use Number.isSafeInteger to fall back instead of going unbounded.
+    expect(resolveLimits({ ONEC_MCP_MAX_TOP: '99999999999999999999' }).maxTop).toBe(DEFAULT_LIMITS.maxTop)
+    expect(resolveLimits({ ONEC_MCP_MAX_REGISTER_ROWS: '1'.repeat(25) }).maxRegisterRows).toBe(
+      DEFAULT_LIMITS.maxRegisterRows,
+    )
+    expect(resolveLimits({ ONEC_MCP_MAX_BYTES: String(Number.MAX_SAFE_INTEGER) }).maxBytes).toBe(
+      Number.MAX_SAFE_INTEGER,
+    )
+  })
 })
 
 describe('clampTop', () => {

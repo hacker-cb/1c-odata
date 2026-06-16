@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadConfig } from '../../src/config.js'
-import { removeConnection, upsertConnection } from '../../src/connections.js'
+import { assertAddable, removeConnection, upsertConnection } from '../../src/connections.js'
 import { SecretStore } from '../../src/secret-store.js'
 
 // Isolate from the real OS keychain (best-effort keychain deletes on write/remove).
@@ -82,6 +82,17 @@ describe('upsertConnection', () => {
     await expect(upsertConnection({ ...base, dataDir: dir, name: 'Валюта' })).rejects.toThrow(/Invalid connection name/)
   })
 
+  it('rejects a name colliding on the password env var with a DIFFERENT connection', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'tvip-trade', password: 'pw' })
+    // 'tvip_trade' slugs to the same ONEC_TVIP_TRADE_PASSWORD as 'tvip-trade';
+    // allowing it would let the new connection resolve the other's env password.
+    await expect(upsertConnection({ ...base, dataDir: dir, name: 'tvip_trade' })).rejects.toThrow(/collides/)
+    // Re-saving the SAME name is fine (not a cross-connection collision).
+    await expect(
+      upsertConnection({ ...base, dataDir: dir, name: 'tvip-trade', overwrite: true }),
+    ).resolves.toBeDefined()
+  })
+
   it('clears the stored password on a passwordless overwrite that changes the auth target', async () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'pw' })
     const r = await upsertConnection({
@@ -113,6 +124,19 @@ describe('removeConnection', () => {
 
   it('returns false for an unknown connection', async () => {
     expect(await removeConnection({ dataDir: dir, name: 'nope', insecure: true })).toBe(false)
+  })
+})
+
+describe('assertAddable', () => {
+  it('throws on a duplicate without overwrite, passes with overwrite or when absent', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade' })
+    expect(() => assertAddable(dir, 'trade', false)).toThrow(/already exists/)
+    expect(() => assertAddable(dir, 'trade', true)).not.toThrow()
+    expect(() => assertAddable(dir, 'fresh', false)).not.toThrow()
+  })
+
+  it('rejects an invalid name before any existence check', () => {
+    expect(() => assertAddable(dir, 'Валюта', false)).toThrow(/Invalid connection name/)
   })
 })
 

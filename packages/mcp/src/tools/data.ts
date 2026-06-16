@@ -323,9 +323,19 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool, limit
   )
 }
 
+/** Strict ISO-8601 date or date-time: `2024-01-01` or `2024-01-01T00:00:00(.sss)(Z|±hh:mm)`. */
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/
+
 function toDate(iso: string | undefined): Date | undefined {
   if (iso === undefined) return undefined
-  const date = new Date(iso)
+  const trimmed = iso.trim()
+  // Require a strict ISO shape first: bare `new Date()` leniently parses ambiguous
+  // strings ("2024-1", "2024/01/01", locale forms) to an unintended instant, which
+  // would silently shift register aggregation to the wrong period.
+  if (!ISO_DATE_RE.test(trimmed)) {
+    throw new Error(`Invalid ISO date: "${iso}" (expected YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss)`)
+  }
+  const date = new Date(trimmed)
   if (Number.isNaN(date.getTime())) throw new Error(`Invalid ISO date: "${iso}"`)
   return date
 }

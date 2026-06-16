@@ -50,12 +50,15 @@ export function stripNoise(value: unknown): unknown {
 /**
  * Recursively cap oversized string leaf values: any string whose UTF-8 size
  * exceeds `capBytes` is replaced with a head plus a `…(truncated, N bytes)`
- * marker, budgeted so the replacement's own UTF-8 size stays within `capBytes`
- * (and therefore never exceeds the original). This keeps the byte budget binding
- * for the cases {@link fitRows} can't help with — a single row whose size is
- * dominated by one huge field (a base64 `ValueStorage`, a large text/HTML
- * field), and single-entity `get_entity` reads. Preserves `Date`/`bigint` and
- * object/array structure.
+ * marker, budgeted so the replacement's UTF-8 size stays within `capBytes` (and
+ * thus never exceeds the original) — for any `capBytes` at least the marker's
+ * length (~30 bytes); below that the head is dropped and the bare marker is
+ * returned (callers pass `limits.maxBytes`, floored at 1024, so this floor is
+ * never hit in practice). This keeps the byte budget binding for the cases
+ * {@link fitRows} can't help with — a single row whose size is dominated by one
+ * huge field (a base64 `ValueStorage`, a large text/HTML field), and
+ * single-entity `get_entity` reads. Preserves `Date`/`bigint` and object/array
+ * structure.
  */
 export function capLongStrings(value: unknown, capBytes: number): unknown {
   if (typeof value === 'string') {

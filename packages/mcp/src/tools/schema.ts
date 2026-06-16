@@ -105,9 +105,29 @@ export function registerSchemaTools(server: McpServer, pool: ConnectionPool, lim
       toolResult(async () => {
         const { index, edmx } = await pool.get(connection)
         const described = describeEntity(index, edmx, entity)
+        // A very wide entity's property/navigation arrays can exceed the byte
+        // budget; keep a prefix that fits (like the paged tools) so describe_entity
+        // can't produce an oversized response. Properties first, then navigation
+        // against the remaining budget.
+        const propFit = fitRows(described.properties, limits.maxBytes)
+        const used = Buffer.byteLength(JSON.stringify(propFit.rows), 'utf8')
+        const navFit = fitRows(described.navigationProperties, Math.max(256, limits.maxBytes - used))
+        const truncated = propFit.truncated || navFit.truncated
         return {
-          summary: `${described.entityType} (${described.kind ?? 'unknown kind'}): ${described.properties.length} properties, ${described.keys.length} key(s), ${described.navigationProperties.length} navigation property(ies).`,
-          data: { connection, ...described },
+          summary: `${described.entityType} (${described.kind ?? 'unknown kind'}): ${described.properties.length} properties, ${described.keys.length} key(s), ${described.navigationProperties.length} navigation property(ies)${truncated ? ' — output truncated to the byte budget; query specific fields with list_entities/query' : ''}.`,
+          data: {
+            connection,
+            ...described,
+            properties: propFit.rows,
+            navigationProperties: navFit.rows,
+            ...(truncated
+              ? {
+                  truncated: true,
+                  propertiesTotal: described.properties.length,
+                  navigationPropertiesTotal: described.navigationProperties.length,
+                }
+              : {}),
+          },
         }
       }),
   )

@@ -3,7 +3,7 @@ import { fetchMetadataXml } from '@1c-odata/metadata'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { type ConnectionPool, DEFAULT_METADATA_TIMEOUT_MS } from '../connection-pool.js'
-import { removeConnection, type UpsertConnectionResult, upsertConnection } from '../connections.js'
+import { assertAddable, removeConnection, type UpsertConnectionResult, upsertConnection } from '../connections.js'
 import { stripUrlUserinfo } from '../redact.js'
 import { toolResult } from './_result.js'
 
@@ -46,6 +46,9 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
     async ({ connection, baseUrl, login, serverTimezone, password, overwrite }) =>
       toolResult(async () => {
         const hasPassword = password !== undefined && password !== ''
+        // Preflight the duplicate check BEFORE verifying, so a password is never
+        // sent to baseUrl only to be rejected as "already exists" afterwards.
+        assertAddable(opts.dataDir, connection, overwrite === true)
         // Verify before persisting when a password is available. The password is
         // used verbatim here so verify matches exactly what gets stored/used.
         if (hasPassword) {

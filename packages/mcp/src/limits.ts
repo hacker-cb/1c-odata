@@ -19,10 +19,12 @@ export const DEFAULT_LIMITS: Limits = { defaultTop: 50, maxTop: 1000, maxBytes: 
 
 function intEnv(raw: string | undefined, fallback: number, min: number): number {
   // Strict decimal only — reject hex ("0x10"), exponential ("1e9"), floats and
-  // blanks so a typo can't silently raise a cap to an unintended value.
+  // blanks so a typo can't silently raise a cap to an unintended value. Bounded
+  // by MAX_SAFE_INTEGER: a 20-digit value rounds to a float that Number.isInteger
+  // still accepts, which would defeat the cap, so use Number.isSafeInteger.
   if (raw === undefined || !/^\d+$/.test(raw.trim())) return fallback
   const n = Number(raw.trim())
-  return Number.isInteger(n) && n >= min ? n : fallback
+  return Number.isSafeInteger(n) && n >= min ? n : fallback
 }
 
 /**

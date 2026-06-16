@@ -1,7 +1,20 @@
 import { type DataShape, InvalidArgumentError, normalizeBaseUrl, validateConnection } from '@1c-odata/client'
 import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfig } from './config.js'
 import { stripUrlUserinfo } from './redact.js'
-import { SecretStore } from './secret-store.js'
+import { passwordEnvVar, SecretStore } from './secret-store.js'
+
+/**
+ * Cheap preflight for the add path: reject a duplicate (without `overwrite`)
+ * BEFORE the caller verifies connectivity, so a password is never sent to the
+ * supplied baseUrl only to fail on "already exists". Best-effort and outside the
+ * config lock; {@link upsertConnection} re-checks authoritatively under the lock.
+ */
+export function assertAddable(dataDir: string, name: string, overwrite: boolean): void {
+  assertValidConnectionName(name)
+  if (!overwrite && loadConfig(dataDir).connections[name] !== undefined) {
+    throw new InvalidArgumentError(`Connection "${name}" already exists`, { argument: 'name' })
+  }
+}
 
 /**
  * Serialize config read-modify-write across concurrent calls in this process.
@@ -70,14 +83,24 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
       throw new InvalidArgumentError(`Connection "${input.name}" already exists`, { argument: 'name' })
     }
 
-    config.connections[input.name] = {
-      baseUrl,
-      login,
-      serverTimezone: input.serverTimezone,
-      ...(input.shape !== undefined ? { shape: input.shape } : {}),
-    } satisfies StoredConnection
-    saveConfig(input.dataDir, config)
+    // Reject a name whose password env-var slug collides with a DIFFERENT existing
+    // connection: ONEC_<NAME>_PASSWORD is shared (e.g. "a-b" and "a_b" both slug to
+    // ONEC_A_B_PASSWORD and env wins on read), so a colliding new connection could
+    // resolve another connection's env password and send it to its own baseUrl.
+    const envVar = passwordEnvVar(input.name)
+    const collision = Object.keys(config.connections).find(
+      (other) => other !== input.name && passwordEnvVar(other) === envVar,
+    )
+    if (collision !== undefined) {
+      throw new InvalidArgumentError(
+        `Connection name "${input.name}" collides with existing "${collision}" on the ${envVar} password env var (names differing only in "-"/"_" share one). Choose a distinct name.`,
+        { argument: 'name' },
+      )
+    }
 
+    // Mutate the secret store BEFORE persisting config: if a secret write/remove
+    // throws, config.json is left untouched, so it can never end up pointing at a
+    // new auth target (baseUrl/login) while a stale password still resolves.
     const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
     let passwordBackend: 'keychain' | 'file' | undefined
     let passwordCleared = false
@@ -89,6 +112,15 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
       await store.remove(input.name)
       passwordCleared = true
     }
+
+    config.connections[input.name] = {
+      baseUrl,
+      login,
+      serverTimezone: input.serverTimezone,
+      ...(input.shape !== undefined ? { shape: input.shape } : {}),
+    } satisfies StoredConnection
+    saveConfig(input.dataDir, config)
+
     return {
       overwritten: existed,
       ...(passwordBackend !== undefined ? { passwordBackend } : {}),
