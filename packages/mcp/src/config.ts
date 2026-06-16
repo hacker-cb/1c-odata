@@ -114,10 +114,13 @@ function normalizeConfig(data: unknown): McpConfig {
   const connections = (data as { connections?: unknown }).connections
   if (connections === null || typeof connections !== 'object') return { connections: {} }
   // Drop structurally-invalid entries (a hand-edited config may have non-objects
-  // or miss required string fields — keeping them would crash later paths). For
-  // valid ones, strip any userinfo the baseUrl might carry (defense in depth).
+  // or miss required string fields — keeping them would crash later paths) AND
+  // entries whose name key fails connection-name validation (a non-ASCII name
+  // slugs to an empty, colliding `ONEC__PASSWORD` env var). For valid ones, strip
+  // any userinfo the baseUrl might carry (defense in depth).
   const sanitized: Record<string, StoredConnection> = Object.create(null)
   for (const [name, conn] of Object.entries(connections as Record<string, unknown>)) {
+    if (!isValidConnectionName(name)) continue
     if (conn === null || typeof conn !== 'object') continue
     const c = conn as Partial<StoredConnection>
     if (typeof c.baseUrl !== 'string' || typeof c.login !== 'string' || typeof c.serverTimezone !== 'string') continue
@@ -139,8 +142,15 @@ function normalizeConfig(data: unknown): McpConfig {
  * separator share one override env var (keychain/file storage keys on the exact
  * name and never collide). The name is a user-chosen alias.
  */
+const CONNECTION_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
+
+/** Whether `name` is a usable connection alias (see {@link assertValidConnectionName}). */
+export function isValidConnectionName(name: string): boolean {
+  return CONNECTION_NAME_RE.test(name)
+}
+
 export function assertValidConnectionName(name: string): void {
-  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name)) {
+  if (!isValidConnectionName(name)) {
     throw new InvalidArgumentError(
       `Invalid connection name "${name}": use ASCII letters, digits, hyphens and underscores (e.g. "test_tvip_trade"); it maps to a ONEC_<NAME>_PASSWORD env var`,
       { argument: 'name' },

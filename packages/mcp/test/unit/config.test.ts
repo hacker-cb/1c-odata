@@ -116,6 +116,20 @@ describe('loadConfig / saveConfig', () => {
     expect(loadConfig(dir).connections.c?.baseUrl).toBe('http://host/odata')
   })
 
+  it('drops connections whose name key is invalid (non-ASCII / leading separator)', () => {
+    writeFileSync(
+      configPath(dir),
+      JSON.stringify({
+        connections: {
+          good: { baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow' },
+          Валюты: { baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow' },
+          '-leading': { baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow' },
+        },
+      }),
+    )
+    expect(Object.keys(loadConfig(dir).connections)).toEqual(['good'])
+  })
+
   it('drops structurally-invalid connection entries on load', () => {
     writeFileSync(
       configPath(dir),

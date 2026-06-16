@@ -323,17 +323,24 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool, limit
   )
 }
 
-/** Strict ISO-8601 date or date-time: `2024-01-01` or `2024-01-01T00:00:00(.sss)(Z|±hh:mm)`. */
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/
+/**
+ * Strict ISO-8601: a date-only `2024-01-01` (parsed as UTC), or a date-time that
+ * carries an EXPLICIT timezone `2024-01-01T00:00:00(.sss)(Z|±hh:mm)`. A time
+ * without a timezone is rejected — `new Date()` would parse it in the MCP host's
+ * local zone, silently shifting the register period off the 1С server's zone.
+ */
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2}))?$/
 
 function toDate(iso: string | undefined): Date | undefined {
   if (iso === undefined) return undefined
   const trimmed = iso.trim()
-  // Require a strict ISO shape first: bare `new Date()` leniently parses ambiguous
-  // strings ("2024-1", "2024/01/01", locale forms) to an unintended instant, which
-  // would silently shift register aggregation to the wrong period.
+  // Strict shape first: bare `new Date()` leniently parses ambiguous strings
+  // ("2024-1", "2024/01/01") to an unintended instant, and a timezone-less
+  // date-time to a host-local one — both silently shift register aggregation.
   if (!ISO_DATE_RE.test(trimmed)) {
-    throw new Error(`Invalid ISO date: "${iso}" (expected YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss)`)
+    throw new Error(
+      `Invalid ISO date: "${iso}" (expected YYYY-MM-DD, or a date-time with an explicit timezone like 2024-01-01T00:00:00Z or +03:00)`,
+    )
   }
   const date = new Date(trimmed)
   if (Number.isNaN(date.getTime())) throw new Error(`Invalid ISO date: "${iso}"`)
