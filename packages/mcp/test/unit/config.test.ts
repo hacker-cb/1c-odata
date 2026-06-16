@@ -48,8 +48,11 @@ describe('resolveDataDir', () => {
 
   // The default is XDG-style and agent-independent: branches on the host OS.
   if (process.platform === 'win32') {
-    it('uses %APPDATA%\\1c-odata on Windows', () => {
+    it('uses %APPDATA%\\1c-odata on Windows (trimmed)', () => {
       expect(resolveDataDir({ APPDATA: 'C:\\Users\\me\\AppData\\Roaming' })).toBe(
+        join('C:\\Users\\me\\AppData\\Roaming', '1c-odata'),
+      )
+      expect(resolveDataDir({ APPDATA: '  C:\\Users\\me\\AppData\\Roaming  ' })).toBe(
         join('C:\\Users\\me\\AppData\\Roaming', '1c-odata'),
       )
     })
@@ -60,8 +63,10 @@ describe('resolveDataDir', () => {
       expect(resolveDataDir({ APPDATA: '   ' })).toBe(expected)
     })
   } else {
-    it('honors an absolute $XDG_CONFIG_HOME on macOS/Linux', () => {
+    it('honors an absolute $XDG_CONFIG_HOME on macOS/Linux (trimmed)', () => {
       expect(resolveDataDir({ XDG_CONFIG_HOME: '/custom/cfg' })).toBe('/custom/cfg/1c-odata')
+      // Surrounding whitespace must not defeat the absolute check or pollute the join.
+      expect(resolveDataDir({ XDG_CONFIG_HOME: '  /custom/cfg  ' })).toBe('/custom/cfg/1c-odata')
     })
 
     it('ignores a relative, empty or blank $XDG_CONFIG_HOME and uses ~/.config', () => {

@@ -3,7 +3,7 @@ import { connectionAuth, InvalidArgumentError } from '@1c-odata/client'
 import { fetchMetadataXml } from '@1c-odata/metadata'
 import { assertValidConnectionName, configPath, loadConfig } from '../config.js'
 import { DEFAULT_METADATA_TIMEOUT_MS } from '../connection-pool.js'
-import { upsertConnection } from '../connections.js'
+import { assertAddable, upsertConnection } from '../connections.js'
 import { errorText, stripUrlUserinfo } from '../redact.js'
 import { passwordEnvVar } from '../secret-store.js'
 import { promptConfirm, promptHidden, promptLine } from './_prompt.js'
@@ -81,6 +81,10 @@ async function gatherNonInteractive(opts: AddOptions): Promise<ResolvedFields> {
   const name = (opts.name ?? '').trim()
   if (name === '')
     throw new InvalidArgumentError('Connection name is required (pass it as an argument)', { argument: 'name' })
+  // Validate name / duplicate / env-var collision BEFORE resolving the env
+  // password or verifying — an invalid name would otherwise resolve the wrong
+  // ONEC_<NAME>_PASSWORD and fail late after a network round-trip.
+  assertAddable(opts.dataDir, name, opts.force === true)
   const login = (opts.login ?? '').trim()
   if (login === '') throw new InvalidArgumentError('--login is required in non-interactive mode', { argument: 'login' })
   warnIfUrlHasUserinfo((opts.url ?? '').trim())

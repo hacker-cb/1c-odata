@@ -4,16 +4,36 @@ import { stripUrlUserinfo } from './redact.js'
 import { passwordEnvVar, SecretStore } from './secret-store.js'
 
 /**
- * Cheap preflight for the add path: reject a duplicate (without `overwrite`)
- * BEFORE the caller verifies connectivity, so a password is never sent to the
- * supplied baseUrl only to fail on "already exists". Best-effort and outside the
- * config lock; {@link upsertConnection} re-checks authoritatively under the lock.
+ * Throw if `name`'s password env-var slug collides with a DIFFERENT existing
+ * connection: `ONEC_<NAME>_PASSWORD` is shared (e.g. "a-b" and "a_b" both slug to
+ * `ONEC_A_B_PASSWORD` and env wins on read), so a colliding new connection could
+ * resolve another connection's env password and send it to its own baseUrl.
+ */
+function assertNoPasswordEnvCollision(connections: Record<string, StoredConnection>, name: string): void {
+  const envVar = passwordEnvVar(name)
+  const collision = Object.keys(connections).find((other) => other !== name && passwordEnvVar(other) === envVar)
+  if (collision !== undefined) {
+    throw new InvalidArgumentError(
+      `Connection name "${name}" collides with existing "${collision}" on the ${envVar} password env var (names differing only in "-"/"_" share one). Choose a distinct name.`,
+      { argument: 'name' },
+    )
+  }
+}
+
+/**
+ * Cheap preflight for the add path: reject an invalid name, a duplicate (without
+ * `overwrite`), or a password-env-var collision BEFORE the caller verifies
+ * connectivity, so a password is never sent to the supplied baseUrl only to fail
+ * afterwards. Best-effort and outside the config lock; {@link upsertConnection}
+ * re-checks authoritatively under the lock.
  */
 export function assertAddable(dataDir: string, name: string, overwrite: boolean): void {
   assertValidConnectionName(name)
-  if (!overwrite && loadConfig(dataDir).connections[name] !== undefined) {
+  const { connections } = loadConfig(dataDir)
+  if (!overwrite && connections[name] !== undefined) {
     throw new InvalidArgumentError(`Connection "${name}" already exists`, { argument: 'name' })
   }
+  assertNoPasswordEnvCollision(connections, name)
 }
 
 /**
@@ -87,20 +107,8 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
       throw new InvalidArgumentError(`Connection "${input.name}" already exists`, { argument: 'name' })
     }
 
-    // Reject a name whose password env-var slug collides with a DIFFERENT existing
-    // connection: ONEC_<NAME>_PASSWORD is shared (e.g. "a-b" and "a_b" both slug to
-    // ONEC_A_B_PASSWORD and env wins on read), so a colliding new connection could
-    // resolve another connection's env password and send it to its own baseUrl.
-    const envVar = passwordEnvVar(input.name)
-    const collision = Object.keys(config.connections).find(
-      (other) => other !== input.name && passwordEnvVar(other) === envVar,
-    )
-    if (collision !== undefined) {
-      throw new InvalidArgumentError(
-        `Connection name "${input.name}" collides with existing "${collision}" on the ${envVar} password env var (names differing only in "-"/"_" share one). Choose a distinct name.`,
-        { argument: 'name' },
-      )
-    }
+    // Authoritative (under the lock) re-check of the env-var collision guard.
+    assertNoPasswordEnvCollision(config.connections, input.name)
 
     // Mutate the secret store BEFORE persisting config: if a secret write/remove
     // throws, config.json is left untouched, so it can never end up pointing at a

@@ -75,14 +75,15 @@ function firstNonBlank(...values: (string | undefined)[]): string | undefined {
 /** Per-user default data dir: XDG on macOS/Linux, `%APPDATA%` on Windows. */
 function defaultDataDir(env: NodeJS.ProcessEnv): string {
   if (process.platform === 'win32') {
-    const appData = env.APPDATA
-    if (appData !== undefined && appData.trim() !== '') return join(appData, APP_DIR)
+    const appData = env.APPDATA?.trim()
+    if (appData !== undefined && appData !== '') return join(appData, APP_DIR)
     return join(homedir(), 'AppData', 'Roaming', APP_DIR)
   }
   // The XDG Base Directory spec mandates absolute paths; a relative or empty
-  // $XDG_CONFIG_HOME is ignored in favour of ~/.config.
-  const xdg = env.XDG_CONFIG_HOME
-  if (xdg !== undefined && xdg.trim() !== '' && isAbsolute(xdg)) return join(xdg, APP_DIR)
+  // $XDG_CONFIG_HOME is ignored in favour of ~/.config. Trim first so a
+  // whitespace-padded absolute path is still honoured (and joined cleanly).
+  const xdg = env.XDG_CONFIG_HOME?.trim()
+  if (xdg !== undefined && xdg !== '' && isAbsolute(xdg)) return join(xdg, APP_DIR)
   return join(homedir(), '.config', APP_DIR)
 }
 

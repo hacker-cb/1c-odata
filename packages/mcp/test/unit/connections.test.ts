@@ -143,6 +143,11 @@ describe('assertAddable', () => {
   it('rejects an invalid name before any existence check', () => {
     expect(() => assertAddable(dir, 'Валюта', false)).toThrow(/Invalid connection name/)
   })
+
+  it('throws on a password-env-var collision before any verify (preflight)', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'tvip-trade', password: 'pw' })
+    expect(() => assertAddable(dir, 'tvip_trade', false)).toThrow(/collides/)
+  })
 })
 
 describe('concurrent mutations', () => {
