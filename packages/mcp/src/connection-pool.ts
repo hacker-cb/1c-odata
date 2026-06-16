@@ -1,0 +1,150 @@
+import {
+  type Connection,
+  clientOptionsFromConnection,
+  connectionAuth,
+  InvalidArgumentError,
+  type MetadataIndex,
+  ODataV3Client,
+  validateConnection,
+} from '@1c-odata/client'
+import { buildMetadataIndex, type EdmxModel, fetchMetadataXml, parseEdmx } from '@1c-odata/metadata'
+import { loadConfig } from './config.js'
+import { passwordEnvVar, type SecretSource, SecretStore } from './secret-store.js'
+
+/** A fully-resolved connection: schema artifacts + a ready client, cached together. */
+export interface PoolEntry {
+  name: string
+  connection: Connection
+  /** Parsed EDMX — source of keys + navigation properties for `describe_entity`. */
+  edmx: EdmxModel
+  /** Runtime index — entity sets, property schemas, enums. */
+  index: MetadataIndex
+  /** Client wired with the index (date/Int64/ValueStorage handling). */
+  client: ODataV3Client
+}
+
+export interface ConnectionSummary {
+  name: string
+  baseUrl: string
+  login: string
+  serverTimezone: string
+  /** Where the password resolves from — never the password itself. */
+  passwordSource: SecretSource
+  /** Whether the schema has already been fetched into the in-memory cache. */
+  loaded: boolean
+}
+
+/** Default `$metadata` download timeout (ms). 1С EDMX is 10+ MB on real bases. */
+export const DEFAULT_METADATA_TIMEOUT_MS = 120_000
+
+export interface ConnectionPoolOptions {
+  dataDir: string
+  insecure?: boolean
+  /** `$metadata` download timeout (ms). 1С EDMX is 10+ MB on real bases. */
+  fetchTimeout?: number
+}
+
+/**
+ * Lazily resolves connections into ready clients and caches the schema in
+ * memory. The first access to a connection downloads `$metadata` ONCE and
+ * derives both the {@link EdmxModel} (keys/navigation) and the
+ * {@link MetadataIndex} (sets/properties/enums) from the same XML — no double
+ * fetch of a multi-megabyte payload.
+ */
+export class ConnectionPool {
+  private readonly dataDir: string
+  private readonly store: SecretStore
+  private readonly fetchTimeout: number
+  private readonly cache = new Map<string, Promise<PoolEntry>>()
+
+  constructor(opts: ConnectionPoolOptions) {
+    this.dataDir = opts.dataDir
+    this.store = new SecretStore({ dataDir: opts.dataDir, insecure: opts.insecure ?? false })
+    this.fetchTimeout = opts.fetchTimeout ?? DEFAULT_METADATA_TIMEOUT_MS
+  }
+
+  /** Configured connections (no secrets), each annotated with its password source. */
+  async list(): Promise<ConnectionSummary[]> {
+    const config = loadConfig(this.dataDir)
+    const entries = Object.entries(config.connections).sort(([a], [b]) => a.localeCompare(b))
+    // Each password source may hit the keychain independently — fan out.
+    return Promise.all(
+      entries.map(async ([name, c]) => ({
+        name,
+        baseUrl: c.baseUrl,
+        login: c.login,
+        serverTimezone: c.serverTimezone,
+        passwordSource: await this.store.source(name),
+        loaded: this.cache.has(name),
+      })),
+    )
+  }
+
+  /**
+   * Resolve a ready entry, fetching + building the schema on first access. The
+   * in-flight Promise is cached, so concurrent calls for the same uncached
+   * connection share ONE `$metadata` download instead of racing.
+   */
+  async get(name: string): Promise<PoolEntry> {
+    const cached = this.cache.get(name)
+    if (cached !== undefined) return cached
+
+    const pending = this.build(name)
+    this.cache.set(name, pending)
+    try {
+      return await pending
+    } catch (err) {
+      // Never cache a failed build — let the next call retry.
+      if (this.cache.get(name) === pending) this.cache.delete(name)
+      throw err
+    }
+  }
+
+  private async build(name: string): Promise<PoolEntry> {
+    const config = loadConfig(this.dataDir)
+    const stored = config.connections[name]
+    if (stored === undefined) {
+      throw new InvalidArgumentError(`No connection named "${name}"`, { argument: 'connection' })
+    }
+
+    const secret = await this.store.read(name)
+    if (secret === null) {
+      throw new InvalidArgumentError(
+        `No password for "${name}". Set ${passwordEnvVar(name)} or run: 1c-odata-mcp add ${name}`,
+        { argument: 'connection' },
+      )
+    }
+
+    const connection: Connection = {
+      baseUrl: stored.baseUrl,
+      auth: { username: stored.login, password: secret.password },
+      serverTimezone: stored.serverTimezone,
+      ...(stored.shape !== undefined ? { shape: stored.shape } : {}),
+    }
+    // Validate the loaded connection (incl. IANA timezone) BEFORE the multi-MB
+    // $metadata download, so a bad hand-edited config.json fails instantly with a
+    // clear message instead of after a full fetch. upsertConnection validates on
+    // the add path; a hand-edited / migrated config.json bypasses that, and the
+    // client constructor would otherwise only reject it post-download.
+    validateConnection(connection)
+
+    // Inline fetch→parse→build (rather than metadata's fetchMetadataIndex) so we
+    // keep the intermediate EdmxModel for describe_entity (keys/navigation) —
+    // fetchMetadataIndex discards it, and reusing it would force a second parse.
+    const xml = await fetchMetadataXml({
+      baseUrl: connection.baseUrl,
+      auth: connectionAuth(connection),
+      timeout: this.fetchTimeout,
+    })
+    const edmx = parseEdmx(xml)
+    const index = buildMetadataIndex(edmx, stored.shape !== undefined ? { shape: stored.shape } : {})
+    const client = new ODataV3Client({ ...clientOptionsFromConnection(connection), metadataIndex: index })
+
+    return { name, connection, edmx, index, client }
+  }
+
+  /** Drop a cached entry so the next {@link get} re-downloads `$metadata`. */
+  refresh(name: string): void {
+    this.cache.delete(name)
+  }
+}
