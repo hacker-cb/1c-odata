@@ -283,7 +283,9 @@ export function registerDataTools(server: McpServer, pool: ConnectionPool, limit
         // client-side. `total` is exact below the cap; above it we degrade to a
         // floor with `totalCapped` and a nudge to narrow.
         const cap = limits.maxRegisterRows
-        const fetched = await runRegisterTable(client.register(args.register), args, { top: cap + 1 })
+        const fetched = await runRegisterTable(client.register(args.register), cleanRegisterArgs(args), {
+          top: cap + 1,
+        })
         const totalCapped = fetched.length > cap
         const allRows = totalCapped ? fetched.slice(0, cap) : fetched
         const total = allRows.length
@@ -408,6 +410,37 @@ function recordsWithExtDimensionsArgs(args: RegisterQueryArgs): RecordsWithExtDi
   if (range !== undefined) a.Period = range
   if (args.condition !== undefined) a.Condition = args.condition
   return a
+}
+
+/**
+ * Trim the optional string FI params and drop blank ones, so a whitespace-only
+ * value (e.g. `condition: "   "`) is treated as "not provided" rather than
+ * dispatched as an empty `Condition=` the register would reject. Date params go
+ * through {@link toDate} (which trims + validates) and need no cleaning here.
+ */
+function cleanRegisterArgs(args: RegisterQueryArgs): RegisterQueryArgs {
+  const {
+    condition,
+    dimensions,
+    accountCondition,
+    balancedAccountCondition,
+    extraDimensions,
+    balancedExtraDimensions,
+    ...rest
+  } = args
+  const opt = (key: string, value: string | undefined): Record<string, string> => {
+    const trimmed = value?.trim()
+    return trimmed !== undefined && trimmed !== '' ? { [key]: trimmed } : {}
+  }
+  return {
+    ...rest,
+    ...opt('condition', condition),
+    ...opt('dimensions', dimensions),
+    ...opt('accountCondition', accountCondition),
+    ...opt('balancedAccountCondition', balancedAccountCondition),
+    ...opt('extraDimensions', extraDimensions),
+    ...opt('balancedExtraDimensions', balancedExtraDimensions),
+  }
 }
 
 /** Dispatch a register virtual-table call. Each arg builder is a small pure function. */
