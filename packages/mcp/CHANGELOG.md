@@ -1,5 +1,23 @@
 # @1c-odata/mcp
 
+## 0.4.1
+
+### Patch Changes
+
+- [#39](https://github.com/hacker-cb/1c-odata/pull/39) [`b187b01`](https://github.com/hacker-cb/1c-odata/commit/b187b014074601526a49928c74a3064feede3b12) Thanks [@hacker-cb](https://github.com/hacker-cb)! - fix(release): publish via `pnpm pack` so `workspace:*` deps are rewritten to concrete versions
+
+  The release workflow published with `npm publish`, which does not rewrite the
+  `workspace:` protocol. As a result `@1c-odata/metadata` and `@1c-odata/cli` (and
+  transitively `@1c-odata/mcp`) shipped with `"@1c-odata/client": "workspace:*"` in
+  their published manifests and were uninstallable from npm (`EUNSUPPORTEDPROTOCOL`).
+  The workflow now publishes a `pnpm pack` tarball, which rewrites workspace deps to
+  the released version, so a plain `npm install` / `npx` resolves them. (`@1c-odata/client`
+  is dependency-free and was unaffected; it bumps with the fixed group.)
+
+- Updated dependencies [[`b187b01`](https://github.com/hacker-cb/1c-odata/commit/b187b014074601526a49928c74a3064feede3b12)]:
+  - @1c-odata/client@0.4.1
+  - @1c-odata/metadata@0.4.1
+
 ## 0.4.0
 
 ### Minor Changes
