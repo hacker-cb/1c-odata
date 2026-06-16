@@ -1,5 +1,69 @@
 # @1c-odata/cli
 
+## 0.4.0
+
+### Minor Changes
+
+- [#19](https://github.com/hacker-cb/1c-odata/pull/19) [`968a14e`](https://github.com/hacker-cb/1c-odata/commit/968a14e3c52e70026a1c4eae5336d63c0ca386b3) Thanks [@hacker-cb](https://github.com/hacker-cb)! - Split the runtime connection descriptor from the build-time codegen config.
+
+  The single `defineConfig` / `CliConfig` object mixed three lifecycles in one file the app runtime had to import: the runtime connection (`baseUrl`/`auth`/`serverTimezone`/`shape`), build-only codegen settings (`include`, `fetchTimeout`, `metadataDir`, `generatedDir`), and secrets. They are now cleanly separated:
+
+  - **`@1c-odata/client`** owns the runtime `Connection` — now just `baseUrl`, `auth`, `serverTimezone`, `shape` — plus a new `defineConnection` helper. `CliConfig` and `defineConfig` are **removed** from this package (the zero-dep runtime core no longer carries build-tool concepts).
+  - **`@1c-odata/cli`** owns the build-time codegen config: new `defineCodegenConfig` + `CodegenConfig` / `CodegenTarget` types. A target wraps a `connection` plus codegen options.
+  - The app runtime no longer imports `1c-odata.config.ts` — it builds its `Connection` directly (from env, a database, a vault, …), so build settings and secrets stay out of the runtime graph.
+
+  **Migration — `1c-odata.config.ts`:**
+
+  ```diff
+  -import { defineConfig, parseConnectionUrl } from '@1c-odata/client'
+  +import { parseConnectionUrl } from '@1c-odata/client'
+  +import { defineCodegenConfig } from '@1c-odata/cli'
+
+  -export default defineConfig({
+  -  connections: {
+  -    trade: {
+  -      ...parseConnectionUrl(url),
+  -      serverTimezone: 'Europe/Moscow',
+  -      codegen: { include: ['Catalog_*'] },
+  -    },
+  -  },
+  -})
+  +export default defineCodegenConfig({
+  +  targets: {
+  +    trade: {
+  +      connection: { ...parseConnectionUrl(url), serverTimezone: 'Europe/Moscow' },
+  +      include: ['Catalog_*'],
+  +    },
+  +  },
+  +})
+  ```
+
+  **Migration — runtime** (build the `Connection`, don't import the config file):
+
+  ```diff
+  -import config from '../1c-odata.config.js'
+  -const client = new ODataV3Client(clientOptionsFromConnection(config.connections.trade!))
+  +import { defineConnection, parseConnectionUrl } from '@1c-odata/client'
+  +const conn = defineConnection({ ...parseConnectionUrl(process.env.ONEC_URL!), serverTimezone: 'Europe/Moscow' })
+  +const client = new ODataV3Client(clientOptionsFromConnection(conn))
+  ```
+
+  Other breaking changes:
+
+  - CLI selection flag renamed `--connection` → `--target` (e.g. `1c-odata fetch --target trade`).
+  - `Connection.fetchTimeout` removed — set the `$metadata` download timeout per codegen target (`CodegenTarget.fetchTimeout`), at config level (`CodegenConfig.fetchTimeout`), or per call (`fetchMetadataIndex(conn, { timeout })`).
+  - `Connection.codegen` removed — the `include` whitelist now lives directly on the codegen target.
+
+### Patch Changes
+
+- [#34](https://github.com/hacker-cb/1c-odata/pull/34) [`62213ab`](https://github.com/hacker-cb/1c-odata/commit/62213ab3a360e42343fec7e3a02064d07bf205a7) Thanks [@hacker-cb](https://github.com/hacker-cb)! - `1c-odata generate --include` now narrows the emitted `__metadata.json` to the same dependency closure as the generated `.ts` files. Previously an `include` run emitted narrowed TypeScript but a full-base `__metadata.json`, so the runtime index described entities that had no generated types — diverging from `fetchMetadataIndex(conn, { filter })` and bloating metadata-only builds on large bases. The codegen and live-fetch index now agree for the same filter, restoring the "all schema sources produce identical runtime behavior" invariant. With no `include` the output is byte-identical to before.
+
+- [#21](https://github.com/hacker-cb/1c-odata/pull/21) [`74e71e1`](https://github.com/hacker-cb/1c-odata/commit/74e71e19e47ea42b3f30e76ee4025ffecda29912) Thanks [@hacker-cb](https://github.com/hacker-cb)! - `1c-odata fetch` now downloads each target's `$metadata` concurrently (bounded to 4 in flight) instead of one base at a time. Fetching all targets previously paid the sum of every base's download latency; it now completes in roughly the slowest single base's time. Every target is still attempted when one fails (best-effort rather than stopping at the first error), and the first failure in target order is reported with its typed error identity (`HTTPError` / `PermissionError` / …) preserved.
+
+- Updated dependencies [[`70cef5e`](https://github.com/hacker-cb/1c-odata/commit/70cef5e9066422c15871874b47f79cb06efdc777), [`8a09e92`](https://github.com/hacker-cb/1c-odata/commit/8a09e92b7422e4e855b1b3e9bf726f61bcd53d9b), [`27c207a`](https://github.com/hacker-cb/1c-odata/commit/27c207a770b6969872db5f07b7a334574313a12a), [`4415ac4`](https://github.com/hacker-cb/1c-odata/commit/4415ac4dae057a5c5131aad18ddedc0a7ba738de), [`c48e6dc`](https://github.com/hacker-cb/1c-odata/commit/c48e6dcb661ddbd30a715f9292c36723fa900197), [`f065038`](https://github.com/hacker-cb/1c-odata/commit/f0650388106795f5754d2f77574cfee8d45f50f9), [`968a14e`](https://github.com/hacker-cb/1c-odata/commit/968a14e3c52e70026a1c4eae5336d63c0ca386b3), [`b1507e8`](https://github.com/hacker-cb/1c-odata/commit/b1507e8c98bba793527cfdb8a07059b06628f983)]:
+  - @1c-odata/client@0.4.0
+  - @1c-odata/metadata@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
