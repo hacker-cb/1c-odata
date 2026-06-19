@@ -1,12 +1,32 @@
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { writeFileAtomic } from './atomic-write.js'
 
 /** Where a connection's password was resolved from (or `none`). */
 export type SecretSource = 'env' | 'keychain' | 'file' | 'none'
 
-/** OS-keychain service name; the connection name is the account. */
-const KEYCHAIN_SERVICE = '1c-odata'
+/**
+ * OS-keychain service name, namespaced by the data directory: distinct dirs
+ * (separate projects/agents) never share a secret, while two clients resolving
+ * the SAME dir compute the same service and keep sharing — the same isolation
+ * axis `config.json` / `credentials.json` already have (both live in the dir).
+ * The connection name stays the human-readable account. A pre-namespacing flat
+ * `1c-odata` entry is simply not found; re-add the password or set the env var.
+ */
+const KEYCHAIN_SERVICE_BASE = '1c-odata'
+
+/** Canonical absolute data dir for hashing: collapse `.`/`..`/dup-seps; fold case on win32. */
+function canonicalDataDir(dataDir: string): string {
+  const dir = resolve(dataDir)
+  return process.platform === 'win32' ? dir.toLowerCase() : dir
+}
+
+/** Keychain service for `dataDir`: `1c-odata:<first 16 hex of sha256(canonical dir)>`. */
+export function keychainServiceName(dataDir: string): string {
+  const hash = createHash('sha256').update(canonicalDataDir(dataDir)).digest('hex').slice(0, 16)
+  return `${KEYCHAIN_SERVICE_BASE}:${hash}`
+}
 
 /** Minimal keytar-compatible subset of `@napi-rs/keyring`'s sync `Entry`. */
 interface KeyringEntry {
@@ -75,6 +95,11 @@ export class SecretStore {
     return join(this.dataDir, 'credentials.json')
   }
 
+  /** Keychain entry for `name` under this store's per-data-dir service. */
+  private keychainEntry(mod: KeyringModule, name: string): KeyringEntry {
+    return new mod.Entry(keychainServiceName(this.dataDir), name)
+  }
+
   private async keyringModule(): Promise<KeyringModule | null> {
     if (this.keyring === undefined) {
       try {
@@ -114,7 +139,7 @@ export class SecretStore {
       const mod = await this.keyringModule()
       if (mod !== null) {
         try {
-          new mod.Entry(KEYCHAIN_SERVICE, name).setPassword(password)
+          this.keychainEntry(mod, name).setPassword(password)
           this.fileDelete(name) // drop any stale plaintext copy from a prior fallback
           return { backend: 'keychain' }
         } catch (err) {
@@ -148,7 +173,7 @@ export class SecretStore {
     const mod = await this.keyringModule()
     if (mod === null) return null
     try {
-      const pwd = new mod.Entry(KEYCHAIN_SERVICE, name).getPassword()
+      const pwd = this.keychainEntry(mod, name).getPassword()
       return pwd !== null && pwd !== '' ? pwd : null
     } catch {
       // NoEntry or keychain unreachable — treat as "not found"
@@ -160,7 +185,7 @@ export class SecretStore {
     const mod = await this.keyringModule()
     if (mod === null) return
     try {
-      new mod.Entry(KEYCHAIN_SERVICE, name).deletePassword()
+      this.keychainEntry(mod, name).deletePassword()
     } catch {
       // no entry / keychain unreachable — nothing to delete
     }
