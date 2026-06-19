@@ -13,7 +13,7 @@ const baseUrl = 'http://example.test/odata'
 const auth = BasicAuth({ username: 'u', password: 'p' })
 
 describe('transport write methods', () => {
-  it('transportPost sends POST with JSON body + Content-Type + Content-Length', async () => {
+  it('transportPost sends POST with JSON body + Content-Type; Content-Length is left to the platform', async () => {
     // Box pattern: assignments inside the MSW callback don't widen a
     // closed-over `let` for TS control flow — a property write does.
     const received: { current: { method: string; ct: string | null; cl: string | null; body: string } | null } = {
@@ -35,7 +35,11 @@ describe('transport write methods', () => {
     expect(r.status).toBe(201)
     expect(received.current?.method).toBe('POST')
     expect(received.current?.ct).toBe('application/json')
-    expect(received.current?.cl).toBe(String(Buffer.byteLength(received.current?.body ?? '', 'utf8')))
+    // We no longer set Content-Length by hand — a manual one is the forbidden
+    // fetch header undici rejects (UND_ERR_INVALID_ARG) behind a ProxyAgent.
+    // fetch/undici derives it from the body on the wire, below MSW's fetch-level
+    // interception, so the intercepted Request reports null.
+    expect(received.current?.cl).toBeNull()
     expect(JSON.parse(received.current?.body ?? '')).toEqual({ Code: 'X' })
   })
 
@@ -70,6 +74,50 @@ describe('transport write methods', () => {
     const r = await c.transportDelete(`${baseUrl}/Catalog_X(guid'g')`, {}, 'Catalog_X')
     expect(r.status).toBe(204)
     expect(cl).toBe('0')
+  })
+
+  it('does not hand fetch a manual Content-Length on a body write (undici rejects it)', async () => {
+    // Regression: a manually-set Content-Length is a forbidden fetch header that
+    // undici rejects (UND_ERR_INVALID_ARG) once it conflicts with the one undici
+    // derives from the body — surfacing only on the real dispatch path (e.g. a
+    // ProxyAgent), which MSW interception doesn't exercise. Guard the headers we
+    // actually hand to fetch via the beforeRequest hook.
+    server.use(http.post(`${baseUrl}/Catalog_X`, () => HttpResponse.json({ Ref_Key: 'g' }, { status: 201 })))
+    let outgoing: Record<string, string> | undefined
+    const c = new ODataV3Client({
+      baseUrl,
+      auth,
+      serverTimezone: 'Europe/Moscow',
+      hooks: {
+        beforeRequest: (req) => {
+          outgoing = req.headers
+        },
+      },
+    })
+    await c.transportPost(`${baseUrl}/Catalog_X`, { Code: 'X' }, {}, 'Catalog_X')
+    const keys = Object.keys(outgoing ?? {}).map((k) => k.toLowerCase())
+    expect(keys).not.toContain('content-length')
+    expect(keys).toContain('content-type')
+  })
+
+  it('strips a caller-supplied Content-Length on a body write', async () => {
+    // A user `withHeader('content-length', ...)` must not survive onto a body
+    // write — it is the exact forbidden header undici can reject.
+    server.use(http.patch(/Catalog_X\(guid'g'\)/, () => HttpResponse.json({ Ref_Key: 'g' }, { status: 200 })))
+    let outgoing: Record<string, string> | undefined
+    const c = new ODataV3Client({
+      baseUrl,
+      auth,
+      serverTimezone: 'Europe/Moscow',
+      hooks: {
+        beforeRequest: (req) => {
+          outgoing = req.headers
+        },
+      },
+    })
+    await c.entity('Catalog_X', 'g').withHeader('content-length', '999').patch({ Code: 'Y' })
+    const keys = Object.keys(outgoing ?? {}).map((k) => k.toLowerCase())
+    expect(keys).not.toContain('content-length')
   })
 
   it('withHeader merges case-insensitively (user override wins, no duplicates)', async () => {
