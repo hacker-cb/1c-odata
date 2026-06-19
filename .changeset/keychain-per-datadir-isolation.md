@@ -1,8 +1,11 @@
 ---
-"@1c-odata/mcp": patch
+"@1c-odata/mcp": minor
 ---
 
 fix(mcp): isolate OS-keychain secrets per data directory
+
+This is a behavioral break (stored keychain secrets stop resolving — see below), so
+per the stability policy it ships as a minor bump in v0.x, not a patch.
 
 The keychain entry was keyed by a constant service name (`1c-odata`) plus the bare
 connection name, with no reference to the data directory — so two data dirs
