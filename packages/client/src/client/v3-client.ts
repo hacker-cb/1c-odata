@@ -284,9 +284,10 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
   /**
    * Internal: serialize JSON body and run a write request through retry pipeline.
    *
-   * `extraHeaders` (from `.withHeader(...)`) are merged case-insensitively;
-   * library-managed `Content-Length` / `Content-Type` go LAST in the merge
-   * so they win against any user override attempt.
+   * `extraHeaders` (from `.withHeader(...)`) are merged case-insensitively; the
+   * library-managed `Content-Type` goes LAST in the merge so it wins against any
+   * user override. Content-Length is left to fetch/undici (a manual one is a
+   * forbidden header undici rejects), except an explicit `0` on a body-less write.
    */
   private async transportWrite(
     method: 'POST' | 'PATCH' | 'PUT' | 'DELETE',
@@ -300,14 +301,16 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     // bigint → wire string via replacer (Date can't be fixed here — toJSON
     // runs before the replacer; dates are handled in transformWriteBody).
     const serialized = transformed !== undefined ? JSON.stringify(transformed, bigintToStringReplacer) : ''
-    const contentLength = String(Buffer.byteLength(serialized, 'utf8'))
     // Library-managed headers go LAST so they win the case-insensitive merge,
-    // overriding any user attempt to set Content-Type / Content-Length via
-    // withHeader().
+    // overriding any user attempt to set them via withHeader(). For a body
+    // request we set ONLY Content-Type and let fetch/undici derive Content-Length
+    // from the body: a manually-set Content-Length is a forbidden fetch header
+    // that undici rejects (UND_ERR_INVALID_ARG: "invalid content-length header")
+    // once it conflicts with the one undici computes — e.g. behind a ProxyAgent.
+    // For a body-less write we keep an explicit `Content-Length: 0` (there is no
+    // body for undici to measure), which 1С's IIS host wants to avoid a 411.
     const libraryManaged: Record<string, string> =
-      transformed !== undefined
-        ? { 'Content-Length': contentLength, 'Content-Type': 'application/json' }
-        : { 'Content-Length': contentLength }
+      transformed !== undefined ? { 'Content-Type': 'application/json' } : { 'Content-Length': '0' }
     const headers = mergeHeadersCaseInsensitive(this.baseHeaders(), extraHeaders, libraryManaged)
     return requestWithRetry(
       {
