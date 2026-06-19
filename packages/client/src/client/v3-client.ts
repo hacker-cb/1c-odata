@@ -312,6 +312,14 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     const libraryManaged: Record<string, string> =
       transformed !== undefined ? { 'Content-Type': 'application/json' } : { 'Content-Length': '0' }
     const headers = mergeHeadersCaseInsensitive(this.baseHeaders(), extraHeaders, libraryManaged)
+    if (transformed !== undefined) {
+      // Content-Length is platform-managed on a body write — drop any caller-set
+      // one (from withHeader/extraHeaders) so the forbidden header undici can
+      // reject never reaches fetch. The body-less branch instead pins it to `0`.
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === 'content-length') delete headers[key]
+      }
+    }
     return requestWithRetry(
       {
         method,

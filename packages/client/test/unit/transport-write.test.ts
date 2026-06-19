@@ -100,6 +100,26 @@ describe('transport write methods', () => {
     expect(keys).toContain('content-type')
   })
 
+  it('strips a caller-supplied Content-Length on a body write', async () => {
+    // A user `withHeader('content-length', ...)` must not survive onto a body
+    // write — it is the exact forbidden header undici can reject.
+    server.use(http.patch(/Catalog_X\(guid'g'\)/, () => HttpResponse.json({ Ref_Key: 'g' }, { status: 200 })))
+    let outgoing: Record<string, string> | undefined
+    const c = new ODataV3Client({
+      baseUrl,
+      auth,
+      serverTimezone: 'Europe/Moscow',
+      hooks: {
+        beforeRequest: (req) => {
+          outgoing = req.headers
+        },
+      },
+    })
+    await c.entity('Catalog_X', 'g').withHeader('content-length', '999').patch({ Code: 'Y' })
+    const keys = Object.keys(outgoing ?? {}).map((k) => k.toLowerCase())
+    expect(keys).not.toContain('content-length')
+  })
+
   it('withHeader merges case-insensitively (user override wins, no duplicates)', async () => {
     const received: { current: { allHeaders: Record<string, string> } | null } = { current: null }
     server.use(
