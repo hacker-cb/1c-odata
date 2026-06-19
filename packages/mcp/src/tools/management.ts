@@ -32,7 +32,11 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
       description:
         'Add or update a 1С OData connection. Writes the non-secret descriptor (baseUrl/login/timezone) to config; a supplied password is stored securely and is never returned by any tool. ⚠ Passing `password` here places it in the model context and transcript — prefer the CLI (`1c-odata-mcp add`) or the ONEC_<NAME>_PASSWORD env var; omit it to save only the non-secret config.',
       inputSchema: {
-        connection: z.string().describe('Connection name (ASCII letters, digits, "-", "_")'),
+        connection: z
+          .string()
+          .describe(
+            'Connection name — ASCII, starts with a letter or digit, then letters/digits/"-"/"_" (e.g. "tvip-trade")',
+          ),
         baseUrl: z.string().describe('Service root URL, e.g. http://host/base/odata/standard.odata/'),
         login: z.string().describe('Basic-auth username'),
         serverTimezone: z.string().optional().describe('IANA timezone (default Europe/Moscow)'),

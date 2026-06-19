@@ -4,7 +4,7 @@ What is and isn't covered by semver across the `@1c-odata/*` monorepo.
 
 ## Public API surface
 
-Public surface = every symbol reachable via a package's `package.json#exports` entrypoints (including subpaths like `@1c-odata/client/filter` and `@1c-odata/cli/codegen`), minus symbols tagged `@internal` in JSDoc. This covers all three packages: `@1c-odata/client`, `@1c-odata/metadata`, `@1c-odata/cli`.
+Public surface = every symbol reachable via a package's `package.json#exports` entrypoints (including subpaths like `@1c-odata/client/filter` and `@1c-odata/cli/codegen`), minus symbols tagged `@internal` in JSDoc. This covers the three library packages: `@1c-odata/client`, `@1c-odata/metadata`, `@1c-odata/cli`. The fourth package, `@1c-odata/mcp`, is a CLI + MCP server (an application) whose contract is operational — see [`@1c-odata/mcp` surface](#1c-odatamcp-surface-cli--mcp-server) below.
 
 Semver-applicable:
 
@@ -30,7 +30,7 @@ NOT covered:
 - **v0.x (current)** — API is unstable. Minor versions MAY contain breaking changes. Every break is documented in [GitHub Releases](https://github.com/hacker-cb/1c-odata/releases) with a migration example. Patch versions are NEVER breaking.
 - **v1.0+ (future)** — strict semver.
 
-Workspace deps use `workspace:*`. All three `@1c-odata/*` packages are one changesets `fixed` group, so they always release together at the same version. In v0.x a breaking change therefore ships as a **minor** bump across all three at once (a major bump is reserved for v1.0) — never as a major in 0.x.
+Workspace deps use `workspace:*`. All four `@1c-odata/*` packages are one changesets `fixed` group, so they always release together at the same version. In v0.x a breaking change therefore ships as a **minor** bump across all four at once (a major bump is reserved for v1.0) — never as a major in 0.x.
 
 ## Error contract
 
@@ -80,3 +80,21 @@ Guaranteed:
 - `enums.ts`: one `as const` object + literal-union type alias per `EnumType`. Names and member sets track the EDMX verbatim. Consumers cast property values explicitly because 1С V3 EDMX does not link `Edm.String` fields to their `EnumType`.
 
 Layout / naming changes in `@1c-odata/cli/codegen` are a breaking change, versioned per the [Versioning](#versioning) policy above (a minor bump in v0.x, a major from v1.0). A consumer re-runs `1c-odata generate` and gets a diff in their repo.
+
+## `@1c-odata/mcp` surface (CLI + MCP server)
+
+`@1c-odata/mcp` is an application, not a library — its meaningful contract is operational, versioned under the same [Versioning](#versioning) policy (a break ships as a minor bump in v0.x and is documented in the release).
+
+Semver-applicable:
+
+- The CLI command set and their primary flags: `add`, `list`, `remove`, `test`, `serve`; `--data-dir`, `--insecure-storage`, `--url`, `--login`, `--password-stdin`, `--force`, `--no-verify`.
+- The MCP tool names and their input shapes: `list_connections`, `list_entities`, `describe_entity`, `list_enums`, `query`, `get_entity`, `count`, `register_query`, `refresh_metadata`, `add_connection`, `remove_connection`.
+- The on-disk contract: the `config.json` shape (`{ connections: { <name>: { baseUrl, login, serverTimezone, shape? } } }`), the `credentials.json` (0600) fallback format, the data-dir resolution order (`--data-dir` > `ONEC_MCP_DATA_DIR` > per-OS default), and the `ONEC_<NAME>_PASSWORD` env-var naming.
+
+NOT covered:
+
+- The OS-keychain entry naming (the `service` / `account` strings) is an implementation detail — it MAY change, and a change orphans previously stored keychain secrets (re-add them, or use `ONEC_<NAME>_PASSWORD`).
+- Programmatic exports from `@1c-odata/mcp` (e.g. `SecretStore`, `passwordEnvVar`) — an escape hatch for tests/tooling, on the same footing as `@1c-odata/client/internal`.
+- Tool / CLI output text and error-message wording.
+
+The per-data-dir keychain namespacing is a **behavioral break with no migration**: a secret stored under the previous flat `1c-odata` keychain service is not found after the upgrade — re-add the password (`1c-odata-mcp add <name>`) or set `ONEC_<NAME>_PASSWORD`. `config.json`, the `credentials.json` file backend, and env-var passwords are unaffected.
