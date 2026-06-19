@@ -1,5 +1,60 @@
 # @1c-odata/mcp
 
+## 0.5.0
+
+### Minor Changes
+
+- [#41](https://github.com/hacker-cb/1c-odata/pull/41) [`ea230be`](https://github.com/hacker-cb/1c-odata/commit/ea230be094c9deb3c93a5f7c7d95ba7d773346df) Thanks [@hacker-cb](https://github.com/hacker-cb)! - fix(mcp): isolate OS-keychain secrets per data directory
+
+  This is a behavioral break (stored keychain secrets stop resolving — see below), so
+  per the stability policy it ships as a minor bump in v0.x, not a patch.
+
+  The keychain entry was keyed by a constant service name (`1c-odata`) plus the bare
+  connection name, with no reference to the data directory — so two data dirs
+  (separate projects/agents) that defined a connection with the same name shared one
+  keychain secret: adding in one overwrote the other, removing deleted the other.
+  `config.json` and `credentials.json` were already isolated per data dir; the
+  keychain now matches them.
+
+  The keychain service is now `1c-odata:<data-dir basename>:<first 8 hex of
+sha256(canonical data dir)>` — the basename is a human-readable hint (visible in
+  Keychain Access / Credential Manager) of which data dir a secret belongs to, the
+  hash is the actual per-dir discriminator. The connection name stays the account.
+  Two clients resolving the **same** data dir compute the same service and keep
+  sharing (the agent-independent default-dir model is preserved); two **different**
+  dirs isolate.
+
+  **Behavior change — re-add passwords.** Secrets stored under the previous flat
+  service are no longer found (no automatic migration). Re-add the password
+  (`1c-odata-mcp add <name>`) or supply it via `ONEC_<NAME>_PASSWORD`. The non-secret
+  `config.json`, the `credentials.json` file backend, and env-var passwords are
+  unaffected.
+
+### Patch Changes
+
+- [#48](https://github.com/hacker-cb/1c-odata/pull/48) [`370921e`](https://github.com/hacker-cb/1c-odata/commit/370921ee855e48763c1d7c400827d5831f446cde) Thanks [@hacker-cb](https://github.com/hacker-cb)! - docs(mcp): document config locations, secrets, and custom-agent setup; clarify the add_connection name rule
+
+  Expands the package README and adds an `@1c-odata/mcp` section to STABILITY.md:
+
+  - Per-data-dir OS-keychain isolation and the service-name format
+    (`1c-odata:<basename>:<8 hex of sha256(canonical data dir)>`, account = connection name),
+    plus the no-migration / data-dir-move upgrade caveats.
+  - The `ONEC_<NAME>_PASSWORD` slug rule, the connection-name charset, and the
+    `-`/`_` env-var collision.
+  - That an env-supplied password is verified but not persisted (must stay exported
+    at `serve` time), and the non-TTY `add` behavior.
+  - A `.mcp.json` `env`-block example and the lazy-load model for shipping a
+    predefined connection set to a custom agent.
+  - The 0600 `credentials.json` read refusal and the data-dir resolution order
+    (relative paths throw).
+
+  Also corrects the `add_connection` tool description to state the
+  leading-alphanumeric connection-name rule the code enforces.
+
+- Updated dependencies [[`bc33cc0`](https://github.com/hacker-cb/1c-odata/commit/bc33cc0733238ee241d3106b9854c78bf02fb62b)]:
+  - @1c-odata/client@0.5.0
+  - @1c-odata/metadata@0.5.0
+
 ## 0.4.1
 
 ### Patch Changes
