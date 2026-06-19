@@ -119,11 +119,12 @@ relative `--data-dir` / `ONEC_MCP_DATA_DIR` is a hard error, not a silent fallba
     (leading/trailing `_` stripped): `my-base` → `ONEC_MY_BASE_PASSWORD`, `tvip-trade` →
     `ONEC_TVIP_TRADE_PASSWORD`, `bp.v3` → `ONEC_BP_V3_PASSWORD`.
   - **OS keychain** (`@napi-rs/keyring`, an optional dependency) — the entry is namespaced **per data
-    directory**: service `1c-odata:<data-dir basename>:<first 8 hex of sha256(absolute data dir)>`, with the
-    connection name as the account (e.g. service `1c-odata:1c-odata:7149e725`, account `trade`). The basename
-    and account are human-readable hints in Keychain Access / Credential Manager; the hash isolates dirs. Two
-    clients on the **same** data dir share the secret; a **different** `--data-dir` / `ONEC_MCP_DATA_DIR` is a
-    separate namespace.
+    directory**: service `1c-odata:<data-dir basename>:<first 8 hex of sha256(canonical data dir)>`, with the
+    connection name as the account (e.g. service `1c-odata:1c-odata:7149e725`, account `trade`). *Canonical* =
+    the absolute path resolved (`.`/`..` collapsed), lower-cased on Windows. The basename and account are
+    human-readable hints in Keychain Access / Credential Manager; the hash isolates dirs. Two clients on the
+    **same** data dir share the secret; a **different** `--data-dir` / `ONEC_MCP_DATA_DIR` is a separate
+    namespace.
   - **`credentials.json` (0600)** — the fallback when the keychain is unavailable (headless Linux / CI) or
     `--insecure-storage` is passed; it lives inside the data dir and is loud about the downgrade. On non-Windows
     a credentials file with permissions looser than `0600` is **refused on read** (with a `chmod 600` hint) so

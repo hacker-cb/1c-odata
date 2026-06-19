@@ -7,7 +7,7 @@ docs(mcp): document config locations, secrets, and custom-agent setup; clarify t
 Expands the package README and adds an `@1c-odata/mcp` section to STABILITY.md:
 
 - Per-data-dir OS-keychain isolation and the service-name format
-  (`1c-odata:<basename>:<8 hex of sha256(data dir)>`, account = connection name),
+  (`1c-odata:<basename>:<8 hex of sha256(canonical data dir)>`, account = connection name),
   plus the no-migration / data-dir-move upgrade caveats.
 - The `ONEC_<NAME>_PASSWORD` slug rule, the connection-name charset, and the
   `-`/`_` env-var collision.
