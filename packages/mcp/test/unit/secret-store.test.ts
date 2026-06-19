@@ -141,10 +141,14 @@ describe('SecretStore', () => {
 })
 
 describe('keychainServiceName', () => {
-  it('is "1c-odata:<16 hex>" and stable for the same dir', () => {
+  it('is "1c-odata:<basename>:<8 hex>" and stable for the same dir', () => {
     const service = keychainServiceName('/data/a')
-    expect(service).toMatch(/^1c-odata:[0-9a-f]{16}$/)
+    expect(service).toMatch(/^1c-odata:a:[0-9a-f]{8}$/)
     expect(keychainServiceName('/data/a')).toBe(service)
+  })
+
+  it('embeds the data-dir basename as a human-readable hint', () => {
+    expect(keychainServiceName('/work/projB/.onec')).toMatch(/^1c-odata:\.onec:[0-9a-f]{8}$/)
   })
 
   it('isolates different dirs but canonicalizes trailing slash and "." / ".."', () => {

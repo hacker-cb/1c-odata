@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { writeFileAtomic } from './atomic-write.js'
 
 /** Where a connection's password was resolved from (or `none`). */
@@ -22,10 +22,18 @@ function canonicalDataDir(dataDir: string): string {
   return process.platform === 'win32' ? dir.toLowerCase() : dir
 }
 
-/** Keychain service for `dataDir`: `1c-odata:<first 16 hex of sha256(canonical dir)>`. */
+/**
+ * Keychain service for `dataDir`: `1c-odata:<basename>:<first 8 hex of sha256(canonical dir)>`.
+ * The basename is a human-readable hint — visible in Keychain Access / Credential
+ * Manager — of which data dir a secret belongs to; the hash is the actual per-dir
+ * discriminator (the basename alone is ambiguous: the default dir's basename is
+ * always `1c-odata`). Same dir → same service (sharing preserved); different dirs
+ * → different service (isolation).
+ */
 export function keychainServiceName(dataDir: string): string {
-  const hash = createHash('sha256').update(canonicalDataDir(dataDir)).digest('hex').slice(0, 16)
-  return `${KEYCHAIN_SERVICE_BASE}:${hash}`
+  const dir = canonicalDataDir(dataDir)
+  const hash = createHash('sha256').update(dir).digest('hex').slice(0, 8)
+  return `${KEYCHAIN_SERVICE_BASE}:${basename(dir)}:${hash}`
 }
 
 /** Minimal keytar-compatible subset of `@napi-rs/keyring`'s sync `Entry`. */
