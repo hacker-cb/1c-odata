@@ -48,8 +48,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
       undici:
-        specifier: ^6.25.0
-        version: 6.25.0
+        specifier: ^8.5.0
+        version: 8.5.0
       vite:
         specifier: ^8.0.10
         version: 8.0.10(@types/node@26.0.0)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.21.0)(yaml@2.9.0)
@@ -120,8 +120,8 @@ importers:
         specifier: ^2.14.3
         version: 2.14.3(@types/node@26.0.0)(typescript@6.0.3)
       undici:
-        specifier: ^6.25.0
-        version: 6.25.0
+        specifier: ^8.5.0
+        version: 8.5.0
 
   packages/mcp:
     dependencies:
@@ -158,8 +158,8 @@ importers:
         specifier: ^2.14.3
         version: 2.14.3(@types/node@26.0.0)(typescript@6.0.3)
       undici:
-        specifier: ^6.25.0
-        version: 6.25.0
+        specifier: ^8.5.0
+        version: 8.5.0
 
 packages:
 
@@ -2226,9 +2226,9 @@ packages:
   undici-types@8.3.0:
     resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
 
-  undici@6.25.0:
-    resolution: {integrity: sha512-ZgpWDC5gmNiuY9CnLVXEH8rl50xhRCuLNA97fAUnKi8RRuV4E6KG31pDTsLVUKnohJE0I3XDrTeEydAXRw47xg==}
-    engines: {node: '>=18.17'}
+  undici@8.5.0:
+    resolution: {integrity: sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==}
+    engines: {node: '>=22.19.0'}
 
   unicode-emoji-modifier-base@1.0.0:
     resolution: {integrity: sha512-yLSH4py7oFH3oG/9K+XWrz1pSi3dfUrWEnInbxMfArOfc1+33BlGPQtLsOYwvdMy11AwUBetYuaRxSPqgkq+8g==}
@@ -4395,7 +4395,7 @@ snapshots:
 
   undici-types@8.3.0: {}
 
-  undici@6.25.0: {}
+  undici@8.5.0: {}
 
   unicode-emoji-modifier-base@1.0.0: {}
 
