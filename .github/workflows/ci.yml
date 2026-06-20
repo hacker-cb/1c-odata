@@ -31,29 +31,30 @@ jobs:
   detect-secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    # Owner-only: forks (and any other-owner mirrors) skip this job and every
-    # downstream job that depends on it. Live/write tests run against private
-    # 1С bases — secrets must never be exposed off the canonical repo.
+    # Secret gate: live/write/example tests hit private TEST 1С bases via
+    # HTTP_PROXY, so their secrets must never reach untrusted FORK code. Two-part
+    # gate (the fork check is the real security boundary):
+    #   1. `repository_owner == 'hacker-cb'` — excludes other-owner mirrors.
+    #   2. `head.repo.full_name == github.repository` — the canonical fork check.
+    #      Fork PRs (head is the fork) skip this job and every downstream
+    #      secret-bearing job via their `needs` edges — degraded-but-green, never
+    #      exposing secrets to anonymous contributor code.
     #
-    # Three-part gate:
-    #   1. `repository_owner == 'hacker-cb'` excludes runs in other-owner
-    #      mirrors entirely.
-    #   2. Dependabot-triggered runs receive Dependabot secrets, NOT Actions
-    #      secrets, so the 5-secret check below would fail red on every
-    #      Dependabot PR. Skipping here cascades to the live/write/example
-    #      jobs via their `needs` edges — the same degraded-but-green
-    #      treatment fork PRs get. A human pushing to the bot's branch
-    #      re-enables the full pipeline (the actor becomes the human, and
-    #      Actions secrets are available again).
-    #   3. For `pull_request` events `repository_owner` reflects the BASE
-    #      repo (hacker-cb), not the fork — so part 1 alone would still
-    #      run on fork PRs. Comparing `head.repo.full_name` to
-    #      `github.repository` is the canonical pattern for skipping
-    #      fork PRs while keeping owner-internal PRs covered. This workflow
-    #      only runs on `pull_request`, so the comparison is always defined.
+    # Dependabot PRs ARE trusted and run the FULL suite (they are first-party
+    # `dependabot/*` branches in this repo, so the fork check passes). This is a
+    # deliberate, owner-accepted trade-off: a Dependabot bump's new dependency
+    # code runs with the test-base/proxy creds, so a compromised package version
+    # could read them — acceptable for disposable test bases. Keep the 1С CI user
+    # and the proxy least-privilege and rotatable so a leak is cheap to remediate.
+    #
+    # REQUIRED: GitHub exposes only *Dependabot* secrets (not Actions secrets) to
+    # Dependabot-triggered runs, referenced with the same `secrets.*` syntax. The
+    # five secrets read below MUST therefore also be stored as Dependabot secrets
+    # (Settings → Secrets and variables → Dependabot) — otherwise detect-secrets
+    # fails red on every Dependabot PR. (Set ONEC_TESTS_ALLOW_WRITES there too:
+    # present-but-not-`true` runs live-read only and skips the write job.)
     if: |
       github.repository_owner == 'hacker-cb' &&
-      github.actor != 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
     outputs:
       allow-writes: ${{ steps.check.outputs.allow-writes }}
