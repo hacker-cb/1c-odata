@@ -34,11 +34,11 @@ jobs:
     # Secret gate: live/write/example tests hit private TEST 1С bases via
     # HTTP_PROXY, so their secrets must never reach untrusted FORK code. Two-part
     # gate (the fork check is the real security boundary):
-    #   1. `repository_owner == 'hacker-cb'` — excludes other-owner mirrors.
-    #   2. `head.repo.full_name == github.repository` — the canonical fork check.
-    #      Fork PRs (head is the fork) skip this job and every downstream
-    #      secret-bearing job via their `needs` edges — degraded-but-green, never
-    #      exposing secrets to anonymous contributor code.
+    #   1. `github.repository_owner == 'hacker-cb'` — excludes other-owner mirrors.
+    #   2. `github.event.pull_request.head.repo.full_name == github.repository` —
+    #      the canonical fork check. Fork PRs (head is the fork) skip this job and
+    #      every downstream secret-bearing job via their `needs` edges —
+    #      degraded-but-green, never exposing secrets to anonymous contributor code.
     #
     # Dependabot PRs ARE trusted and run the FULL suite (they are first-party
     # `dependabot/*` branches in this repo, so the fork check passes). This is a
