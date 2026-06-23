@@ -1,5 +1,13 @@
-import { type DataShape, InvalidArgumentError, normalizeBaseUrl, validateConnection } from '@1c-odata/client'
+import {
+  connectionAuth,
+  type DataShape,
+  InvalidArgumentError,
+  normalizeBaseUrl,
+  validateConnection,
+} from '@1c-odata/client'
+import { fetchMetadataXml } from '@1c-odata/metadata'
 import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfig } from './config.js'
+import { DEFAULT_METADATA_TIMEOUT_MS } from './constants.js'
 import { stripUrlUserinfo } from './redact.js'
 import { passwordEnvVar, SecretStore } from './secret-store.js'
 
@@ -59,6 +67,11 @@ export interface UpsertConnectionInput {
   baseUrl: string
   login: string
   serverTimezone: string
+  /**
+   * Optional display label. A non-blank value is stored; blank/omitted keeps any
+   * existing label on overwrite (use {@link setConnectionLabel} to clear one).
+   */
+  label?: string
   shape?: DataShape
   /** Stored via {@link SecretStore} when set; omit to write only the non-secret config. */
   password?: string
@@ -72,6 +85,50 @@ export interface UpsertConnectionResult {
   passwordBackend?: 'keychain' | 'file'
   /** True when a stale secret was dropped because a passwordless overwrite changed the auth target. */
   passwordCleared?: boolean
+}
+
+/**
+ * Apply the secret-store side of an upsert: write the new password, or — on a
+ * passwordless overwrite that changes the auth target (baseUrl/login) — drop the
+ * stale secret so the old credential is never sent to the new endpoint.
+ */
+async function applyUpsertSecret(
+  store: SecretStore,
+  name: string,
+  password: string | undefined,
+  existing: StoredConnection | undefined,
+  next: { baseUrl: string; login: string },
+): Promise<{ passwordBackend?: 'keychain' | 'file'; passwordCleared: boolean }> {
+  if (password !== undefined && password !== '') {
+    return { passwordBackend: (await store.write(name, password)).backend, passwordCleared: false }
+  }
+  if (existing !== undefined && (existing.baseUrl !== next.baseUrl || existing.login !== next.login)) {
+    await store.remove(name)
+    return { passwordCleared: true }
+  }
+  return { passwordCleared: false }
+}
+
+/**
+ * Build the stored descriptor. A non-blank `input.label` sets/replaces the label;
+ * otherwise an existing label is preserved (so an unrelated overwrite — e.g. a
+ * timezone fix — doesn't drop one set via {@link setConnectionLabel}; clearing is
+ * done there).
+ */
+function buildStoredConnection(
+  next: { baseUrl: string; login: string; serverTimezone: string },
+  input: Pick<UpsertConnectionInput, 'label' | 'shape'>,
+  existing: StoredConnection | undefined,
+): StoredConnection {
+  const label = input.label?.trim()
+  const resolvedLabel = label !== undefined && label !== '' ? label : existing?.label
+  return {
+    baseUrl: next.baseUrl,
+    login: next.login,
+    serverTimezone: next.serverTimezone,
+    ...(resolvedLabel !== undefined && resolvedLabel !== '' ? { label: resolvedLabel } : {}),
+    ...(input.shape !== undefined ? { shape: input.shape } : {}),
+  }
 }
 
 /**
@@ -114,29 +171,15 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
     // throws, config.json is left untouched, so it can never end up pointing at a
     // new auth target (baseUrl/login) while a stale password still resolves.
     const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
-    let passwordBackend: 'keychain' | 'file' | undefined
-    let passwordCleared = false
-    if (password !== undefined && password !== '') {
-      passwordBackend = (await store.write(input.name, password)).backend
-    } else if (existing !== undefined && (existing.baseUrl !== baseUrl || existing.login !== login)) {
-      // Passwordless overwrite that changes the auth target (baseUrl/login): drop
-      // the stale secret so the old credential is never sent to the new endpoint.
-      await store.remove(input.name)
-      passwordCleared = true
-    }
+    const secret = await applyUpsertSecret(store, input.name, password, existing, { baseUrl, login })
 
-    config.connections[input.name] = {
-      baseUrl,
-      login,
-      serverTimezone,
-      ...(input.shape !== undefined ? { shape: input.shape } : {}),
-    } satisfies StoredConnection
+    config.connections[input.name] = buildStoredConnection({ baseUrl, login, serverTimezone }, input, existing)
     saveConfig(input.dataDir, config)
 
     return {
       overwritten: existed,
-      ...(passwordBackend !== undefined ? { passwordBackend } : {}),
-      ...(passwordCleared ? { passwordCleared: true } : {}),
+      ...(secret.passwordBackend !== undefined ? { passwordBackend: secret.passwordBackend } : {}),
+      ...(secret.passwordCleared ? { passwordCleared: true } : {}),
     }
   })
 }
@@ -150,5 +193,120 @@ export async function removeConnection(input: { dataDir: string; name: string; i
     saveConfig(input.dataDir, config)
     await new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false }).remove(input.name)
     return true
+  })
+}
+
+/**
+ * Reachability probe: fetch `$metadata` with the given credentials, throwing on
+ * an auth/network failure. Kept out of {@link upsertConnection} /
+ * {@link updateConnectionCredentials} (which stay pure config + secret I/O) so
+ * the add / set-credentials paths can verify a credential pair before — or just
+ * after — persisting it, exactly as they choose.
+ */
+export async function verifyConnectivity(input: {
+  baseUrl: string
+  login: string
+  password: string
+  timeout?: number
+}): Promise<void> {
+  await fetchMetadataXml({
+    baseUrl: stripUrlUserinfo(input.baseUrl.trim()),
+    auth: connectionAuth({ auth: { username: input.login.trim(), password: input.password } }),
+    timeout: input.timeout ?? DEFAULT_METADATA_TIMEOUT_MS,
+  })
+}
+
+export interface SetLabelResult {
+  /** Effective label after the change — the stored label, or the name when cleared. */
+  label: string
+  /** True when the stored label was removed (the connection reverts to the name fallback). */
+  cleared: boolean
+}
+
+/**
+ * Set or clear a connection's display label, leaving every other field
+ * (incl. credentials) untouched. A blank `label` removes the stored label,
+ * reverting to the connection-name fallback. Throws if the connection is absent.
+ */
+export async function setConnectionLabel(input: {
+  dataDir: string
+  name: string
+  label: string
+}): Promise<SetLabelResult> {
+  return withConfigLock(async () => {
+    const config = loadConfig(input.dataDir)
+    const existing = config.connections[input.name]
+    if (existing === undefined) {
+      throw new InvalidArgumentError(`No connection named "${input.name}"`, { argument: 'connection' })
+    }
+    const label = input.label.trim()
+    if (label === '') {
+      delete existing.label
+    } else {
+      existing.label = label
+    }
+    saveConfig(input.dataDir, config)
+    return { label: label === '' ? input.name : label, cleared: label === '' }
+  })
+}
+
+export interface UpdateCredentialsInput {
+  dataDir: string
+  name: string
+  /** New username; omit to keep the current one. Trimmed; must be non-empty when given. */
+  login?: string
+  /** New password; omit to keep the current one. Stored via {@link SecretStore}; never trimmed. */
+  password?: string
+  insecure?: boolean
+}
+
+export interface UpdateCredentialsResult {
+  /** True when the stored login actually changed (a no-op same-login update reports false). */
+  loginUpdated: boolean
+  /** True when a new password was written. */
+  passwordUpdated: boolean
+  /** Backend the new password landed in, when one was written. */
+  passwordBackend?: 'keychain' | 'file'
+}
+
+/**
+ * Change a connection's login and/or password in place, preserving every other
+ * descriptor field (baseUrl, timezone, label, shape). At least one of `login` /
+ * `password` must be given. The password is keyed on the connection NAME, not
+ * the login, so changing the login never orphans it. Pure config + secret I/O —
+ * callers verify connectivity separately (see {@link verifyConnectivity}).
+ */
+export async function updateConnectionCredentials(input: UpdateCredentialsInput): Promise<UpdateCredentialsResult> {
+  const login = input.login?.trim()
+  if (input.login !== undefined && login === '') {
+    throw new InvalidArgumentError('login must not be empty', { argument: 'login' })
+  }
+  if (input.password !== undefined && input.password === '') {
+    throw new InvalidArgumentError('password must not be empty', { argument: 'password' })
+  }
+  if (login === undefined && input.password === undefined) {
+    throw new InvalidArgumentError('Provide a new login, a new password, or both', { argument: 'login' })
+  }
+  return withConfigLock(async () => {
+    const config = loadConfig(input.dataDir)
+    const existing = config.connections[input.name]
+    if (existing === undefined) {
+      throw new InvalidArgumentError(`No connection named "${input.name}"`, { argument: 'connection' })
+    }
+    // Write the secret BEFORE the config so a login change is never persisted
+    // while its matching password write is still pending or has failed.
+    const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
+    let passwordBackend: 'keychain' | 'file' | undefined
+    if (input.password !== undefined) {
+      passwordBackend = (await store.write(input.name, input.password)).backend
+    }
+    const loginUpdated = login !== undefined && login !== existing.login
+    if (loginUpdated) existing.login = login
+    saveConfig(input.dataDir, config)
+    return {
+      loginUpdated,
+      passwordUpdated: input.password !== undefined,
+      ...(passwordBackend !== undefined ? { passwordBackend } : {}),
+    }
   })
 }

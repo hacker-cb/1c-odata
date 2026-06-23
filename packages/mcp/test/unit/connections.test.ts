@@ -1,9 +1,17 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fetchMetadataXml } from '@1c-odata/metadata'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadConfig } from '../../src/config.js'
-import { assertAddable, removeConnection, upsertConnection } from '../../src/connections.js'
+import {
+  assertAddable,
+  removeConnection,
+  setConnectionLabel,
+  updateConnectionCredentials,
+  upsertConnection,
+  verifyConnectivity,
+} from '../../src/connections.js'
 import { SecretStore } from '../../src/secret-store.js'
 
 // Isolate from the real OS keychain (best-effort keychain deletes on write/remove).
@@ -18,6 +26,9 @@ vi.mock('@napi-rs/keyring', () => ({
     }
   },
 }))
+
+// verifyConnectivity is the only path that touches the network — stub the fetch.
+vi.mock('@1c-odata/metadata', () => ({ fetchMetadataXml: vi.fn().mockResolvedValue('<edmx/>') }))
 
 let dir: string
 beforeEach(() => {
@@ -81,6 +92,25 @@ describe('upsertConnection', () => {
     const result = await upsertConnection({ ...base, dataDir: dir, name: 'trade', login: 'new', overwrite: true })
     expect(result.overwritten).toBe(true)
     expect(loadConfig(dir).connections.trade?.login).toBe('new')
+  })
+
+  it('stores a trimmed label, and skips a blank one', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', label: '  Торговля  ' })
+    expect(loadConfig(dir).connections.trade?.label).toBe('Торговля')
+    await upsertConnection({ ...base, dataDir: dir, name: 'blank', label: '   ' })
+    expect(loadConfig(dir).connections.blank?.label).toBeUndefined()
+  })
+
+  it('preserves an existing label on an overwrite that does not supply one', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', label: 'Торговля' })
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', serverTimezone: 'UTC', overwrite: true })
+    expect(loadConfig(dir).connections.trade?.label).toBe('Торговля')
+  })
+
+  it('replaces the label when an overwrite supplies a new one', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', label: 'Старый' })
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', label: 'Новый', overwrite: true })
+    expect(loadConfig(dir).connections.trade?.label).toBe('Новый')
   })
 
   it('rejects an invalid (non-ASCII) connection name', async () => {
@@ -147,6 +177,104 @@ describe('assertAddable', () => {
   it('throws on a password-env-var collision before any verify (preflight)', async () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'tvip-trade', password: 'pw' })
     expect(() => assertAddable(dir, 'tvip_trade', false)).toThrow(/collides/)
+  })
+})
+
+describe('setConnectionLabel', () => {
+  it('sets a label, leaving other fields untouched', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'pw' })
+    const result = await setConnectionLabel({ dataDir: dir, name: 'trade', label: '  Торговля  ' })
+    expect(result).toEqual({ label: 'Торговля', cleared: false })
+    expect(loadConfig(dir).connections.trade?.label).toBe('Торговля')
+    // Credentials and the rest of the descriptor are preserved.
+    expect(loadConfig(dir).connections.trade?.login).toBe('u')
+    expect(await fileStore().read('trade')).toEqual({ password: 'pw', source: 'file' })
+  })
+
+  it('clears the label with a blank value (reverts to the name fallback)', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', label: 'Торговля' })
+    const result = await setConnectionLabel({ dataDir: dir, name: 'trade', label: '   ' })
+    expect(result).toEqual({ label: 'trade', cleared: true })
+    expect(loadConfig(dir).connections.trade?.label).toBeUndefined()
+  })
+
+  it('throws for an unknown connection', async () => {
+    await expect(setConnectionLabel({ dataDir: dir, name: 'nope', label: 'x' })).rejects.toThrow(/No connection named/)
+  })
+})
+
+describe('updateConnectionCredentials', () => {
+  it('updates the login only, keeping the stored password', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'pw' })
+    const result = await updateConnectionCredentials({ dataDir: dir, name: 'trade', login: 'newuser', insecure: true })
+    expect(result).toEqual({ loginUpdated: true, passwordUpdated: false })
+    expect(loadConfig(dir).connections.trade?.login).toBe('newuser')
+    expect(await fileStore().read('trade')).toEqual({ password: 'pw', source: 'file' })
+  })
+
+  it('updates the password only, keeping the login', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'old' })
+    const result = await updateConnectionCredentials({ dataDir: dir, name: 'trade', password: 'new', insecure: true })
+    expect(result).toEqual({ loginUpdated: false, passwordUpdated: true, passwordBackend: 'file' })
+    expect(loadConfig(dir).connections.trade?.login).toBe('u')
+    expect(await fileStore().read('trade')).toEqual({ password: 'new', source: 'file' })
+  })
+
+  it('updates both together and preserves the label', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'old', label: 'Торговля' })
+    const result = await updateConnectionCredentials({
+      dataDir: dir,
+      name: 'trade',
+      login: 'newuser',
+      password: 'new',
+      insecure: true,
+    })
+    expect(result).toEqual({ loginUpdated: true, passwordUpdated: true, passwordBackend: 'file' })
+    const conn = loadConfig(dir).connections.trade
+    expect(conn?.login).toBe('newuser')
+    expect(conn?.label).toBe('Торговля')
+    expect(await fileStore().read('trade')).toEqual({ password: 'new', source: 'file' })
+  })
+
+  it('trims the login and reports loginUpdated false when it matches the current one', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', login: 'u' })
+    const result = await updateConnectionCredentials({ dataDir: dir, name: 'trade', login: '  u  ', insecure: true })
+    expect(result.loginUpdated).toBe(false)
+    expect(loadConfig(dir).connections.trade?.login).toBe('u')
+  })
+
+  it('rejects an empty login / empty password / neither field', async () => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade' })
+    await expect(updateConnectionCredentials({ dataDir: dir, name: 'trade', login: '   ' })).rejects.toThrow(
+      /login must not be empty/,
+    )
+    await expect(updateConnectionCredentials({ dataDir: dir, name: 'trade', password: '' })).rejects.toThrow(
+      /password must not be empty/,
+    )
+    await expect(updateConnectionCredentials({ dataDir: dir, name: 'trade' })).rejects.toThrow(/Provide a new login/)
+  })
+
+  it('throws for an unknown connection', async () => {
+    await expect(updateConnectionCredentials({ dataDir: dir, name: 'nope', password: 'x' })).rejects.toThrow(
+      /No connection named/,
+    )
+  })
+})
+
+describe('verifyConnectivity', () => {
+  it('strips userinfo and trims the login before fetching $metadata', async () => {
+    vi.mocked(fetchMetadataXml).mockClear()
+    await verifyConnectivity({ baseUrl: 'http://user:secret@host/odata', login: '  u  ', password: 'pw' })
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(1)
+    const arg = vi.mocked(fetchMetadataXml).mock.calls[0]?.[0]
+    expect(arg?.baseUrl).toBe('http://host/odata')
+  })
+
+  it('propagates a fetch failure (auth/network error)', async () => {
+    vi.mocked(fetchMetadataXml).mockRejectedValueOnce(new Error('401 Unauthorized'))
+    await expect(verifyConnectivity({ baseUrl: 'http://host/odata', login: 'u', password: 'bad' })).rejects.toThrow(
+      /401/,
+    )
   })
 })
 

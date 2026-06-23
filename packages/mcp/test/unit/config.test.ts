@@ -2,7 +2,14 @@ import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { assertValidConnectionName, configPath, loadConfig, resolveDataDir, saveConfig } from '../../src/config.js'
+import {
+  assertValidConnectionName,
+  configPath,
+  connectionLabel,
+  loadConfig,
+  resolveDataDir,
+  saveConfig,
+} from '../../src/config.js'
 
 let dir: string
 beforeEach(() => {
@@ -147,6 +154,44 @@ describe('loadConfig / saveConfig', () => {
       }),
     )
     expect(Object.keys(loadConfig(dir).connections)).toEqual(['good'])
+  })
+
+  it('round-trips a connection label', () => {
+    const cfg = {
+      connections: {
+        trade: { baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow', label: 'Торговля ТВИП' },
+      },
+    }
+    saveConfig(dir, cfg)
+    expect(loadConfig(dir).connections.trade?.label).toBe('Торговля ТВИП')
+  })
+
+  it('keeps a trimmed label and drops a blank or non-string one on load', () => {
+    writeFileSync(
+      configPath(dir),
+      JSON.stringify({
+        connections: {
+          trimmed: { baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow', label: '  Бухгалтерия  ' },
+          blank: { baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow', label: '   ' },
+          nonString: { baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow', label: 42 },
+        },
+      }),
+    )
+    const conns = loadConfig(dir).connections
+    expect(conns.trimmed?.label).toBe('Бухгалтерия')
+    expect(conns.blank?.label).toBeUndefined()
+    expect(conns.nonString?.label).toBeUndefined()
+  })
+})
+
+describe('connectionLabel', () => {
+  it('returns the stored label when set', () => {
+    expect(connectionLabel('trade', { label: 'Торговля' })).toBe('Торговля')
+  })
+
+  it('falls back to the name when the label is absent or blank', () => {
+    expect(connectionLabel('trade', {})).toBe('trade')
+    expect(connectionLabel('trade', { label: '   ' })).toBe('trade')
   })
 })
 

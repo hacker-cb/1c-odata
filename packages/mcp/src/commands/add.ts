@@ -1,12 +1,10 @@
 import { join } from 'node:path'
-import { connectionAuth, InvalidArgumentError } from '@1c-odata/client'
-import { fetchMetadataXml } from '@1c-odata/metadata'
+import { InvalidArgumentError } from '@1c-odata/client'
 import { assertValidConnectionName, configPath, loadConfig } from '../config.js'
-import { DEFAULT_METADATA_TIMEOUT_MS } from '../connection-pool.js'
-import { assertAddable, upsertConnection } from '../connections.js'
-import { errorText, stripUrlUserinfo } from '../redact.js'
+import { assertAddable, upsertConnection, verifyConnectivity } from '../connections.js'
+import { errorText } from '../redact.js'
 import { passwordEnvVar } from '../secret-store.js'
-import { promptConfirm, promptHidden, promptLine } from './_prompt.js'
+import { promptConfirm, promptHidden, promptLine, readPasswordStdin } from './_prompt.js'
 
 export interface AddOptions {
   dataDir: string
@@ -18,6 +16,7 @@ export interface AddOptions {
   password?: string
   passwordStdin?: boolean
   timezone?: string
+  label?: string
   force?: boolean
   noVerify?: boolean
 }
@@ -31,14 +30,9 @@ interface ResolvedFields {
   /** Whether the password should be persisted (false when it came from the env var). */
   persistPassword: boolean
   serverTimezone: string
+  /** Optional display label (omitted ⇒ falls back to the name). */
+  label?: string
   overwrite: boolean
-}
-
-/** Read all of stdin (for `--password-stdin`). */
-async function readStdin(): Promise<string> {
-  const chunks: Buffer[] = []
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
-  return Buffer.concat(chunks).toString('utf8')
 }
 
 function warnIfUrlHasUserinfo(input: string): void {
@@ -57,14 +51,8 @@ async function resolveNonInteractivePassword(
   opts: AddOptions,
   name: string,
 ): Promise<{ value: string; persist: boolean } | undefined> {
-  // Passwords are opaque — kept verbatim. stdin drops only a single trailing
-  // newline (the line terminator from `echo` / a file), never real whitespace.
   if (opts.passwordStdin === true) {
-    const value = (await readStdin()).replace(/\r?\n$/, '')
-    if (value === '') {
-      throw new InvalidArgumentError('--password-stdin received an empty password', { argument: 'password' })
-    }
-    return { value, persist: true }
+    return { value: await readPasswordStdin(), persist: true }
   }
   if (opts.password !== undefined) {
     if (opts.password === '') throw new InvalidArgumentError('--password must not be empty', { argument: 'password' })
@@ -89,6 +77,7 @@ async function gatherNonInteractive(opts: AddOptions): Promise<ResolvedFields> {
   if (login === '') throw new InvalidArgumentError('--login is required in non-interactive mode', { argument: 'login' })
   warnIfUrlHasUserinfo((opts.url ?? '').trim())
   const resolved = await resolveNonInteractivePassword(opts, name)
+  const label = opts.label?.trim()
   return {
     name,
     baseUrl: (opts.url ?? '').trim(),
@@ -96,6 +85,7 @@ async function gatherNonInteractive(opts: AddOptions): Promise<ResolvedFields> {
     ...(resolved !== undefined ? { password: resolved.value } : {}),
     persistPassword: resolved?.persist ?? false,
     serverTimezone: opts.timezone ?? 'Europe/Moscow',
+    ...(label !== undefined && label !== '' ? { label } : {}),
     overwrite: opts.force === true,
   }
 }
@@ -116,7 +106,17 @@ async function gatherInteractive(opts: AddOptions): Promise<ResolvedFields | nul
   const login = (await promptLine('Login: ')).trim()
   const password = await promptHidden('Password: ')
   const serverTimezone = await promptLine('Server timezone [Europe/Moscow]: ', { default: 'Europe/Moscow' })
-  return { name, baseUrl, login, password, persistPassword: true, serverTimezone, overwrite }
+  const label = (await promptLine('Label (optional, shown in lists): ')).trim()
+  return {
+    name,
+    baseUrl,
+    login,
+    password,
+    persistPassword: true,
+    serverTimezone,
+    ...(label !== '' ? { label } : {}),
+    overwrite,
+  }
 }
 
 /** Verify connectivity when a password is available. Returns false to abort the add. */
@@ -124,11 +124,7 @@ async function verifyOrConfirm(fields: ResolvedFields, opts: AddOptions): Promis
   if (fields.password === undefined || fields.password === '' || opts.noVerify === true) return true
   process.stdout.write('Verifying connection… ')
   try {
-    await fetchMetadataXml({
-      baseUrl: stripUrlUserinfo(fields.baseUrl.trim()),
-      auth: connectionAuth({ auth: { username: fields.login, password: fields.password } }),
-      timeout: DEFAULT_METADATA_TIMEOUT_MS,
-    })
+    await verifyConnectivity({ baseUrl: fields.baseUrl, login: fields.login, password: fields.password })
     process.stdout.write('OK\n')
     return true
   } catch (err) {
@@ -148,6 +144,7 @@ function reportSaved(
 ): void {
   process.stdout.write(`\n✓ Connection "${fields.name}" ${result.overwritten ? 'updated' : 'saved'}.\n`)
   process.stdout.write(`  config:   ${configPath(opts.dataDir)}\n`)
+  if (fields.label !== undefined) process.stdout.write(`  label:    ${fields.label}\n`)
   if (result.passwordBackend !== undefined) {
     const where =
       result.passwordBackend === 'keychain' ? 'OS keychain' : `${join(opts.dataDir, 'credentials.json')} (0600)`
@@ -179,6 +176,7 @@ export async function runAdd(opts: AddOptions): Promise<void> {
     baseUrl: fields.baseUrl,
     login: fields.login,
     serverTimezone: fields.serverTimezone,
+    ...(fields.label !== undefined ? { label: fields.label } : {}),
     ...(fields.persistPassword && fields.password !== undefined && fields.password !== ''
       ? { password: fields.password }
       : {}),

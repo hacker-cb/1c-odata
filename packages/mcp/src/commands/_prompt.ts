@@ -1,5 +1,23 @@
 import { stdin, stdout } from 'node:process'
 import { createInterface } from 'node:readline/promises'
+import { InvalidArgumentError } from '@1c-odata/client'
+
+/**
+ * Read a password from stdin (for `--password-stdin`): drain stdin, drop a single
+ * trailing newline (the line terminator from `echo` / a file — never real
+ * whitespace, since passwords are opaque), and reject an empty result.
+ */
+export async function readPasswordStdin(): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of stdin) chunks.push(chunk as Buffer)
+  const value = Buffer.concat(chunks)
+    .toString('utf8')
+    .replace(/\r?\n$/, '')
+  if (value === '') {
+    throw new InvalidArgumentError('--password-stdin received an empty password', { argument: 'password' })
+  }
+  return value
+}
 
 /** Ask for a line of input. Returns `opts.default` when the user enters nothing. */
 export async function promptLine(label: string, opts: { default?: string } = {}): Promise<string> {

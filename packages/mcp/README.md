@@ -5,7 +5,8 @@ REST/OData V3 bases, built on [`@1c-odata/client`](../client) and [`@1c-odata/me
 
 **Read-only data access.** It exposes schema introspection and data queries — no create / update / delete of
 1С data. Connections can be managed from the CLI (recommended — the password is typed with no echo) or via the
-`add_connection` / `remove_connection` tools. No tool ever returns a stored password.
+`add_connection` / `set_credentials` / `set_label` / `remove_connection` tools. No tool ever returns a stored
+password.
 
 Works against any 1С base at runtime via the live `$metadata` (dynamic mode) — no code generation required.
 
@@ -13,7 +14,7 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 
 | Tool | Purpose |
 |---|---|
-| `list_connections` | Configured connections (name, base URL, login, timezone, password source). No passwords. |
+| `list_connections` | Configured connections (name, label, base URL, login, timezone, password source). No passwords. |
 | `refresh_metadata` | Drop the cached `$metadata` for a connection and re-download it. |
 | `list_entities` | Entity sets, filtered by kind (catalog / document / register / …) and a name substring. Paginated. |
 | `describe_entity` | One entity: properties (type / nullable / maxLength), keys, navigation properties, value storages, kind. |
@@ -22,7 +23,9 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 | `get_entity` | Fetch a single entity by `Ref_Key`. |
 | `count` | Count rows matching an optional `$filter`. |
 | `register_query` | Register virtual tables: balance / turnovers / slices / accounting (read-only analytics). |
-| `add_connection` | Add/update a connection (writes config; optional password stored securely, never returned). |
+| `add_connection` | Add/update a connection (writes config; optional `label` + password; password stored securely, never returned). |
+| `set_credentials` | Change a connection's login and/or password in place (keeps URL/timezone/label; password never returned). |
+| `set_label` | Set or clear a connection's display label (empty clears it → falls back to the name). |
 | `remove_connection` | Remove a connection and delete its stored password. |
 
 ## Quick start
@@ -43,7 +46,9 @@ Verifying connection… OK
 ```
 
 The installed binary is `1c-odata-mcp` (the name the tool prints in its own hints); the `npx @1c-odata/mcp <cmd>`
-form shown here is the no-install equivalent. Other commands: `list` (no passwords), `remove <name>`, `test <name>`.
+form shown here is the no-install equivalent. Other commands: `list` (no passwords), `remove <name>`,
+`test <name>`, `label <name> [label]` (set/clear the display label), and `set-credentials <name>` (rotate the
+login and/or password — e.g. `set-credentials my-base --password-stdin <<<"$NEW"`).
 
 Non-interactive (scripts / CI) — pass `--url` to skip the prompts:
 
@@ -111,8 +116,8 @@ relative `--data-dir` / `ONEC_MCP_DATA_DIR` is a hard error, not a silent fallba
    or `%APPDATA%\1c-odata` on Windows. macOS deliberately uses the XDG `~/.config` path, not
    `~/Library/Application Support`, for cross-platform / container consistency.
 
-- **`config.json`** — connection descriptors *without* passwords (base URL, login, timezone, optional shape).
-  Safe to read / surface to an LLM.
+- **`config.json`** — connection descriptors *without* passwords (base URL, login, timezone, optional display
+  label, optional shape). Safe to read / surface to an LLM.
 - **Passwords** — resolved in priority order **env → OS keychain → `credentials.json` (0600)**:
   - **`ONEC_<NAME>_PASSWORD`** always wins — use it for CI / secret managers / agent configs. The name is the
     connection name upper-cased with every run of non-`[A-Z0-9]` characters collapsed to a single `_`
@@ -168,7 +173,7 @@ references.
 - **No tool ever returns a stored password.** `list_connections` shows only where each password lives.
 - Prefer the CLI for entering a password (no-echo prompt) or the `ONEC_<NAME>_PASSWORD` env var, so the secret
   never reaches the model's context, the transcript, or `ps`.
-- The MCP `add_connection` tool accepts an optional `password`, but passing it there places it in the model
-  context/transcript — omit it (and use the CLI/env) unless you accept that trade-off.
+- The MCP `add_connection` / `set_credentials` tools accept an optional `password`, but passing it there places
+  it in the model context/transcript — omit it (and use the CLI/env) unless you accept that trade-off.
 - All tool output and error text is redacted of URL userinfo; `config.json` carries no secrets; the fallback
   credentials file is `0600` and lives outside the project.
