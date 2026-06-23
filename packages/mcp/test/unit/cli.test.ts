@@ -2,16 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { buildProgram } from '../../src/cli.js'
 
 /** Parse `args` capturing all commander output; exitOverride turns exit into a throw. */
-async function captureParse(args: string[]): Promise<{ out: string; code: string | undefined }> {
+async function captureParse(
+  args: string[],
+): Promise<{ out: string; code: string | undefined; exitCode: number | undefined }> {
   const program = buildProgram()
   program.exitOverride()
   let out = ''
   program.configureOutput({ writeOut: (s) => (out += s), writeErr: (s) => (out += s) })
   try {
     await program.parseAsync(['node', '1c-odata-mcp', ...args])
-    return { out, code: undefined }
+    return { out, code: undefined, exitCode: undefined }
   } catch (err) {
-    return { out, code: (err as { code?: string }).code }
+    return { out, code: (err as { code?: string }).code, exitCode: (err as { exitCode?: number }).exitCode }
   }
 }
 
@@ -29,8 +31,9 @@ describe('buildProgram', () => {
     // import the MCP SDK and block, so reaching it here would hang the test.)
     // The full command list — incl. serve — is shown, and the generated
     // `help [command]` subcommand stays available (no root .action() suppresses it).
-    const { out, code } = await captureParse([])
+    const { out, code, exitCode } = await captureParse([])
     expect(code).toBe('commander.help')
+    expect(exitCode).toBe(1) // conventional "no subcommand specified" status
     expect(out).toContain('Commands:')
     expect(out).toContain('serve')
     expect(out).toContain('set-credentials')
