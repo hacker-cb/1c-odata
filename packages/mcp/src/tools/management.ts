@@ -156,7 +156,7 @@ async function applyCredentialChange(
 ): Promise<ToolResultBody> {
   const change = parseCredentialChange(login, password)
   if (change.login === undefined && change.password === undefined) {
-    throw new InvalidArgumentError('Provide a new login, a new password, or both.', { argument: 'login' })
+    throw new InvalidArgumentError('Provide a new login, a new password, or both', { argument: 'login' })
   }
   const existing = loadConfig(opts.dataDir).connections[connection]
   if (existing === undefined) {
@@ -186,7 +186,7 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
     {
       title: 'Add or update a connection',
       description:
-        'Add or update a 1С OData connection. Writes the non-secret descriptor (baseUrl/login/timezone) to config; a supplied password is stored securely and is never returned by any tool. ⚠ Passing `password` here places it in the model context and transcript — prefer the CLI (`1c-odata-mcp add`) or the ONEC_<NAME>_PASSWORD env var; omit it to save only the non-secret config.',
+        'Add or update a 1С OData connection. Writes the non-secret descriptor (baseUrl/login/timezone/label) to config; a supplied password is stored securely and is never returned by any tool. ⚠ Passing `password` here places it in the model context and transcript — prefer the CLI (`1c-odata-mcp add`) or the ONEC_<NAME>_PASSWORD env var; omit it to save only the non-secret config.',
       inputSchema: {
         connection: z
           .string()

@@ -95,8 +95,9 @@ function reportCredentialChange(opts: SetCredentialsOptions, result: UpdateCrede
 /**
  * Change a stored connection's login and/or password, preserving its base URL,
  * timezone and label. The new credentials are verified against `$metadata`
- * before being persisted (skip with `--no-verify`); the password is stored via
- * {@link SecretStore}, never written to `config.json`.
+ * before being persisted — unless `--no-verify` is passed or no password can be
+ * resolved (a login-only change with no stored/env password). The password is
+ * stored via {@link SecretStore}, never written to `config.json`.
  */
 export async function runSetCredentials(opts: SetCredentialsOptions): Promise<void> {
   const existing = loadConfig(opts.dataDir).connections[opts.name]

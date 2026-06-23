@@ -11,5 +11,6 @@ mcp: per-connection labels and credential-rotation tools
   label (empty value reverts to the name). `add_connection` / `add --label` accept a label on creation.
 - New `set_credentials` MCP tool and `1c-odata-mcp set-credentials <name>` CLI command change a connection's
   login and/or password in place (together or separately), preserving its base URL, timezone and label. The
-  change is verified against `$metadata` before being persisted, the password is keyed on the connection name
-  (so a login change never orphans it), and no tool ever returns it.
+  change is verified against `$metadata` before being persisted when a password is available (the CLI also
+  offers `--no-verify`), the password is keyed on the connection name (so a login change never orphans it),
+  and no tool ever returns it.
