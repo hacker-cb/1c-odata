@@ -14,6 +14,7 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 
 | Tool | Purpose |
 |---|---|
+| `server_info` | This server's version, data directory, and connection count. No passwords. |
 | `list_connections` | Configured connections (name, label, base URL, login, timezone, password source). No passwords. |
 | `refresh_metadata` | Drop the cached `$metadata` for a connection and re-download it. |
 | `list_entities` | Entity sets, filtered by kind (catalog / document / register / …) and a name substring. Paginated. |
