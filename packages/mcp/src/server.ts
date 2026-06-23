@@ -5,6 +5,7 @@ import { type Limits, resolveLimits } from './limits.js'
 import { registerDataTools } from './tools/data.js'
 import { registerManagementTools } from './tools/management.js'
 import { registerSchemaTools } from './tools/schema.js'
+import { registerServerInfoTool } from './tools/server-info.js'
 
 export interface CreateServerOptions {
   dataDir: string
@@ -24,11 +25,13 @@ export interface CreateServerOptions {
 export function createMcpServer(opts: CreateServerOptions): McpServer {
   const insecure = opts.insecure ?? false
   const limits = opts.limits ?? resolveLimits()
+  const version = opts.version ?? '0.0.0'
   const pool = new ConnectionPool({ dataDir: opts.dataDir, insecure })
-  const server = new McpServer({ name: '1c-odata', version: opts.version ?? '0.0.0' })
+  const server = new McpServer({ name: '1c-odata', version })
   registerSchemaTools(server, pool, limits)
   registerDataTools(server, pool, limits)
   registerManagementTools(server, pool, { dataDir: opts.dataDir, insecure })
+  registerServerInfoTool(server, { version, dataDir: opts.dataDir })
   return server
 }
 
