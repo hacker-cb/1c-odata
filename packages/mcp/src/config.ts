@@ -17,6 +17,13 @@ export interface StoredConnection {
   login: string
   /** IANA timezone of the 1С server (e.g. 'Europe/Moscow'). */
   serverTimezone: string
+  /**
+   * Optional human-readable display label — free-form, may be non-ASCII (e.g.
+   * "Торговля ТВИП"). Purely cosmetic: surfaced by `list_connections` / the CLI
+   * `list`, never used to resolve anything. Absent ⇒ the connection `name` is
+   * shown instead (the migration-safe default — see {@link connectionLabel}).
+   */
+  label?: string
   /** Optional data-shape overrides forwarded to the client. */
   shape?: DataShape
 }
@@ -125,10 +132,14 @@ function normalizeConfig(data: unknown): McpConfig {
     if (conn === null || typeof conn !== 'object') continue
     const c = conn as Partial<StoredConnection>
     if (typeof c.baseUrl !== 'string' || typeof c.login !== 'string' || typeof c.serverTimezone !== 'string') continue
+    // Keep `label` only when it is a non-blank string (a hand-edited config may
+    // carry a blank or non-string label); blank ⇒ name fallback at display time.
+    const label = typeof c.label === 'string' ? c.label.trim() : ''
     sanitized[name] = {
       baseUrl: stripUrlUserinfo(c.baseUrl),
       login: c.login,
       serverTimezone: c.serverTimezone,
+      ...(label !== '' ? { label } : {}),
       ...(c.shape !== undefined ? { shape: c.shape } : {}),
     }
   }
@@ -157,6 +168,17 @@ export function assertValidConnectionName(name: string): void {
       { argument: 'name' },
     )
   }
+}
+
+/**
+ * Effective display label for a connection: its stored {@link StoredConnection.label}
+ * when set, else the connection `name`. The name is the migration-safe default —
+ * a connection added before labels existed (or with no label) simply shows its
+ * name, so no config rewrite is needed to backfill one.
+ */
+export function connectionLabel(name: string, conn: Pick<StoredConnection, 'label'>): string {
+  const label = conn.label?.trim()
+  return label !== undefined && label !== '' ? label : name
 }
 
 /** Persist `config.json` atomically (tmp + rename), creating `dataDir` if needed. */

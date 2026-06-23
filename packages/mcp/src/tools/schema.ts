@@ -14,7 +14,7 @@ export function registerSchemaTools(server: McpServer, pool: ConnectionPool, lim
     {
       title: 'List connections',
       description:
-        'List configured 1С OData connections (name, base URL, login, timezone, where the password is stored). Never returns passwords.',
+        'List configured 1С OData connections (name, label, base URL, login, timezone, where the password is stored). Never returns passwords.',
       inputSchema: {},
     },
     async () =>
@@ -23,7 +23,9 @@ export function registerSchemaTools(server: McpServer, pool: ConnectionPool, lim
         const summary =
           connections.length === 0
             ? 'No connections configured. Add one in a terminal: 1c-odata-mcp add'
-            : `${connections.length} connection(s): ${connections.map((c) => c.name).join(', ')}`
+            : `${connections.length} connection(s): ${connections
+                .map((c) => (c.label !== c.name ? `${c.name} (${c.label})` : c.name))
+                .join(', ')}`
         return { summary, data: { connections } }
       }),
   )

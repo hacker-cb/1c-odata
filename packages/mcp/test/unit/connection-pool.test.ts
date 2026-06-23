@@ -106,4 +106,16 @@ describe('ConnectionPool.list', () => {
     expect(trade).toMatchObject({ baseUrl: 'http://h/odata/standard.odata', passwordSource: 'file', loaded: true })
     expect(list.find((c) => c.name === 'nopw')).toMatchObject({ passwordSource: 'none', loaded: false })
   })
+
+  it('reports the stored label, falling back to the name when none is set', async () => {
+    write('config.json', {
+      connections: {
+        labelled: { baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow', label: 'Торговля' },
+        plain: { baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow' },
+      },
+    })
+    const list = await pool().list()
+    expect(list.find((c) => c.name === 'labelled')?.label).toBe('Торговля')
+    expect(list.find((c) => c.name === 'plain')?.label).toBe('plain')
+  })
 })

@@ -4,8 +4,10 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Command } from 'commander'
 import { runAdd } from './commands/add.js'
+import { runLabel } from './commands/label.js'
 import { runList } from './commands/list.js'
 import { runRemove } from './commands/remove.js'
+import { runSetCredentials } from './commands/set-credentials.js'
 import { runTest } from './commands/test.js'
 import { resolveDataDir } from './config.js'
 import { errorText } from './redact.js'
@@ -21,7 +23,16 @@ interface AddCommandOptions {
   password?: string
   passwordStdin?: boolean
   timezone?: string
+  label?: string
   force?: boolean
+  /** commander sets this to `false` when --no-verify is passed. */
+  verify?: boolean
+}
+
+interface SetCredentialsCommandOptions {
+  login?: string
+  password?: string
+  passwordStdin?: boolean
   /** commander sets this to `false` when --no-verify is passed. */
   verify?: boolean
 }
@@ -80,6 +91,7 @@ export function buildProgram(): Command {
     .option('--password <password>', 'password (non-interactive; visible in `ps` — prefer --password-stdin or env)')
     .option('--password-stdin', 'read the password from stdin (non-interactive)')
     .option('--timezone <tz>', 'IANA server timezone (default Europe/Moscow)')
+    .option('--label <label>', 'display label shown in lists (defaults to the name)')
     .option('-f, --force', 'overwrite an existing connection without prompting', false)
     .option('--no-verify', 'skip the connectivity check')
     .action(async (name: string | undefined, cmdOpts: AddCommandOptions) => {
@@ -92,6 +104,7 @@ export function buildProgram(): Command {
         ...(cmdOpts.password !== undefined ? { password: cmdOpts.password } : {}),
         ...(cmdOpts.passwordStdin === true ? { passwordStdin: true } : {}),
         ...(cmdOpts.timezone !== undefined ? { timezone: cmdOpts.timezone } : {}),
+        ...(cmdOpts.label !== undefined ? { label: cmdOpts.label } : {}),
         ...(cmdOpts.force === true ? { force: true } : {}),
         ...(cmdOpts.verify === false ? { noVerify: true } : {}),
       })
@@ -121,6 +134,36 @@ export function buildProgram(): Command {
     .argument('<name>', 'connection name')
     .action(async (name: string) => {
       await runTest({ dataDir: dataDir(), insecure: insecure(), name })
+    })
+
+  program
+    .command('label')
+    .description("Set or clear a connection's display label")
+    .argument('<name>', 'connection name')
+    .argument('[label]', 'new label (omit or pass an empty string to clear it)')
+    .action(async (name: string, label: string | undefined) => {
+      await runLabel({ dataDir: dataDir(), name, label: label ?? '' })
+    })
+
+  program
+    .command('set-credentials')
+    .aliases(['set-creds', 'creds'])
+    .description("Change a connection's login and/or password (keeps URL, timezone, label)")
+    .argument('<name>', 'connection name')
+    .option('--login <login>', 'new username (keeps the current one when omitted)')
+    .option('--password <password>', 'new password (visible in `ps` — prefer --password-stdin)')
+    .option('--password-stdin', 'read the new password from stdin')
+    .option('--no-verify', 'skip the connectivity check')
+    .action(async (name: string, cmdOpts: SetCredentialsCommandOptions) => {
+      await runSetCredentials({
+        dataDir: dataDir(),
+        insecure: insecure(),
+        name,
+        ...(cmdOpts.login !== undefined ? { login: cmdOpts.login } : {}),
+        ...(cmdOpts.password !== undefined ? { password: cmdOpts.password } : {}),
+        ...(cmdOpts.passwordStdin === true ? { passwordStdin: true } : {}),
+        ...(cmdOpts.verify === false ? { noVerify: true } : {}),
+      })
     })
 
   return program

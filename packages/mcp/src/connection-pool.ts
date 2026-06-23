@@ -8,7 +8,8 @@ import {
   validateConnection,
 } from '@1c-odata/client'
 import { buildMetadataIndex, type EdmxModel, fetchMetadataXml, parseEdmx } from '@1c-odata/metadata'
-import { loadConfig } from './config.js'
+import { connectionLabel, loadConfig } from './config.js'
+import { DEFAULT_METADATA_TIMEOUT_MS } from './constants.js'
 import { passwordEnvVar, type SecretSource, SecretStore } from './secret-store.js'
 
 /** A fully-resolved connection: schema artifacts + a ready client, cached together. */
@@ -25,6 +26,8 @@ export interface PoolEntry {
 
 export interface ConnectionSummary {
   name: string
+  /** Human-readable display label; the connection `name` when none was set. */
+  label: string
   baseUrl: string
   login: string
   serverTimezone: string
@@ -33,9 +36,6 @@ export interface ConnectionSummary {
   /** Whether the schema has already been fetched into the in-memory cache. */
   loaded: boolean
 }
-
-/** Default `$metadata` download timeout (ms). 1С EDMX is 10+ MB on real bases. */
-export const DEFAULT_METADATA_TIMEOUT_MS = 120_000
 
 export interface ConnectionPoolOptions {
   dataDir: string
@@ -71,6 +71,7 @@ export class ConnectionPool {
     return Promise.all(
       entries.map(async ([name, c]) => ({
         name,
+        label: connectionLabel(name, c),
         baseUrl: c.baseUrl,
         login: c.login,
         serverTimezone: c.serverTimezone,

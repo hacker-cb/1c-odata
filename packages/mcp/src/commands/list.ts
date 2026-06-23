@@ -1,4 +1,4 @@
-import { loadConfig } from '../config.js'
+import { connectionLabel, loadConfig } from '../config.js'
 import { SecretStore } from '../secret-store.js'
 
 export interface ListOptions {
@@ -21,7 +21,9 @@ export async function runList(opts: ListOptions): Promise<void> {
     const c = config.connections[name]
     if (c === undefined) continue
     const source = await store.source(name)
+    const label = connectionLabel(name, c)
     process.stdout.write(`  ${name}\n`)
+    if (label !== name) process.stdout.write(`    label:    ${label}\n`)
     process.stdout.write(`    url:      ${c.baseUrl}\n`)
     process.stdout.write(`    login:    ${c.login}\n`)
     process.stdout.write(`    timezone: ${c.serverTimezone}\n`)
