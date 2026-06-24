@@ -74,8 +74,8 @@ export function buildProgram(): Command {
   const insecure = (): boolean => program.opts<GlobalOptions>().insecureStorage === true
 
   program
-    .command('serve', { isDefault: true })
-    .description('Run the read-only MCP server over stdio (default command)')
+    .command('serve')
+    .description('Run the read-only MCP server over stdio (how MCP clients launch it)')
     .action(async () => {
       // Lazy import so the management commands don't pay the MCP SDK load cost.
       const { runServe } = await import('./server.js')
@@ -166,6 +166,12 @@ export function buildProgram(): Command {
       })
     })
 
+  // Note: serve is intentionally NOT the default command. With no subcommand,
+  // commander prints help — so a bare `1c-odata-mcp` in a terminal shows the
+  // command list instead of silently starting the stdio server and hanging on
+  // JSON-RPC. MCP clients launch it with an explicit `serve` (see README). A root
+  // .action() is deliberately avoided here: it would suppress commander's
+  // generated `help [command]` subcommand.
   return program
 }
 
