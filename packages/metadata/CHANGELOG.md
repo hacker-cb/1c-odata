@@ -1,5 +1,12 @@
 # @1c-odata/metadata
 
+## 0.6.0
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @1c-odata/client@0.6.0
+
 ## 0.5.0
 
 ### Patch Changes
