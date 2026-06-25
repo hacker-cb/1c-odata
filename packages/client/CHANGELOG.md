@@ -1,5 +1,7 @@
 # @1c-odata/client
 
+## 0.6.0
+
 ## 0.5.0
 
 ### Patch Changes

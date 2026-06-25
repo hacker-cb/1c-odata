@@ -1,5 +1,47 @@
 # @1c-odata/mcp
 
+## 0.6.0
+
+### Minor Changes
+
+- [#52](https://github.com/hacker-cb/1c-odata/pull/52) [`fe30fdc`](https://github.com/hacker-cb/1c-odata/commit/fe30fdc3890b7ab99458567fb15eabbb64e23a6d) Thanks [@hacker-cb](https://github.com/hacker-cb)! - mcp: per-connection labels and credential-rotation tools
+
+  - Connections now carry an optional human-readable `label` (free-form, may be Cyrillic). It is surfaced by
+    `list_connections` and the CLI `list`, and falls back to the connection name when unset — so existing
+    configs need no migration.
+  - New `set_label` MCP tool and `1c-odata-mcp label <name> [label]` CLI command set or clear a connection's
+    label (empty value reverts to the name). `add_connection` / `add --label` accept a label on creation.
+  - New `set_credentials` MCP tool and `1c-odata-mcp set-credentials <name>` CLI command change a connection's
+    login and/or password in place (together or separately), preserving its base URL, timezone and label. The
+    change is verified against `$metadata` before being persisted when a password is available (the CLI also
+    offers `--no-verify`), the password is keyed on the connection name (so a login change never orphans it),
+    and no tool ever returns it.
+
+- [#54](https://github.com/hacker-cb/1c-odata/pull/54) [`5b4df45`](https://github.com/hacker-cb/1c-odata/commit/5b4df45ec54f057514b8fc0ade82c9be1282d400) Thanks [@hacker-cb](https://github.com/hacker-cb)! - mcp: add a `server_info` tool
+
+  New read-only `server_info` MCP tool reports the running server's version (the
+  same value carried in the MCP `initialize` handshake, resolved from the
+  package), the data directory holding config + credentials, and how many
+  connections are configured. This makes the version answerable from within a
+  conversation, not just from the host-level handshake / CLI `--version`. Never
+  returns secrets.
+
+### Patch Changes
+
+- [#55](https://github.com/hacker-cb/1c-odata/pull/55) [`d90af38`](https://github.com/hacker-cb/1c-odata/commit/d90af38bfbccc6837fcd57c1d17940948094f259) Thanks [@hacker-cb](https://github.com/hacker-cb)! - mcp: print help on a bare CLI invocation instead of silently starting the server
+
+  `1c-odata-mcp` with no subcommand now prints its help (the command list) instead
+  of starting the stdio MCP server, which — when run by a human in a terminal —
+  just hung waiting for JSON-RPC on stdin with no indication of what it was doing.
+  The server is now reached only via the explicit `serve` subcommand, which is how
+  MCP clients already launch it (`args: ["-y", "@1c-odata/mcp", "serve"]` — see the
+  README). Standard client configs are unaffected; only a bare `1c-odata-mcp` used
+  as a server entrypoint needs `serve` appended.
+
+- Updated dependencies []:
+  - @1c-odata/client@0.6.0
+  - @1c-odata/metadata@0.6.0
+
 ## 0.5.0
 
 ### Minor Changes
