@@ -90,4 +90,44 @@ describe('e2e: /mcp requires a valid Bearer JWT', () => {
     })
     expect(res.status).toBe(401)
   })
+
+  it('403 when a DIFFERENT valid principal replays an existing session id (hijack)', async () => {
+    // Real-JWT coverage of the session↔sub binding: two distinct users each mint
+    // their own valid token; A opens a session, then B replays A's session id with
+    // B's own valid token. The route pins the session to A's sub, so B gets 403 —
+    // a different valid principal cannot drive A's McpServer/ScopedPool.
+    const tokenA = await as.mintToken({ resource: mcpUrl, scope: 'mcp:read' })
+    const tokenB = await as.mintToken({ resource: mcpUrl, scope: 'mcp:read' })
+
+    const initA = await fetch(`${appBase}/mcp`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${tokenA}`,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'A', version: '0' } },
+      }),
+    })
+    expect(initA.status).toBe(200)
+    const sid = initA.headers.get('mcp-session-id')
+    expect(sid).toBeTruthy()
+    await initA.text() // drain the SSE body so the socket can close
+
+    const hijack = await fetch(`${appBase}/mcp`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${tokenB}`,
+        'mcp-session-id': sid ?? '',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+    })
+    expect(hijack.status).toBe(403)
+  })
 })

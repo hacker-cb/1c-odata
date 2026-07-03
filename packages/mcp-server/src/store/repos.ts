@@ -1,0 +1,147 @@
+// src/store/repos.ts
+/**
+ * Thin typed repos over drizzle core queries — one per tenancy table. They hide
+ * column↔struct mapping (Buffers ↔ SealedSecret, JSON ↔ DataShape) so
+ * DbConnectionSource, ScopedPool, and the admin/health code stay declarative.
+ * drizzle's fluent API is parameterized (no SQL-injection surface).
+ */
+import type { ListedConnection, StoredConnection } from '@1c-odata/mcp/internal'
+import { and, eq } from 'drizzle-orm'
+import type { SealedSecret } from './crypto.js'
+import type { AuthDb } from './db.js'
+import { baseSecrets, bases, type DataShapeJson, grants, health } from './tenancy-schema.js'
+
+// The client's `DataShape`, derived from StoredConnection.shape rather than
+// imported from `@1c-odata/client` — mcp-server does not depend on client directly
+// (all cross-package types flow through @1c-odata/mcp/internal).
+type DataShape = NonNullable<StoredConnection['shape']>
+
+/** Grant scope. Slice 3 stores + returns but never inspects the value. */
+export type GrantScope = 'read' | 'write'
+
+/** Read/write non-secret base descriptors. */
+export class BaseRepo {
+  constructor(private readonly db: AuthDb) {}
+
+  async get(name: string): Promise<StoredConnection | undefined> {
+    const [row] = await this.db.select().from(bases).where(eq(bases.name, name)).limit(1)
+    return row ? toStored(row) : undefined
+  }
+
+  async list(): Promise<ListedConnection[]> {
+    const rows = await this.db.select().from(bases)
+    return rows.map((r) => ({ name: r.name, ...toStored(r) }))
+  }
+
+  async upsert(name: string, conn: StoredConnection): Promise<void> {
+    const values = {
+      name,
+      baseUrl: conn.baseUrl,
+      login: conn.login,
+      serverTimezone: conn.serverTimezone,
+      label: conn.label ?? null,
+      shape: (conn.shape ?? null) as DataShapeJson | null,
+    }
+    await this.db.insert(bases).values(values).onConflictDoUpdate({ target: bases.name, set: values })
+  }
+
+  async delete(name: string): Promise<void> {
+    await this.db.delete(bases).where(eq(bases.name, name)) // cascades to secret/grants/health
+  }
+}
+
+function toStored(r: typeof bases.$inferSelect): StoredConnection {
+  const shape = normalizeShape(r.shape)
+  const label = r.label?.trim()
+  return {
+    baseUrl: r.baseUrl,
+    login: r.login,
+    serverTimezone: r.serverTimezone,
+    ...(label ? { label } : {}),
+    ...(shape ? { shape } : {}),
+  }
+}
+
+function normalizeShape(raw: DataShapeJson | null): DataShape | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: DataShape = {}
+  if (raw.int64Mode === 'number' || raw.int64Mode === 'bigint' || raw.int64Mode === 'string') {
+    out.int64Mode = raw.int64Mode
+  }
+  if (raw.dateMode === 'date' || raw.dateMode === 'string') out.dateMode = raw.dateMode
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** Read/write the sealed-secret envelope. Pure storage — crypto lives in DbConnectionSource. */
+export class SecretRepo {
+  constructor(private readonly db: AuthDb) {}
+
+  async get(baseName: string): Promise<SealedSecret | null> {
+    const [row] = await this.db.select().from(baseSecrets).where(eq(baseSecrets.baseName, baseName)).limit(1)
+    if (!row) return null
+    return { keyId: row.keyId, nonce: row.nonce, ciphertext: row.ciphertext, tag: row.tag }
+  }
+
+  async has(baseName: string): Promise<boolean> {
+    const [row] = await this.db
+      .select({ baseName: baseSecrets.baseName })
+      .from(baseSecrets)
+      .where(eq(baseSecrets.baseName, baseName))
+      .limit(1)
+    return row !== undefined
+  }
+
+  async put(baseName: string, sealed: SealedSecret): Promise<void> {
+    const values = {
+      baseName,
+      keyId: sealed.keyId,
+      nonce: sealed.nonce,
+      ciphertext: sealed.ciphertext,
+      tag: sealed.tag,
+    }
+    await this.db.insert(baseSecrets).values(values).onConflictDoUpdate({ target: baseSecrets.baseName, set: values })
+  }
+
+  async delete(baseName: string): Promise<void> {
+    await this.db.delete(baseSecrets).where(eq(baseSecrets.baseName, baseName))
+  }
+}
+
+/** Grant CRUD + the ScopedPool's per-call resolver. */
+export class GrantRepo {
+  constructor(private readonly db: AuthDb) {}
+
+  /** `sub` → Map<baseName, scope>. FRESH each call so revocation is immediate. */
+  async resolve(sub: string): Promise<Map<string, GrantScope>> {
+    const rows = await this.db
+      .select({ baseName: grants.baseName, scope: grants.scope })
+      .from(grants)
+      .where(eq(grants.sub, sub))
+    return new Map(rows.map((r) => [r.baseName, r.scope]))
+  }
+
+  async grant(sub: string, baseName: string, scope: GrantScope): Promise<void> {
+    await this.db
+      .insert(grants)
+      .values({ sub, baseName, scope })
+      .onConflictDoUpdate({ target: [grants.sub, grants.baseName], set: { scope } })
+  }
+
+  async revoke(sub: string, baseName: string): Promise<void> {
+    await this.db.delete(grants).where(and(eq(grants.sub, sub), eq(grants.baseName, baseName)))
+  }
+}
+
+/** Health-probe results (health job writes, dashboard/tool reads). */
+export class HealthRepo {
+  constructor(private readonly db: AuthDb) {}
+
+  async upsert(baseName: string, status: 'ok' | 'auth_failed' | 'unreachable', error?: string): Promise<void> {
+    const values = { baseName, status, lastCheck: new Date(), error: error ?? null }
+    await this.db.insert(health).values(values).onConflictDoUpdate({ target: health.baseName, set: values })
+  }
+
+  async list(): Promise<(typeof health.$inferSelect)[]> {
+    return this.db.select().from(health)
+  }
+}
