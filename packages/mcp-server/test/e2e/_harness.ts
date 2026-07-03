@@ -3,10 +3,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { ConnectionPool, type ConnectionSource } from '@1c-odata/mcp/internal'
-import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { PGlite } from '@electric-sql/pglite'
-import { betterAuth } from 'better-auth'
-import { jwt } from 'better-auth/plugins'
 import { pushSchema } from 'drizzle-kit/api'
 import { drizzle } from 'drizzle-orm/pglite'
 import { buildAuth } from '../../src/auth/better-auth.js'
@@ -150,12 +147,30 @@ export async function runFlow(
   return accessToken
 }
 
-/** Serve a better-auth handler over a real loopback socket, optionally on a fixed port. */
-function serveAuth(
-  handler: (request: Request) => Promise<Response>,
-  port = 0,
-): Promise<{ server: Server; port: number; publicUrl: string }> {
+/**
+ * Serve a MUTABLE better-auth handler over a real loopback socket. Binds ONCE on
+ * an ephemeral port and returns immediately (handler starts as a 503 stub, set
+ * later via `setHandler`).
+ *
+ * This is what avoids the probe→close→rebind race: the AS's `iss`/`aud` default
+ * to its `baseURL`, which must equal the listening origin — but instead of
+ * grabbing a port from a throwaway socket, closing it, and racing to rebind the
+ * real AS on that same port (a window another parallel worker can steal, →
+ * EADDRINUSE flake), we bind once, learn the port, build the AS for that port,
+ * then install its handler. No window exists.
+ */
+function serveSwappable(): Promise<{
+  server: Server
+  publicUrl: string
+  setHandler(h: (request: Request) => Promise<Response>): void
+}> {
+  let active: ((request: Request) => Promise<Response>) | undefined
   const server = createServer(async (req, res) => {
+    if (active === undefined) {
+      res.writeHead(503)
+      res.end()
+      return
+    }
     const url = `http://${req.headers.host}${req.url}`
     const method = req.method ?? 'GET'
     const chunks: Buffer[] = []
@@ -166,42 +181,33 @@ function serveAuth(
       headers: req.headers as Record<string, string>,
       ...(body !== undefined && method !== 'GET' && method !== 'HEAD' ? { body } : {}),
     })
-    const response = await handler(request)
+    const response = await active(request)
     res.writeHead(response.status, Object.fromEntries(response.headers))
     res.end(response.body !== null ? Buffer.from(await response.arrayBuffer()) : undefined)
   })
   return new Promise((resolve) =>
-    server.listen(port, '127.0.0.1', () => {
-      const bound = (server.address() as AddressInfo).port
-      resolve({ server, port: bound, publicUrl: `http://127.0.0.1:${bound}` })
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo
+      resolve({
+        server,
+        publicUrl: `http://127.0.0.1:${port}`,
+        setHandler(h) {
+          active = h
+        },
+      })
     }),
   )
 }
 
 /**
- * Boot an ephemeral AS on a loopback port. Two-phase boot (like the spike): the
- * default `iss`/`aud` equal `baseURL`, which must equal the LISTENING origin for
- * jwtVerify to match — so we grab a free port from a throwaway socket, close it,
- * then rebind the real AS on that same port. `extraResourcePaths` (e.g. `['/other']`,
- * resolved against `base` once the port is known) widen `validAudiences` so the
- * wrong-aud test can mint a token for a different, but AS-permitted, resource.
+ * Boot an ephemeral AS on a loopback port (race-free — see {@link serveSwappable}).
+ * `extraResourcePaths` (e.g. `['/other']`, resolved against `base` once the port
+ * is known) widen `validAudiences` so the wrong-aud test can mint a token for a
+ * different, but AS-permitted, resource.
  */
 export async function startAuthServer(extraResourcePaths: string[] = []): Promise<AuthHarness> {
-  const bootDb = drizzle(new PGlite(), { schema })
-  const { apply: applyBoot } = await pushSchema(schema as Record<string, unknown>, bootDb as never)
-  await applyBoot()
-  const bootAuth = betterAuth({
-    baseURL: 'http://127.0.0.1:1',
-    secret: 'e2e-secret-not-for-prod-0123456789',
-    emailAndPassword: { enabled: true },
-    database: drizzleAdapter(bootDb, { provider: 'pg' }),
-    plugins: [jwt()],
-  })
-  const boot = await serveAuth((req) => bootAuth.handler(req))
-  const publicUrl = boot.publicUrl
-  const port = boot.port
-  await new Promise<void>((r) => boot.server.close(() => r()))
-
+  const srv = await serveSwappable()
+  const publicUrl = srv.publicUrl
   const mcpUrl = `${publicUrl}/mcp`
   const base = `${publicUrl}/api/auth`
   const extraAudiences = extraResourcePaths.map((p) => `${base}${p}`)
@@ -218,7 +224,7 @@ export async function startAuthServer(extraResourcePaths: string[] = []): Promis
   })
   const { apply } = await pushSchema(schema as Record<string, unknown>, db as never)
   await apply()
-  const live = await serveAuth((req) => auth.handler(req), port)
+  srv.setHandler((req) => auth.handler(req))
 
   return {
     base,
@@ -227,7 +233,7 @@ export async function startAuthServer(extraResourcePaths: string[] = []): Promis
     auth,
     mintToken: (o = {}) => runFlow(base, publicUrl, o),
     async close() {
-      await new Promise<void>((r) => live.server.close(() => r()))
+      await new Promise<void>((r) => srv.server.close(() => r()))
     },
   }
 }

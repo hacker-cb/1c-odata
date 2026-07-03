@@ -3,6 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import express, { type Express, type RequestHandler } from 'express'
 import type { Auth } from '../auth/better-auth.js'
 import type { CanonicalUrls } from '../auth/config.js'
+import type { Keyring } from '../store/crypto.js'
+import type { AuthDb } from '../store/db.js'
 import { createDiscoveryRouter } from './discovery.js'
 import { createMcpRouter } from './mcp-route.js'
 
@@ -14,11 +16,20 @@ export interface AppAuthOptions {
   authRouter: RequestHandler
   /** requireBearerAuth; mounted on /mcp BEFORE the MCP router. */
   bearerMiddleware: RequestHandler
+  /**
+   * Tenancy handles carried through app.ts UNTOUCHED (the route never reads them —
+   * index.ts owns the db lifecycle and builds the per-session ScopedPool closure
+   * directly). Present only on the tenancy path; kept on this type so future admin
+   * routes (grant CRUD, secret writes) can read `db`/`keyring` off the mounted auth
+   * options without re-plumbing. Both optional (auth-without-tenancy omits them).
+   */
+  db?: AuthDb
+  keyring?: Keyring
 }
 
 export interface CreateAppOptions {
-  /** Builds a fresh McpServer per session (captures the shared pool + version). */
-  buildServer: () => McpServer
+  /** Builds a fresh McpServer per session, given the authenticated subject (undefined on the no-auth path). */
+  buildServer: (ctx: { sub: string | undefined }) => McpServer
   /** Forwarded to the MCP router — `Host` allowlist for DNS-rebinding protection. */
   allowedHosts?: string[]
   /** Forwarded to the MCP router — max concurrent sessions. */

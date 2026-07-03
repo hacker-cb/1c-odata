@@ -16,6 +16,11 @@
  * those are admin operations, not part of the remote read surface.
  */
 
+// The pool's canonical "no such connection" error. Re-exported so a scoped host
+// (`@1c-odata/mcp-server`'s ScopedPool) can throw the SAME error the pool throws
+// for an absent base — an ungranted base is then byte-identical to a missing one,
+// no existence leak, and no direct `@1c-odata/client` dependency on the host.
+export { InvalidArgumentError } from '@1c-odata/client'
 // On-disk descriptor shape + secret-store escape hatch (for tests/tooling).
 export type { StoredConnection } from './config.js'
 // Shared data-dir resolver: honors `ONEC_MCP_DATA_DIR` + the absolute-path guard,

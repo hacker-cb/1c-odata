@@ -17,9 +17,35 @@ function requestId(body: unknown): string | number | null {
   return null
 }
 
+/**
+ * The authenticated subject on a bearer-gated request, or undefined (no-auth path).
+ * `requireBearerAuth` sets `req.auth` to the verifier's AuthInfo; our verifier puts
+ * `sub` on `extra` (see auth/verifier.ts). No auth middleware → `req.auth` absent.
+ */
+function authSub(req: Request): string | undefined {
+  const extra = (req as { auth?: { extra?: Record<string, unknown> } }).auth?.extra
+  const sub = extra?.sub
+  return typeof sub === 'string' && sub !== '' ? sub : undefined
+}
+
+/** One live session: its transport + the subject that opened it (undefined on the no-auth path). */
+interface SessionEntry {
+  transport: StreamableHTTPServerTransport
+  // `| undefined` (not just optional): authSub() yields string | undefined, and
+  // under exactOptionalPropertyTypes an optional-only field rejects an explicit
+  // undefined value. The no-auth path stores undefined here deliberately.
+  sub: string | undefined
+}
+
 export interface McpRouteOptions {
-  /** Builds a fresh McpServer for each new session (pool captured by the caller). */
-  buildServer: () => McpServer
+  /**
+   * Builds a fresh McpServer per session, given the authenticated subject. Auth
+   * path: `sub` = req.auth.extra.sub. No-auth path: `sub` undefined → shared pool.
+   * `sub: string | undefined` (not optional-only) so the `{ sub }` call site — where
+   * `sub` comes from authSub() as `string | undefined` — type-checks under
+   * exactOptionalPropertyTypes.
+   */
+  buildServer: (ctx: { sub: string | undefined }) => McpServer
   /**
    * `Host`-header values the transport accepts. When set, the SDK's DNS-rebinding
    * protection is enabled, so a browser page (or a hostname rebound to the bound
@@ -40,11 +66,14 @@ export interface McpRouteOptions {
  *   - `GET /`    — server→client SSE stream
  *   - `DELETE /` — terminate the session
  *
- * No auth in this slice — mount behind external middleware when needed.
+ * Each session is pinned to the `sub` that opened it (auth path). A request whose
+ * token `sub` differs from the session owner's is rejected with 403 — a different
+ * valid token cannot hijack a session whose McpServer/ScopedPool is closed over the
+ * OWNER's grants. On the no-auth path both subs are `undefined` and the check is inert.
  */
 export function createMcpRouter(opts: McpRouteOptions): Router {
   const router = Router()
-  const transports = new Map<string, StreamableHTTPServerTransport>()
+  const transports = new Map<string, SessionEntry>()
   // In-flight initializations not yet registered in `transports`. A session only
   // lands in the map when `onsessioninitialized` fires (during handleRequest), so
   // a burst of concurrent inits would otherwise slip past a `transports.size`-only
@@ -55,29 +84,46 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
   const rebindGuard =
     opts.allowedHosts !== undefined ? { enableDnsRebindingProtection: true, allowedHosts: opts.allowedHosts } : {}
 
-  /** Look up the session's transport or answer 400; `undefined` means already answered. */
-  const resolveSession = (req: Request, res: Response): StreamableHTTPServerTransport | undefined => {
+  /**
+   * Resolve the session AND verify the caller owns it. Returns the transport, or
+   * undefined after answering (400 unknown session / 403 sub mismatch). Binding a
+   * session to its opener's `sub` stops a DIFFERENT valid token from hijacking an
+   * already-initialized McpServer whose ScopedPool is closed over the OWNER's sub.
+   */
+  const resolveOwnedSession = (req: Request, res: Response): StreamableHTTPServerTransport | undefined => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined
-    const transport = sessionId !== undefined ? transports.get(sessionId) : undefined
-    if (transport === undefined) {
+    const entry = sessionId !== undefined ? transports.get(sessionId) : undefined
+    if (entry === undefined) {
       res.status(400).send('Invalid or missing session ID')
       return undefined
     }
-    return transport
+    // No-auth path: entry.sub === undefined and authSub() === undefined → equal.
+    if (entry.sub !== authSub(req)) {
+      res.status(403).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Session does not belong to this principal' },
+        id: requestId(req.body),
+      })
+      return undefined
+    }
+    return entry.transport
   }
 
   router.post('/', async (req: Request, res: Response) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined
-    const existing = sessionId !== undefined ? transports.get(sessionId) : undefined
 
-    if (existing !== undefined) {
+    if (sessionId !== undefined) {
+      // Existing-session branch: this is where a hijacker would send tool-calls,
+      // so it MUST go through the ownership check.
+      const transport = resolveOwnedSession(req, res)
+      if (transport === undefined) return
       // express.json() already parsed the body — pass it so the transport does not
       // try to read the (already-consumed) request stream a second time.
-      await existing.handleRequest(req, res, req.body)
+      await transport.handleRequest(req, res, req.body)
       return
     }
 
-    if (sessionId === undefined && isInitializeRequest(req.body)) {
+    if (isInitializeRequest(req.body)) {
       // Cap against live + in-flight sessions (see `pendingInits`).
       if (transports.size + pendingInits >= maxSessions) {
         res.status(503).json({
@@ -87,12 +133,13 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
         })
         return
       }
+      const sub = authSub(req) // subject that owns this session
       pendingInits += 1
       try {
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sid) => {
-            transports.set(sid, transport)
+            transports.set(sid, { transport, sub })
           },
           ...rebindGuard,
         })
@@ -105,7 +152,7 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
         // as `(() => void) | undefined`, which trips the repo's exactOptionalPropertyTypes
         // against Transport's exact-optional `onclose?: () => void`. It nominally
         // implements Transport — the mismatch is purely the upstream `| undefined`.
-        await opts.buildServer().connect(transport as Transport)
+        await opts.buildServer({ sub }).connect(transport as Transport)
         await transport.handleRequest(req, res, req.body)
       } finally {
         // The session (on success) is now in `transports`; drop the in-flight count.
@@ -122,7 +169,7 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
   })
 
   router.get('/', async (req: Request, res: Response) => {
-    const transport = resolveSession(req, res)
+    const transport = resolveOwnedSession(req, res)
     if (transport === undefined) return
     // The GET stream is the session's long-lived SSE channel. The SDK's `onclose`
     // fires ONLY on an explicit `DELETE /` (1.29), so a client that just drops its
@@ -137,7 +184,7 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
   })
 
   router.delete('/', async (req: Request, res: Response) => {
-    const transport = resolveSession(req, res)
+    const transport = resolveOwnedSession(req, res)
     if (transport === undefined) return
     await transport.handleRequest(req, res)
   })

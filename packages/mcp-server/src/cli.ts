@@ -6,6 +6,7 @@ import { FileConnectionSource, resolveDataDir } from '@1c-odata/mcp/internal'
 import { Command } from 'commander'
 import { createHttpServer } from './index.js'
 import { logger } from './logger.js'
+import { type Keyring, loadKeyring } from './store/crypto.js'
 import type { Dialect } from './store/db.js'
 import { readPackageVersion } from './version.js'
 
@@ -20,6 +21,19 @@ interface ServeOptions {
   publicUrl?: string
   pgUrl?: string
   authDataDir?: string
+  encKey?: string
+}
+
+/**
+ * Build the encryption keyring iff a KEK is supplied (flag or env) — this is what
+ * opts multi-tenancy in on the auth path. Absent → undefined (auth without
+ * tenancy, the Slice-2 file source). `loadKeyring` throws {@link MissingEncryptionKeyError}
+ * loudly on a malformed/short key, failing boot rather than corrupting writes.
+ */
+function resolveKeyring(env: NodeJS.ProcessEnv, opts: ServeOptions): Keyring | undefined {
+  const encKey = opts.encKey ?? env.ONEC_MCP_ENC_KEY
+  if (encKey === undefined || encKey === '') return undefined
+  return loadKeyring({ ONEC_MCP_ENC_KEY: encKey, ONEC_MCP_ENC_KEY_ID: env.ONEC_MCP_ENC_KEY_ID } as NodeJS.ProcessEnv)
 }
 
 /**
@@ -94,6 +108,10 @@ export function buildProgram(): Command {
     .option('--public-url <url>', 'external https origin enabling OAuth auth (e.g. https://mcp.example.com)')
     .option('--pg-url <url>', 'Postgres connection string for the auth store (else DATABASE_URL; else pglite)')
     .option('--auth-data-dir <path>', 'persist the pglite auth store here (dev; else in-memory)')
+    .option(
+      '--enc-key <base64>',
+      'base64 32-byte AES-256 key for DB-backed secret encryption (enables multi-tenancy; else ONEC_MCP_ENC_KEY)',
+    )
     .action(async (opts: ServeOptions) => {
       const dataDir = resolveDataDir(process.env, opts.dataDir)
       const insecure = opts.insecureStorage === true
@@ -108,7 +126,16 @@ export function buildProgram(): Command {
         if (secret === undefined || secret === '') {
           throw new Error('BETTER_AUTH_SECRET is required when --public-url enables auth')
         }
-        auth = { publicUrl, dialect: resolveDialect(process.env, opts), secret }
+        // Multi-tenancy is opt-in on the auth path: supply a KEK (flag or env) to
+        // switch from the file source to DB-backed, per-user-scoped bases. Absent
+        // → auth without tenancy (Slice-2 file source).
+        const keyring = resolveKeyring(process.env, opts)
+        auth = {
+          publicUrl,
+          dialect: resolveDialect(process.env, opts),
+          secret,
+          ...(keyring !== undefined ? { keyring } : {}),
+        }
       }
 
       const { server, close } = await createHttpServer({
