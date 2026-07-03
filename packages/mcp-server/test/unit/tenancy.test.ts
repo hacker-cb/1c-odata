@@ -36,6 +36,11 @@ function fakeSharedPool(names: string[]): ReadPool {
   }
 }
 
+/** Deterministic event-loop yield — lets a fire-and-forget chain settle without a wall-clock sleep. */
+async function flush(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) await new Promise((r) => setImmediate(r))
+}
+
 describe('DbConnectionSource + grant scoping', () => {
   let handle: DbHandle
   let keyring: Keyring
@@ -143,7 +148,7 @@ describe('DbConnectionSource + grant scoping', () => {
     const shared = fakeSharedPool((await src.listBases()).map((b) => b.name))
     const alicePool = new ScopedPool(shared, () => resolveGrants(handle.db, 'alice'))
     alicePool.refresh('Accounting') // ungranted
-    await new Promise((r) => setTimeout(r, 10)) // let the fire-and-forget settle
+    await flush() // let the fire-and-forget settle
     expect(shared.refresh).not.toHaveBeenCalled()
   })
 
@@ -152,8 +157,7 @@ describe('DbConnectionSource + grant scoping', () => {
     const shared = fakeSharedPool((await src.listBases()).map((b) => b.name))
     const alicePool = new ScopedPool(shared, () => resolveGrants(handle.db, 'alice'))
     alicePool.refresh('Trade') // granted
-    await new Promise((r) => setTimeout(r, 10))
-    expect(shared.refresh).toHaveBeenCalledWith('Trade')
+    await vi.waitFor(() => expect(shared.refresh).toHaveBeenCalledWith('Trade'))
   })
 
   it('refresh swallows a rejecting grant read — no unhandled-rejection crash', async () => {
@@ -170,7 +174,7 @@ describe('DbConnectionSource + grant scoping', () => {
       const shared = fakeSharedPool(['Trade'])
       const pool = new ScopedPool(shared, () => Promise.reject(new Error('db down')))
       expect(() => pool.refresh('Trade')).not.toThrow()
-      await new Promise((r) => setTimeout(r, 20)) // let the rejected microtask settle
+      await flush() // let the rejected microtask settle
       expect(shared.refresh).not.toHaveBeenCalled()
       expect(rejections).toEqual([])
     } finally {

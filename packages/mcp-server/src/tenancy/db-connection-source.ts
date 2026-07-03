@@ -58,7 +58,14 @@ export class DbConnectionSource implements ConnectionSource {
     try {
       return decrypt(this.keyring, name, sealed)
     } catch (err) {
-      this.onSecretError(name, err)
+      // The error sink is logging/audit only — it must never change control flow.
+      // Guard it so a throwing sink can't turn a decrypt failure into a thrown
+      // getSecret (which would break the "collapse to null, no oracle" contract).
+      try {
+        this.onSecretError(name, err)
+      } catch {
+        // ignore — a broken sink must not surface as a secret error
+      }
       if (err instanceof DecryptionError) return null
       throw err // a truly unexpected (non-auth) error still surfaces
     }
