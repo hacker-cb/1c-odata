@@ -39,11 +39,40 @@ export interface BuildAuthOptions {
  * endpoints (sign-up, consent, …) are driven over HTTP in tests, so no caller
  * depends on the discarded inferred narrowing.
  */
+/**
+ * A minimal user shape the admin panel renders — a structural subset of the
+ * admin() plugin's `UserWithRole`. Kept local so the admin `api.*` intersection
+ * below stays serializable into our emitted `.d.ts` (the fully-inferred plugin
+ * types drag in zod's `$strip` symbol — see the note above).
+ */
+export interface AdminUser {
+  id: string
+  email: string
+  name: string
+  role?: string | null
+}
+
+/**
+ * The admin() plugin's `api` endpoints the admin panel drives. Widened to
+ * `(...args: any[]) => …` for the same reason `getOAuthServerConfig` is: the
+ * inferred better-call endpoint types are not `.d.ts`-portable, and our call
+ * sites only need the argument bag (headers + body/query) and the result shape.
+ */
+export interface AdminApi {
+  // biome-ignore lint/suspicious/noExplicitAny: inferred endpoint types are not .d.ts-portable; only the result shape is load-bearing.
+  listUsers: (...args: any[]) => Promise<{ users: AdminUser[] }>
+  // biome-ignore lint/suspicious/noExplicitAny: see listUsers.
+  createUser: (...args: any[]) => Promise<{ user: AdminUser }>
+  // biome-ignore lint/suspicious/noExplicitAny: see listUsers.
+  setRole: (...args: any[]) => Promise<{ user: AdminUser }>
+}
+
 export type Auth = BetterAuthInstance & {
-  api: BetterAuthInstance['api'] & {
-    // biome-ignore lint/suspicious/noExplicitAny: mirrors the plugin's own (...args: any) => any shape; only presence matters here.
-    getOAuthServerConfig: (...args: any[]) => any
-  }
+  api: BetterAuthInstance['api'] &
+    AdminApi & {
+      // biome-ignore lint/suspicious/noExplicitAny: mirrors the plugin's own (...args: any) => any shape; only presence matters here.
+      getOAuthServerConfig: (...args: any[]) => any
+    }
 }
 
 /**

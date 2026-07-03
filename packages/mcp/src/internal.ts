@@ -26,7 +26,9 @@ export type { StoredConnection } from './config.js'
 // Shared data-dir resolver: honors `ONEC_MCP_DATA_DIR` + the absolute-path guard,
 // so an alternate host (`@1c-odata/mcp-server`) locates the SAME config.json +
 // credentials as the `1c-odata-mcp` CLI instead of diverging on a bare resolve().
-export { resolveDataDir } from './config.js'
+// The connection-name validator travels alongside so a DB-backed admin write path
+// (`@1c-odata/mcp-server`) enforces the SAME ASCII alias rule as the file store.
+export { assertValidConnectionName, isValidConnectionName, resolveDataDir } from './config.js'
 // Connection pool + its read-facing contract.
 export {
   ConnectionPool,

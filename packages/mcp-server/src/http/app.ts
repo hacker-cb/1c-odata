@@ -1,10 +1,12 @@
 // src/http/app.ts
+import type { ReadPool } from '@1c-odata/mcp/internal'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import express, { type Express, type RequestHandler } from 'express'
 import type { Auth } from '../auth/better-auth.js'
 import type { CanonicalUrls } from '../auth/config.js'
 import type { Keyring } from '../store/crypto.js'
 import type { AuthDb } from '../store/db.js'
+import { createAdminRouter } from './admin/router.js'
 import { createDiscoveryRouter } from './discovery.js'
 import { createMcpRouter } from './mcp-route.js'
 
@@ -25,6 +27,10 @@ export interface AppAuthOptions {
    */
   db?: AuthDb
   keyring?: Keyring
+  /** Process-global ConnectionPool — admin base edits call refresh() on it. Present with tenancy. */
+  sharedPool?: ReadPool
+  /** Server version, forwarded to the admin dashboard's DB-aware server_info. */
+  version?: string
 }
 
 export interface CreateAppOptions {
@@ -64,6 +70,21 @@ export function createApp(opts: CreateAppOptions): Express {
   // (3) Discovery at root (public, CORS-open).
   if (opts.auth !== undefined) {
     app.use(createDiscoveryRouter({ auth: opts.auth.auth, urls: opts.auth.urls }))
+  }
+
+  // (3.5) Admin panel — only on the tenancy path (needs db + keyring + shared pool).
+  if (opts.auth?.db !== undefined && opts.auth.keyring !== undefined && opts.auth.sharedPool !== undefined) {
+    app.use(
+      '/admin',
+      createAdminRouter({
+        auth: opts.auth.auth,
+        db: opts.auth.db,
+        keyring: opts.auth.keyring,
+        sharedPool: opts.auth.sharedPool,
+        version: opts.auth.version ?? '0.0.0',
+        publicUrl: opts.auth.urls.publicUrl,
+      }),
+    )
   }
 
   // (4) /mcp: bearer gate before the MCP router (when auth is enabled).

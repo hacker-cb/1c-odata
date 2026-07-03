@@ -4,10 +4,13 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { FileConnectionSource, resolveDataDir } from '@1c-odata/mcp/internal'
 import { Command } from 'commander'
+import { buildAuth } from './auth/better-auth.js'
+import { resolveCanonicalUrls } from './auth/config.js'
 import { createHttpServer } from './index.js'
 import { logger } from './logger.js'
 import { type Keyring, loadKeyring } from './store/crypto.js'
-import type { Dialect } from './store/db.js'
+import { createDb, type Dialect } from './store/db.js'
+import { runAuthMigrations } from './store/migrate.js'
 import { readPackageVersion } from './version.js'
 
 const DEFAULT_PORT = 3000
@@ -22,6 +25,15 @@ interface ServeOptions {
   pgUrl?: string
   authDataDir?: string
   encKey?: string
+}
+
+interface AdminCreateOptions {
+  email: string
+  password: string
+  name?: string
+  publicUrl?: string
+  pgUrl?: string
+  authDataDir?: string
 }
 
 /**
@@ -164,6 +176,43 @@ export function buildProgram(): Command {
       }
       process.once('SIGINT', () => shutdown('SIGINT'))
       process.once('SIGTERM', () => shutdown('SIGTERM'))
+    })
+
+  program
+    .command('admin-create')
+    .description(
+      'Bootstrap the FIRST admin user directly in the auth store (header-less seed; no admin session required)',
+    )
+    .requiredOption('--email <email>', 'admin email')
+    .requiredOption('--password <password>', 'admin password')
+    .option('--name <name>', 'display name', 'Admin')
+    .option('--public-url <url>', 'external https origin (else ONEC_MCP_PUBLIC_URL)')
+    .option('--pg-url <url>', 'Postgres connection string for the auth store (else DATABASE_URL; else pglite)')
+    .option('--auth-data-dir <path>', 'persist the pglite auth store here (must match `serve`)')
+    .action(async (opts: AdminCreateOptions) => {
+      const publicUrl = opts.publicUrl ?? process.env.ONEC_MCP_PUBLIC_URL
+      if (publicUrl === undefined || publicUrl === '') {
+        throw new Error('--public-url (or ONEC_MCP_PUBLIC_URL) is required')
+      }
+      const secret = process.env.BETTER_AUTH_SECRET ?? process.env.AUTH_SECRET
+      if (secret === undefined || secret === '') {
+        throw new Error('BETTER_AUTH_SECRET is required')
+      }
+      const dialect = resolveDialect(process.env, { ...opts, port: '', host: '' } as ServeOptions)
+      const dbHandle = createDb(dialect)
+      try {
+        await runAuthMigrations(dbHandle)
+        const auth = buildAuth({ urls: resolveCanonicalUrls(publicUrl), db: dbHandle.db, secret })
+        // Header-less call: session is null and (ctx.request || ctx.headers) is
+        // falsy, so both the create-check and the set-role check are skipped —
+        // the ONLY sanctioned first-admin seed (better-auth has no CLI for this).
+        const { user } = await auth.api.createUser({
+          body: { email: opts.email, password: opts.password, name: opts.name ?? 'Admin', role: 'admin' },
+        })
+        logger.info({ id: user.id, email: user.email }, 'admin user created')
+      } finally {
+        await dbHandle.close()
+      }
     })
 
   return program

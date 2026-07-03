@@ -2,12 +2,14 @@ import { createServer, type Server } from 'node:http'
 import { ConnectionPool, type ConnectionSource, type Limits, type ReadPool } from '@1c-odata/mcp/internal'
 import { buildAuth } from './auth/better-auth.js'
 import { resolveCanonicalUrls } from './auth/config.js'
+import { type HealthJob, startHealthJob } from './http/admin/health-job.js'
 import { createApp } from './http/app.js'
 import { createAuthMount } from './http/auth-mount.js'
 import { buildMcpServer } from './server-factory.js'
 import type { Keyring } from './store/crypto.js'
 import { createDb, type Dialect } from './store/db.js'
 import { runAuthMigrations } from './store/migrate.js'
+import { BaseRepo, HealthRepo, SecretRepo } from './store/repos.js'
 import { DbConnectionSource } from './tenancy/db-connection-source.js'
 import { type GrantMap, resolveGrants } from './tenancy/grants.js'
 import { ScopedPool } from './tenancy/scoped-pool.js'
@@ -121,20 +123,38 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
       buildServer,
       ...(opts.allowedHosts !== undefined ? { allowedHosts: opts.allowedHosts } : {}),
       ...(opts.maxSessions !== undefined ? { maxSessions: opts.maxSessions } : {}),
-      // Carry `db`/`keyring` on the auth options only when tenancy is on — future
-      // admin routes read them; the MCP route never does (see app.ts).
+      // Carry `db`/`keyring`/`sharedPool`/`version` on the auth options only when
+      // tenancy is on — the admin routes read them; the MCP route never does
+      // (see app.ts). `sharedPool` MUST be the process-global pool so admin base
+      // edits `refresh()` the shared cache, not a per-session ScopedPool.
       auth: {
         auth,
         urls,
         authRouter,
         bearerMiddleware,
-        ...(keyring !== undefined ? { db, keyring } : {}),
+        ...(keyring !== undefined ? { db, keyring, sharedPool, version } : {}),
       },
     })
+
+    // Health job: only on the tenancy path (needs db-derived repos + keyring).
+    let healthJob: HealthJob | undefined
+    if (keyring !== undefined) {
+      healthJob = startHealthJob({
+        baseRepo: new BaseRepo(db),
+        secretRepo: new SecretRepo(db),
+        healthRepo: new HealthRepo(db),
+        keyring,
+        log: { error: (o, m) => process.stderr.write(`${m ?? 'health'}: ${JSON.stringify(o)}\n`) },
+      })
+      void healthJob.runOnce() // seed the dashboard so it isn't blank for the first interval
+    }
 
     return {
       server: createServer(app),
       async close() {
+        // Stop the timer AND await any in-flight sweep (incl. the runOnce seed)
+        // BEFORE the DB handle closes, so a probe/upsert can't race dbHandle.close().
+        await healthJob?.stop()
         await dbHandle.close()
       },
     }
