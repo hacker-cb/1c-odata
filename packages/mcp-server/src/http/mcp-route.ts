@@ -8,6 +8,15 @@ import { type Request, type Response, Router } from 'express'
 /** Hard ceiling on concurrent live sessions — a burst of abandoned inits can't OOM the process. */
 const DEFAULT_MAX_SESSIONS = 1024
 
+/** The JSON-RPC `id` of a single request, echoed on error responses for client correlation (null otherwise). */
+function requestId(body: unknown): string | number | null {
+  if (typeof body === 'object' && body !== null && !Array.isArray(body)) {
+    const id = (body as { id?: unknown }).id
+    if (typeof id === 'string' || typeof id === 'number') return id
+  }
+  return null
+}
+
 export interface McpRouteOptions {
   /** Builds a fresh McpServer for each new session (pool captured by the caller). */
   buildServer: () => McpServer
@@ -74,7 +83,7 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
         res.status(503).json({
           jsonrpc: '2.0',
           error: { code: -32000, message: 'Too many active sessions' },
-          id: null,
+          id: requestId(req.body),
         })
         return
       }
@@ -108,7 +117,7 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
     res.status(400).json({
       jsonrpc: '2.0',
       error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
-      id: null,
+      id: requestId(req.body),
     })
   })
 

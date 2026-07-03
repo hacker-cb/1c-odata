@@ -36,14 +36,22 @@ function resolveAllowedHosts(env: NodeJS.ProcessEnv, host: string, port: number)
   // A bare IPv6 literal (e.g. `::1`) appears bracketed in the `Host` header
   // (`[::1]:3000`); match that form so the guard doesn't reject legit requests.
   const bind = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
-  return [...new Set([`${bind}:${port}`, `localhost:${port}`, `127.0.0.1:${port}`])]
+  // Include both loopback families: a client may reach the server via either the
+  // IPv4 or the IPv6 loopback regardless of the bind address (e.g. `--host ::`
+  // still answers `http://[::1]:<port>`), and each yields a distinct `Host` header.
+  return [...new Set([`${bind}:${port}`, `localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`])]
 }
 
-/** Parse + validate `--port`; fail early and clearly instead of letting `listen` throw late on NaN. */
+/**
+ * Parse + validate `--port`; fail early and clearly instead of letting `listen`
+ * throw late on NaN. Port 0 (OS-assigned ephemeral) is rejected: the bound port
+ * would differ from the one baked into the DNS-rebinding allowlist, so the guard
+ * would reject every request.
+ */
 function parsePort(raw: string): number {
   const port = Number(raw)
-  if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new Error(`Invalid --port ${JSON.stringify(raw)}: expected an integer in 0..65535`)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid --port ${JSON.stringify(raw)}: expected an integer in 1..65535`)
   }
   return port
 }
