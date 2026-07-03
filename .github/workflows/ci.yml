@@ -1,14 +1,21 @@
 name: CI
 
 on:
+  # Gate every PR regardless of base — no base-branch allow-list. A multi-PR
+  # feature's slice PRs target their `umbrella/**` branch, not the trunk, so a
+  # `branches: [master]` filter would silently skip them (see
+  # .claude/rules/git-branches.md § Recommended CI triggers), yet the branch
+  # ruleset still requires these checks there. `workflow_dispatch` allows manual
+  # re-runs (flaky CI / on-demand).
   pull_request:
-    branches: [master]
+  workflow_dispatch:
 
-# CI validates pull requests only. Pushes to master are handled by release.yml,
-# which re-runs typecheck plus the core build/test gates (Ubuntu only) before any
-# publish — not the full PR matrix here (no Biome lint, no Windows leg, no live
-# tests), since every change reaches master through a PR that already ran this
-# workflow in full. The changesets release PR is a normal PR, covered here too.
+# CI validates pull requests against any base. Pushes to master are handled by
+# release.yml, which re-runs typecheck plus the core build/test gates (Ubuntu
+# only) before any publish — not the full PR matrix here (no Biome lint, no
+# Windows leg, no live tests), since every change reaches master through a PR
+# that already ran this workflow in full. The changesets release PR is a normal
+# PR, covered here too.
 
 # One in-flight run per PR ref: a new push to a PR branch (arriving as
 # `pull_request: synchronize`) cancels the previous run for that PR. Different
