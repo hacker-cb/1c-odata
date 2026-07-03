@@ -28,6 +28,12 @@ export {
 } from './connection-pool.js'
 // The pluggable origin of connections + secrets (the multi-tenancy seam).
 export type { ConnectionSource, ListedConnection } from './connection-source.js'
+// Standalone reachability probe (fetch `$metadata` for a credential pair). No
+// dataDir dependency — a remote host reuses it to verify a base before saving it
+// and in a health job. The connection-MANAGEMENT functions in the same module
+// (`upsertConnection`/`removeConnection`/`updateConnectionCredentials`/
+// `setConnectionLabel`) stay private: they are bound to the file-backed config.
+export { verifyConnectivity } from './connections.js'
 export { FileConnectionSource, type FileConnectionSourceOptions } from './file-connection-source.js'
 // Response limits.
 export { clampTop, DEFAULT_LIMITS, type Limits, resolveLimits } from './limits.js'

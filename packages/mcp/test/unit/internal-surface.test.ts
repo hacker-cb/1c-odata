@@ -14,6 +14,7 @@ import {
   registerServerInfoTool,
   resolveLimits,
   SecretStore,
+  verifyConnectivity,
 } from '@1c-odata/mcp/internal'
 import { describe, expect, it } from 'vitest'
 
@@ -21,7 +22,7 @@ import { describe, expect, it } from 'vitest'
 // rename/removal here is an intentional (internal, non-semver) break — update the
 // consumer in lock-step. Management tools must stay OFF this surface (admin-only).
 describe('@1c-odata/mcp/internal surface', () => {
-  it('exports the pool, source seam, registrators and limit helpers', () => {
+  it('exports the pool, source seam, registrators, limit helpers and connectivity probe', () => {
     // Static named imports (not dynamic namespace access) — a missing export is a
     // compile error here, not just a runtime miss.
     for (const fn of [
@@ -34,6 +35,7 @@ describe('@1c-odata/mcp/internal surface', () => {
       clampTop,
       SecretStore,
       passwordEnvVar,
+      verifyConnectivity,
     ]) {
       expect(typeof fn).toBe('function')
     }
