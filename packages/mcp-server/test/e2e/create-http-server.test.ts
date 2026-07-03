@@ -4,9 +4,11 @@ import type { ConnectionSource } from '@1c-odata/mcp/internal'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createHttpServer } from '../../src/index.js'
 import { runFlow } from './_harness.js'
+
+const KEY = Buffer.alloc(32, 4).toString('base64')
 
 // Exercises the REAL production wiring path (createDb → runAuthMigrations →
 // buildAuth → createAuthMount → createApp) end-to-end, which the other e2e files
@@ -107,6 +109,79 @@ describe('e2e: createHttpServer (production wiring)', () => {
       await client.close().catch(() => undefined)
       await new Promise<void>((r) => server.close(() => r()))
       await close()
+    }
+  })
+
+  // --- Admin panel + health job are TENANCY-ONLY (db + keyring). ---
+
+  it('no-auth mode: /admin is NOT mounted (404)', async () => {
+    const { server, close } = await createHttpServer({ source, dataDir: '/synthetic' })
+    server.listen(0, '127.0.0.1')
+    await new Promise<void>((r) => server.once('listening', r))
+    const { port } = server.address() as AddressInfo
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/admin`, { redirect: 'manual' })
+      expect(res.status).toBe(404)
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()))
+      await close()
+    }
+  })
+
+  it('auth WITHOUT keyring: /admin is NOT mounted (404), no health job started', async () => {
+    const port = await freePort()
+    const publicUrl = `http://127.0.0.1:${port}`
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+    const { server, close } = await createHttpServer({
+      source,
+      dataDir: '/synthetic',
+      auth: { publicUrl, dialect: { kind: 'pglite' }, secret: SECRET }, // no keyring
+    })
+    server.listen(port, '127.0.0.1')
+    await new Promise<void>((r) => server.once('listening', r))
+    try {
+      const res = await fetch(`${publicUrl}/admin`, { redirect: 'manual' })
+      expect(res.status).toBe(404)
+      // The health job (the only setInterval in our source) must not run here.
+      const ours = setIntervalSpy.mock.calls.filter(([, ms]) => ms === 60_000)
+      expect(ours.length).toBe(0)
+    } finally {
+      setIntervalSpy.mockRestore()
+      await new Promise<void>((r) => server.close(() => r()))
+      await close()
+    }
+  })
+
+  it('full tenancy: /admin is mounted + gated, and close() stops the health job', async () => {
+    const port = await freePort()
+    const publicUrl = `http://127.0.0.1:${port}`
+    const keyring = (await import('../../src/store/crypto.js')).loadKeyring({
+      ONEC_MCP_ENC_KEY: KEY,
+    } as NodeJS.ProcessEnv)
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
+    const { server, close } = await createHttpServer({
+      source,
+      dataDir: '/synthetic',
+      auth: { publicUrl, dialect: { kind: 'pglite' }, secret: SECRET, keyring },
+    })
+    server.listen(port, '127.0.0.1')
+    await new Promise<void>((r) => server.once('listening', r))
+    try {
+      // Admin is mounted and gated: an anonymous browser gets redirected to sign-in.
+      const res = await fetch(`${publicUrl}/admin`, { redirect: 'manual' })
+      expect(res.status).toBe(302)
+      expect(res.headers.get('location')).toContain('/sign-in')
+
+      // The health job started (its 60s interval was created).
+      const ours = setIntervalSpy.mock.calls.filter(([, ms]) => ms === 60_000)
+      expect(ours.length).toBe(1)
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()))
+      await close() // must call the job's stop() → clearInterval
+      expect(clearIntervalSpy).toHaveBeenCalled()
+      setIntervalSpy.mockRestore()
+      clearIntervalSpy.mockRestore()
     }
   })
 })

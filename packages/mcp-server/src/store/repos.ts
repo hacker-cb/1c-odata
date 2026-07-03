@@ -130,6 +130,11 @@ export class GrantRepo {
   async revoke(sub: string, baseName: string): Promise<void> {
     await this.db.delete(grants).where(and(eq(grants.sub, sub), eq(grants.baseName, baseName)))
   }
+
+  /** All (sub, scope) pairs granted on one base. For the admin grant matrix. */
+  async listByBase(baseName: string): Promise<{ sub: string; scope: GrantScope }[]> {
+    return this.db.select({ sub: grants.sub, scope: grants.scope }).from(grants).where(eq(grants.baseName, baseName))
+  }
 }
 
 /** Health-probe results (health job writes, dashboard/tool reads). */
