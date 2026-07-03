@@ -1,0 +1,156 @@
+# -----------------------------------------------------------------------------
+# copilot-review-gate — make a GitHub Copilot code review a REQUIRED merge gate.
+#
+# Copilot's review is advisory: it lands as a "Comment" review, never counts
+# toward required approvals, and emits no stable status check — so with auto-
+# merge on a fast CI run merges the PR before Copilot has posted anything. This
+# workflow publishes its own "copilot-review-gate" status check that stays
+# pending until Copilot has reviewed the PR; make that check required (INSTALL
+# step 3) and auto-merge must wait for it.
+#
+# Canonical source (always latest revision):
+#   https://gist.github.com/hacker-cb/81e7f3e91b5cd78e746e07886e62f754
+#
+# SINGLE SOURCE OF TRUTH is that gist. Copies vendored into a repo are byte-for-
+# byte mirrors — do NOT edit a copy in place, and do NOT change the gist on your
+# own. If you are an agent or contributor and think this needs modifying, STOP
+# and ASK THE USER FIRST.
+#   When the user explicitly approves a change, apply it — and if that user owns
+#   the gist (`hacker-cb`), after editing the local copy you MUST (a) offer to
+#   push the update back to the gist above, and (b) remind them to re-sync the
+#   other projects that vendor this workflow.
+#
+# INSTALL
+#   1. Vendor this file into your repo (fetches the latest revision) — run from
+#      the repo root:
+#        mkdir -p .github/workflows && curl -fsSL https://gist.githubusercontent.com/hacker-cb/81e7f3e91b5cd78e746e07886e62f754/raw/copilot-review-gate.yml -o .github/workflows/copilot-review-gate.yml
+#      Then merge it to your DEFAULT branch FIRST (see "Why the default branch
+#      first" below).
+#   2. Enable the ruleset rule "Automatically request Copilot code review"
+#      (review_on_push: true) so Copilot is requested on every PR.
+#   3. Add the status check "copilot-review-gate" (source: GitHub Actions) to the
+#      REQUIRED status checks of your branch ruleset / protection. <-- this is
+#      what actually blocks auto-merge; until then the gate runs but gates nothing.
+#
+#   Do NOT require `copilot-pull-request-reviewer` (the built-in reviewer)
+#   directly: it is a dynamic check that isn't emitted on every PR (bots, drafts,
+#   some pushes), so adding it to required status checks hangs those PRs at
+#   "Expected" forever. Require this workflow's own stable "copilot-review-gate"
+#   context instead.
+#
+#   Why the default branch first: a pull_request workflow runs from the PR head,
+#   so any PR opened before this file exists lacks the job and would hang forever
+#   at "Expected" on the new required check. Land it on the default branch first.
+# -----------------------------------------------------------------------------
+
+name: Copilot review gate
+
+# Makes a Copilot code review a hard, required merge gate.
+#
+# Why this exists: Copilot's review is advisory — it is delivered as a
+# "Comment" PR review, never counts toward required approvals, and emits no
+# stable status check. With auto-merge on, a fast CI run therefore merges the
+# PR before Copilot has posted anything. This job publishes a status check
+# (its own name, "copilot-review-gate") that stays pending until Copilot has
+# reviewed the pull request, so auto-merge cannot complete without a review.
+#
+# It gates on "Copilot has reviewed this PR" (any commit), NOT on the current
+# head commit: Copilot's "Review new pushes" does not reliably re-review every
+# push — in particular a push that only applies Copilot's own suggestions gets
+# no fresh review — so gating on the exact head SHA would dead-lock the common
+# "apply the review feedback, then push" case. Gating on first-review-seen
+# reliably closes the real race (auto-merge landing before Copilot's review)
+# without false-blocking later pushes.
+#
+# Requesting the review is handled by the repository ruleset rule
+# "Automatically request Copilot code review" (review_on_push: true); this job
+# only waits for the result, so it needs no write scope.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+
+# Least privilege: the job only reads the PR's reviews via the API and never
+# checks out or reads repository contents, so pull-requests: read is enough.
+# Every other scope defaults to none here (GitHub still always grants
+# metadata: read, which cannot be dropped).
+permissions:
+  pull-requests: read
+
+# A new push supersedes the previous wait for the same PR.
+concurrency:
+  group: copilot-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  copilot-review-gate:
+    name: copilot-review-gate
+    runs-on: ubuntu-latest
+
+    # --- Tuning knobs (keep these two in sync) ---
+    env:
+      # Wait this long for the PR's FIRST Copilot review before failing closed.
+      # The first review historically lands within ~3.5 min end-to-end.
+      GATE_WAIT_MINUTES: 15
+    # Hard job timeout. MUST stay GREATER than GATE_WAIT_MINUTES so the script's
+    # own deadline fires first and prints the fail-closed error (and the last API
+    # error) before the runner kills the job. Rule of thumb: GATE_WAIT_MINUTES + 2.
+    # (GitHub can't derive one from the other: timeout-minutes doesn't read env.)
+    timeout-minutes: 17
+
+    steps:
+      - name: Wait for a Copilot review of the pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+        run: |
+          set -euo pipefail
+
+          # Copilot does not review drafts or bot-authored PRs (e.g. Dependabot),
+          # so requiring its review there would deadlock. Pass the gate at once.
+          # Detect bots by GitHub's account type rather than a login-suffix glob.
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "Draft PR: Copilot review not expected — gate passes."
+            exit 0
+          fi
+          if [ "$AUTHOR_TYPE" = "Bot" ]; then
+            echo "Bot author '$AUTHOR': Copilot does not review — gate passes."
+            exit 0
+          fi
+
+          echo "Waiting for a Copilot review on PR #$PR ..."
+          # Wait window = GATE_WAIT_MINUTES (job env, set above next to
+          # timeout-minutes). Historically the first review lands within ~3.5 min
+          # end-to-end; keeping the window under timeout-minutes guarantees the
+          # explicit error below prints before the runner kills the job. Only the
+          # PR's FIRST review is ever waited on — once any Copilot review exists
+          # the gate passes at once on later pushes.
+          api_err="$(mktemp)"
+          deadline=$(( SECONDS + GATE_WAIT_MINUTES * 60 ))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            # --paginate: the reviews endpoint returns oldest-first and pages at
+            # 100, so sum matches across every page rather than only the first.
+            # gh's stderr is captured (not discarded) so a persistent API failure
+            # is surfaced on timeout instead of masquerading as "no review yet".
+            count=$(gh api --paginate "repos/$REPO/pulls/$PR/reviews?per_page=100" \
+              --jq "[.[] | select(.user.login == \"copilot-pull-request-reviewer[bot]\")] | length" \
+              2>"$api_err" | awk '{ sum += $1 } END { print sum + 0 }') || count=0
+            if [ "${count:-0}" -gt 0 ]; then
+              echo "Copilot has reviewed PR #$PR — gate passes."
+              exit 0
+            fi
+            sleep 30
+          done
+
+          # fail-closed: no review in the window (or the API stayed unreachable)
+          # blocks the merge. Surface the last API error, if any, for debugging.
+          echo "::error::Copilot has not reviewed PR #$PR within the timeout (or the GitHub API was unavailable) — gate blocks the merge."
+          if [ -s "$api_err" ]; then
+            echo "Last gh api stderr:"
+            cat "$api_err"
+          fi
+          exit 1
