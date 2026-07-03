@@ -2,7 +2,7 @@
 import { realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { FileConnectionSource } from '@1c-odata/mcp/internal'
+import { FileConnectionSource, resolveDataDir } from '@1c-odata/mcp/internal'
 import { Command } from 'commander'
 import { createHttpServer } from './index.js'
 import { logger } from './logger.js'
@@ -12,10 +12,28 @@ const DEFAULT_PORT = 3000
 const DEFAULT_HOST = '127.0.0.1'
 
 interface ServeOptions {
-  dataDir: string
+  dataDir?: string
   insecureStorage?: boolean
   port: string
   host: string
+}
+
+/**
+ * `Host` allowlist for the transport's DNS-rebinding guard.
+ * `ONEC_MCP_ALLOWED_HOSTS` (comma-separated `host:port`) overrides for
+ * reverse-proxy deployments where the public `Host` differs from the bound
+ * address; otherwise derive it from the bind address plus the loopback aliases a
+ * local client may present.
+ */
+function resolveAllowedHosts(env: NodeJS.ProcessEnv, host: string, port: number): string[] {
+  const override = env.ONEC_MCP_ALLOWED_HOSTS?.trim()
+  if (override !== undefined && override !== '') {
+    return override
+      .split(',')
+      .map((h) => h.trim())
+      .filter((h) => h !== '')
+  }
+  return [...new Set([`${host}:${port}`, `localhost:${port}`, `127.0.0.1:${port}`])]
 }
 
 /** Build the commander program. Exported for unit tests. */
@@ -29,18 +47,22 @@ export function buildProgram(): Command {
   program
     .command('serve')
     .description('Run the read-only MCP server over Streamable HTTP')
-    .requiredOption('--data-dir <path>', 'data directory for config + credentials')
+    // Optional + routed through resolveDataDir so the server locates the SAME
+    // config.json + credentials as the `1c-odata-mcp` CLI: honors
+    // ONEC_MCP_DATA_DIR and the absolute-path guard, defaulting to the per-OS dir.
+    .option('--data-dir <path>', 'data directory for config + credentials (default: per-OS config dir)')
     .option('--insecure-storage', 'store passwords in a 0600 file instead of the OS keychain', false)
     .option('--port <port>', 'TCP port to listen on', String(DEFAULT_PORT))
     .option('--host <host>', 'host/interface to bind', DEFAULT_HOST)
     .action((opts: ServeOptions) => {
-      const dataDir = resolve(opts.dataDir)
+      const dataDir = resolveDataDir(process.env, opts.dataDir)
       const insecure = opts.insecureStorage === true
       const port = Number.parseInt(opts.port, 10)
+      const allowedHosts = resolveAllowedHosts(process.env, opts.host, port)
       const source = new FileConnectionSource({ dataDir, insecure })
-      const server = createHttpServer({ source, dataDir })
+      const server = createHttpServer({ source, dataDir, allowedHosts })
       server.listen(port, opts.host, () => {
-        logger.info({ host: opts.host, port, dataDir }, 'MCP HTTP server listening')
+        logger.info({ host: opts.host, port, dataDir, allowedHosts }, 'MCP HTTP server listening')
       })
     })
 

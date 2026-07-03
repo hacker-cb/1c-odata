@@ -147,15 +147,9 @@ importers:
 
   packages/mcp-server:
     dependencies:
-      '@1c-odata/client':
-        specifier: workspace:*
-        version: link:../client
       '@1c-odata/mcp':
         specifier: workspace:*
         version: link:../mcp
-      '@1c-odata/metadata':
-        specifier: workspace:*
-        version: link:../metadata
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)

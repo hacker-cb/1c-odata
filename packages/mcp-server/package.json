@@ -56,9 +56,7 @@
     "package:lint": "publint && attw --pack . --ignore-rules no-resolution cjs-resolves-to-esm"
   },
   "dependencies": {
-    "@1c-odata/client": "workspace:*",
     "@1c-odata/mcp": "workspace:*",
-    "@1c-odata/metadata": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^15.0.0",
     "express": "^5.2.1",

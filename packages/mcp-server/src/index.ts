@@ -13,6 +13,10 @@ export interface CreateHttpServerOptions {
   version?: string
   /** Response limits; forwarded to every per-session server. */
   limits?: Limits
+  /** `Host` allowlist enabling DNS-rebinding protection on the MCP transport. */
+  allowedHosts?: string[]
+  /** Max concurrent MCP sessions before new `initialize`s are refused. */
+  maxSessions?: number
 }
 
 /**
@@ -30,6 +34,10 @@ export function createHttpServer(opts: CreateHttpServerOptions): Server {
       dataDir: opts.dataDir,
       ...(opts.limits !== undefined ? { limits: opts.limits } : {}),
     })
-  const app = createApp({ buildServer })
+  const app = createApp({
+    buildServer,
+    ...(opts.allowedHosts !== undefined ? { allowedHosts: opts.allowedHosts } : {}),
+    ...(opts.maxSessions !== undefined ? { maxSessions: opts.maxSessions } : {}),
+  })
   return createServer(app)
 }

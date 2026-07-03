@@ -113,3 +113,48 @@ describe('e2e: MCP over Express /mcp', () => {
     await client.close()
   })
 })
+
+describe('e2e: DNS-rebinding protection', () => {
+  it('rejects a POST whose Host is not in allowedHosts', async () => {
+    const source: ConnectionSource = {
+      async getBase() {
+        return undefined
+      },
+      async listBases() {
+        return []
+      },
+      async getSecret() {
+        return null
+      },
+      async secretSource() {
+        return 'none'
+      },
+    }
+    const pool = new ConnectionPool(source)
+    const app = createApp({
+      buildServer: () => buildMcpServer(pool, { version: '9.9.9', dataDir: '/synthetic' }),
+      // Allowlist deliberately EXCLUDES the loopback host the request will carry.
+      allowedHosts: ['allowed.example:1234'],
+    })
+    const server = app.listen(0)
+    await new Promise<void>((r) => server.once('listening', r))
+    const { port } = server.address() as AddressInfo
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } },
+        }),
+      })
+      // The SDK's DNS-rebinding guard rejects the mismatched Host before any session opens.
+      expect(res.status).toBeGreaterThanOrEqual(400)
+      expect(res.headers.get('mcp-session-id')).toBeNull()
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()))
+    }
+  })
+})

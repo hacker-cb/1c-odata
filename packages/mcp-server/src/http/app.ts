@@ -5,6 +5,10 @@ import { createMcpRouter } from './mcp-route.js'
 export interface CreateAppOptions {
   /** Builds a fresh McpServer per session (captures the shared pool + version). */
   buildServer: () => McpServer
+  /** Forwarded to the MCP router — `Host` allowlist for DNS-rebinding protection. */
+  allowedHosts?: string[]
+  /** Forwarded to the MCP router — max concurrent sessions. */
+  maxSessions?: number
 }
 
 /**
@@ -20,7 +24,14 @@ export function createApp(opts: CreateAppOptions): Express {
     res.status(200).json({ status: 'ok' })
   })
 
-  app.use('/mcp', createMcpRouter({ buildServer: opts.buildServer }))
+  app.use(
+    '/mcp',
+    createMcpRouter({
+      buildServer: opts.buildServer,
+      ...(opts.allowedHosts !== undefined ? { allowedHosts: opts.allowedHosts } : {}),
+      ...(opts.maxSessions !== undefined ? { maxSessions: opts.maxSessions } : {}),
+    }),
+  )
 
   return app
 }

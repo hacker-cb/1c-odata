@@ -18,6 +18,10 @@
 
 // On-disk descriptor shape + secret-store escape hatch (for tests/tooling).
 export type { StoredConnection } from './config.js'
+// Shared data-dir resolver: honors `ONEC_MCP_DATA_DIR` + the absolute-path guard,
+// so an alternate host (`@1c-odata/mcp-server`) locates the SAME config.json +
+// credentials as the `1c-odata-mcp` CLI instead of diverging on a bare resolve().
+export { resolveDataDir } from './config.js'
 // Connection pool + its read-facing contract.
 export {
   ConnectionPool,
