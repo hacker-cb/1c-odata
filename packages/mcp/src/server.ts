@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ConnectionPool } from './connection-pool.js'
+import { FileConnectionSource } from './file-connection-source.js'
 import { type Limits, resolveLimits } from './limits.js'
 import { registerDataTools } from './tools/data.js'
 import { registerManagementTools } from './tools/management.js'
@@ -26,7 +27,7 @@ export function createMcpServer(opts: CreateServerOptions): McpServer {
   const insecure = opts.insecure ?? false
   const limits = opts.limits ?? resolveLimits()
   const version = opts.version ?? '0.0.0'
-  const pool = new ConnectionPool({ dataDir: opts.dataDir, insecure })
+  const pool = new ConnectionPool(new FileConnectionSource({ dataDir: opts.dataDir, insecure }))
   const server = new McpServer({ name: '1c-odata', version })
   registerSchemaTools(server, pool, limits)
   registerDataTools(server, pool, limits)

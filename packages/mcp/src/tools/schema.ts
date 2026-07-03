@@ -1,14 +1,14 @@
 import { KIND_ORDER } from '@1c-odata/metadata'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import type { ConnectionPool } from '../connection-pool.js'
+import type { ReadPool } from '../connection-pool.js'
 import { clampTop, type Limits } from '../limits.js'
 import { fitRows } from '../rows.js'
 import { toolResult } from './_result.js'
 import { describeEntity, selectEntities } from './schema-logic.js'
 
 /** Register the read-only schema-introspection tools. */
-export function registerSchemaTools(server: McpServer, pool: ConnectionPool, limits: Limits): void {
+export function registerSchemaTools(server: McpServer, pool: ReadPool, limits: Limits): void {
   server.registerTool(
     'list_connections',
     {

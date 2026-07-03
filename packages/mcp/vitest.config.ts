@@ -7,6 +7,9 @@ export default defineConfig({
     // Self-import → src (see vitest.shared.ts): unit tests exercise source
     // directly and V8 coverage attributes to src/** rather than the bundle.
     alias: {
+      // Order matters: the more specific subpath must precede the bare package,
+      // or '@1c-odata/mcp' would also swallow '@1c-odata/mcp/internal'.
+      '@1c-odata/mcp/internal': fileURLToPath(new URL('./src/internal.ts', import.meta.url)),
       '@1c-odata/mcp': fileURLToPath(new URL('./src/index.ts', import.meta.url)),
     },
   },

@@ -6,7 +6,8 @@
     "rootDir": ".",
     "noEmit": true,
     "paths": {
-      "@1c-odata/mcp": ["./src/index.ts"]
+      "@1c-odata/mcp": ["./src/index.ts"],
+      "@1c-odata/mcp/internal": ["./src/internal.ts"]
     }
   },
   "// lib": "DOM here covers msw / @mswjs/interceptors .d.ts in tests; the production tsconfig.json also enables DOM (for @modelcontextprotocol/sdk's fetch-typed transport .d.ts). Both are server-only at runtime — no browser APIs are used.",

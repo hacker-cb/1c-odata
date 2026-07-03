@@ -8,9 +8,10 @@ import {
   validateConnection,
 } from '@1c-odata/client'
 import { buildMetadataIndex, type EdmxModel, fetchMetadataXml, parseEdmx } from '@1c-odata/metadata'
-import { connectionLabel, loadConfig } from './config.js'
+import { connectionLabel } from './config.js'
+import type { ConnectionSource } from './connection-source.js'
 import { DEFAULT_METADATA_TIMEOUT_MS } from './constants.js'
-import { passwordEnvVar, type SecretSource, SecretStore } from './secret-store.js'
+import type { SecretSource } from './secret-store.js'
 
 /** A fully-resolved connection: schema artifacts + a ready client, cached together. */
 export interface PoolEntry {
@@ -37,9 +38,21 @@ export interface ConnectionSummary {
   loaded: boolean
 }
 
+/**
+ * The read-facing slice of {@link ConnectionPool} that the tool registrators
+ * depend on. A per-session scoping wrapper (`@1c-odata/mcp-server`) implements
+ * this same interface to gate access to a subset of bases without re-fetching
+ * `$metadata`, so registrators take a `ReadPool` rather than the concrete pool.
+ *
+ * @internal Not part of the semver-stable surface — see STABILITY.md.
+ */
+export interface ReadPool {
+  get(name: string): Promise<PoolEntry>
+  list(): Promise<ConnectionSummary[]>
+  refresh(name: string): void
+}
+
 export interface ConnectionPoolOptions {
-  dataDir: string
-  insecure?: boolean
   /** `$metadata` download timeout (ms). 1С EDMX is 10+ MB on real bases. */
   fetchTimeout?: number
 }
@@ -50,35 +63,40 @@ export interface ConnectionPoolOptions {
  * derives both the {@link EdmxModel} (keys/navigation) and the
  * {@link MetadataIndex} (sets/properties/enums) from the same XML — no double
  * fetch of a multi-megabyte payload.
+ *
+ * Where connections and secrets come from is abstracted behind a
+ * {@link ConnectionSource}: the local stdio server injects a
+ * {@link FileConnectionSource} (config.json + keychain), a multi-tenant host a
+ * DB-backed one. The cache is keyed on the connection name and is process-global
+ * for the pool's lifetime, so it can be shared across sessions.
  */
-export class ConnectionPool {
-  private readonly dataDir: string
-  private readonly store: SecretStore
+export class ConnectionPool implements ReadPool {
+  private readonly source: ConnectionSource
   private readonly fetchTimeout: number
   private readonly cache = new Map<string, Promise<PoolEntry>>()
 
-  constructor(opts: ConnectionPoolOptions) {
-    this.dataDir = opts.dataDir
-    this.store = new SecretStore({ dataDir: opts.dataDir, insecure: opts.insecure ?? false })
+  constructor(source: ConnectionSource, opts: ConnectionPoolOptions = {}) {
+    this.source = source
     this.fetchTimeout = opts.fetchTimeout ?? DEFAULT_METADATA_TIMEOUT_MS
   }
 
   /** Configured connections (no secrets), each annotated with its password source. */
   async list(): Promise<ConnectionSummary[]> {
-    const config = loadConfig(this.dataDir)
-    const entries = Object.entries(config.connections).sort(([a], [b]) => a.localeCompare(b))
-    // Each password source may hit the keychain independently — fan out.
-    return Promise.all(
-      entries.map(async ([name, c]) => ({
-        name,
-        label: connectionLabel(name, c),
+    const bases = await this.source.listBases()
+    // Sort here (not in the source) so every source yields a stable ordering.
+    // Each password source may hit the keychain/DB independently — fan out.
+    const summaries = await Promise.all(
+      bases.map(async (c) => ({
+        name: c.name,
+        label: connectionLabel(c.name, c),
         baseUrl: c.baseUrl,
         login: c.login,
         serverTimezone: c.serverTimezone,
-        passwordSource: await this.store.source(name),
-        loaded: this.cache.has(name),
+        passwordSource: await this.source.secretSource(c.name),
+        loaded: this.cache.has(c.name),
       })),
     )
+    return summaries.sort((a, b) => a.name.localeCompare(b.name))
   }
 
   /**
@@ -102,23 +120,22 @@ export class ConnectionPool {
   }
 
   private async build(name: string): Promise<PoolEntry> {
-    const config = loadConfig(this.dataDir)
-    const stored = config.connections[name]
+    const stored = await this.source.getBase(name)
     if (stored === undefined) {
       throw new InvalidArgumentError(`No connection named "${name}"`, { argument: 'connection' })
     }
 
-    const secret = await this.store.read(name)
+    const secret = await this.source.getSecret(name)
     if (secret === null) {
-      throw new InvalidArgumentError(
-        `No password for "${name}". Set ${passwordEnvVar(name)} or run: 1c-odata-mcp add ${name}`,
-        { argument: 'connection' },
-      )
+      const hint = this.source.missingSecretHint?.(name)
+      throw new InvalidArgumentError(`No password for "${name}".${hint !== undefined ? ` ${hint}` : ''}`, {
+        argument: 'connection',
+      })
     }
 
     const connection: Connection = {
       baseUrl: stored.baseUrl,
-      auth: { username: stored.login, password: secret.password },
+      auth: { username: stored.login, password: secret },
       serverTimezone: stored.serverTimezone,
       ...(stored.shape !== undefined ? { shape: stored.shape } : {}),
     }

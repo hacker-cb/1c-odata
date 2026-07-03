@@ -94,7 +94,7 @@ Semver-applicable:
 NOT covered:
 
 - The OS-keychain entry naming (the `service` / `account` strings) is an implementation detail — it MAY change, and a change orphans previously stored keychain secrets (re-add them, or use `ONEC_<NAME>_PASSWORD`).
-- Programmatic exports from `@1c-odata/mcp` (e.g. `SecretStore`, `passwordEnvVar`) — an escape hatch for tests/tooling, on the same footing as `@1c-odata/client/internal`.
+- Programmatic exports of `@1c-odata/mcp`. The `.` entrypoint (`createMcpServer`, `runServe`, plus the config / data-dir helpers) is a convenience for embedding the local stdio server and MAY change. The `@1c-odata/mcp/internal` subpath — the connection pool and its `ConnectionSource` seam, the read-only tool registrators, `SecretStore`, `passwordEnvVar`, and the response-limit helpers — is an explicit escape hatch consumed by `@1c-odata/mcp-server` and tests/tooling, on the same footing as `@1c-odata/client/internal` (MAY break in a minor release; safe because the packages release in lock-step).
 - Tool / CLI output text and error-message wording.
 
 The per-data-dir keychain namespacing is a **behavioral break with no migration**: a secret stored under the previous flat `1c-odata` keychain service is not found after the upgrade — re-add the password (`1c-odata-mcp add <name>`) or set `ONEC_<NAME>_PASSWORD`. `config.json`, the `credentials.json` file backend, and env-var passwords are unaffected.
