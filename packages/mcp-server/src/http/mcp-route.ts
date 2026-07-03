@@ -36,6 +36,11 @@ export interface McpRouteOptions {
 export function createMcpRouter(opts: McpRouteOptions): Router {
   const router = Router()
   const transports = new Map<string, StreamableHTTPServerTransport>()
+  // In-flight initializations not yet registered in `transports`. A session only
+  // lands in the map when `onsessioninitialized` fires (during handleRequest), so
+  // a burst of concurrent inits would otherwise slip past a `transports.size`-only
+  // cap during the `await connect()` gap. Counting these makes the cap immediate.
+  let pendingInits = 0
   const maxSessions = opts.maxSessions ?? DEFAULT_MAX_SESSIONS
   // When allowedHosts is given, turn on the SDK's Host/Origin validation.
   const rebindGuard =
@@ -56,11 +61,16 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
     const sessionId = req.headers['mcp-session-id'] as string | undefined
     const existing = sessionId !== undefined ? transports.get(sessionId) : undefined
 
-    let transport: StreamableHTTPServerTransport
     if (existing !== undefined) {
-      transport = existing
-    } else if (sessionId === undefined && isInitializeRequest(req.body)) {
-      if (transports.size >= maxSessions) {
+      // express.json() already parsed the body — pass it so the transport does not
+      // try to read the (already-consumed) request stream a second time.
+      await existing.handleRequest(req, res, req.body)
+      return
+    }
+
+    if (sessionId === undefined && isInitializeRequest(req.body)) {
+      // Cap against live + in-flight sessions (see `pendingInits`).
+      if (transports.size + pendingInits >= maxSessions) {
         res.status(503).json({
           jsonrpc: '2.0',
           error: { code: -32000, message: 'Too many active sessions' },
@@ -68,35 +78,38 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
         })
         return
       }
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (sid) => {
-          transports.set(sid, transport)
-        },
-        ...rebindGuard,
-      })
-      transport.onclose = () => {
-        const sid = transport.sessionId
-        if (sid !== undefined) transports.delete(sid)
+      pendingInits += 1
+      try {
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sid) => {
+            transports.set(sid, transport)
+          },
+          ...rebindGuard,
+        })
+        transport.onclose = () => {
+          const sid = transport.sessionId
+          if (sid !== undefined) transports.delete(sid)
+        }
+        // connect() calls transport.start() and takes ownership of the transport.
+        // Cast to Transport: the SDK's StreamableHTTPServerTransport types `onclose`
+        // as `(() => void) | undefined`, which trips the repo's exactOptionalPropertyTypes
+        // against Transport's exact-optional `onclose?: () => void`. It nominally
+        // implements Transport — the mismatch is purely the upstream `| undefined`.
+        await opts.buildServer().connect(transport as Transport)
+        await transport.handleRequest(req, res, req.body)
+      } finally {
+        // The session (on success) is now in `transports`; drop the in-flight count.
+        pendingInits -= 1
       }
-      // connect() calls transport.start() and takes ownership of the transport.
-      // Cast to Transport: the SDK's StreamableHTTPServerTransport types `onclose`
-      // as `(() => void) | undefined`, which trips the repo's exactOptionalPropertyTypes
-      // against Transport's exact-optional `onclose?: () => void`. It nominally
-      // implements Transport — the mismatch is purely the upstream `| undefined`.
-      await opts.buildServer().connect(transport as Transport)
-    } else {
-      res.status(400).json({
-        jsonrpc: '2.0',
-        error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
-        id: null,
-      })
       return
     }
 
-    // express.json() already parsed the body — pass it so the transport does not
-    // try to read the (already-consumed) request stream a second time.
-    await transport.handleRequest(req, res, req.body)
+    res.status(400).json({
+      jsonrpc: '2.0',
+      error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
+      id: null,
+    })
   })
 
   router.get('/', async (req: Request, res: Response) => {

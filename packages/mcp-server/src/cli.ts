@@ -33,7 +33,19 @@ function resolveAllowedHosts(env: NodeJS.ProcessEnv, host: string, port: number)
       .map((h) => h.trim())
       .filter((h) => h !== '')
   }
-  return [...new Set([`${host}:${port}`, `localhost:${port}`, `127.0.0.1:${port}`])]
+  // A bare IPv6 literal (e.g. `::1`) appears bracketed in the `Host` header
+  // (`[::1]:3000`); match that form so the guard doesn't reject legit requests.
+  const bind = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
+  return [...new Set([`${bind}:${port}`, `localhost:${port}`, `127.0.0.1:${port}`])]
+}
+
+/** Parse + validate `--port`; fail early and clearly instead of letting `listen` throw late on NaN. */
+function parsePort(raw: string): number {
+  const port = Number(raw)
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`Invalid --port ${JSON.stringify(raw)}: expected an integer in 0..65535`)
+  }
+  return port
 }
 
 /** Build the commander program. Exported for unit tests. */
@@ -57,7 +69,7 @@ export function buildProgram(): Command {
     .action((opts: ServeOptions) => {
       const dataDir = resolveDataDir(process.env, opts.dataDir)
       const insecure = opts.insecureStorage === true
-      const port = Number.parseInt(opts.port, 10)
+      const port = parsePort(opts.port)
       const allowedHosts = resolveAllowedHosts(process.env, opts.host, port)
       const source = new FileConnectionSource({ dataDir, insecure })
       const server = createHttpServer({ source, dataDir, allowedHosts })
