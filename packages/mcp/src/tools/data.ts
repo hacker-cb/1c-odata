@@ -12,7 +12,7 @@ import type {
 import { raw } from '@1c-odata/client/filter'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import type { ConnectionPool } from '../connection-pool.js'
+import type { ReadPool } from '../connection-pool.js'
 import { clampTop, type Limits } from '../limits.js'
 import { capLongStrings, type FitResult, fitRows, stripNoise, toJsonSafe } from '../rows.js'
 import { toolResult } from './_result.js'
@@ -94,7 +94,7 @@ function registerHint(entitySet: string): string {
 }
 
 /** Register the read-only data tools (queries, lookups, register virtual tables). */
-export function registerDataTools(server: McpServer, pool: ConnectionPool, limits: Limits): void {
+export function registerDataTools(server: McpServer, pool: ReadPool, limits: Limits): void {
   server.registerTool(
     'query',
     {

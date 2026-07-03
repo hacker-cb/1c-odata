@@ -1,0 +1,38 @@
+// packages/mcp/src/internal.ts
+/**
+ * Internal subpath: cross-package escape hatch for `@1c-odata/mcp-server` and
+ * integration tests / tooling.
+ *
+ * Symbols re-exported here are NOT semver-stable. Minor releases MAY break them.
+ * End-user code should never import from `@1c-odata/mcp/internal`. Safe because
+ * all `@1c-odata/*` packages are one changesets `fixed` group and release in
+ * lock-step, so published versions cannot drift.
+ *
+ * See `STABILITY.md` for the boundary policy. This is where the reusable building
+ * blocks live: the connection pool + its source seam, the read-only tool
+ * registrators, and response-limit helpers — everything a multi-tenant host needs
+ * to stand up its own scoped server. The connection-management tools
+ * (`add`/`remove`/`set_credentials`/`set_label`) are deliberately NOT exported —
+ * those are admin operations, not part of the remote read surface.
+ */
+
+// On-disk descriptor shape + secret-store escape hatch (for tests/tooling).
+export type { StoredConnection } from './config.js'
+// Connection pool + its read-facing contract.
+export {
+  ConnectionPool,
+  type ConnectionPoolOptions,
+  type ConnectionSummary,
+  type PoolEntry,
+  type ReadPool,
+} from './connection-pool.js'
+// The pluggable origin of connections + secrets (the multi-tenancy seam).
+export type { ConnectionSource, ListedConnection } from './connection-source.js'
+export { FileConnectionSource, type FileConnectionSourceOptions } from './file-connection-source.js'
+// Response limits.
+export { clampTop, DEFAULT_LIMITS, type Limits, resolveLimits } from './limits.js'
+export { passwordEnvVar, type SecretSource, SecretStore } from './secret-store.js'
+// Read-only tool registrators — reused verbatim by a scoped remote server.
+export { registerDataTools } from './tools/data.js'
+export { registerSchemaTools } from './tools/schema.js'
+export { registerServerInfoTool, type ServerInfoToolOptions } from './tools/server-info.js'

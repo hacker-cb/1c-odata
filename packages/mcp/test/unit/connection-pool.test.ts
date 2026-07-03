@@ -5,6 +5,7 @@ import type { EdmxModel } from '@1c-odata/metadata'
 import { buildMetadataIndex, fetchMetadataXml, parseEdmx } from '@1c-odata/metadata'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConnectionPool } from '../../src/connection-pool.js'
+import { FileConnectionSource } from '../../src/file-connection-source.js'
 
 // Stub the network + parse + index build so get() never touches a real base;
 // keep @1c-odata/client real except the client ctor (InvalidArgumentError, used
@@ -42,7 +43,7 @@ beforeEach(() => {
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
-const pool = () => new ConnectionPool({ dataDir: dir, insecure: true })
+const pool = () => new ConnectionPool(new FileConnectionSource({ dataDir: dir, insecure: true }))
 
 describe('ConnectionPool.get', () => {
   it('downloads $metadata once for concurrent calls on the same connection', async () => {
