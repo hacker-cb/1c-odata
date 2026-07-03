@@ -41,7 +41,16 @@ function makeJwksProvider(issuer: string): () => Promise<JwksResolver> {
         if (typeof meta.jwks_uri !== 'string' || meta.jwks_uri === '') {
           throw new Error(`AS metadata at ${metadataUrl} has no jwks_uri`)
         }
-        return createRemoteJWKSet(new URL(meta.jwks_uri))
+        // Constrain jwks_uri to the pinned issuer's origin: a misdirected metadata
+        // fetch (proxy/DNS misconfig, SSRF, an unexpected redirect) must never be
+        // able to point the verifier at attacker-controlled signing keys on
+        // another origin — that would let a forged token verify.
+        const jwksUrl = new URL(meta.jwks_uri)
+        const issuerOrigin = new URL(base).origin
+        if (jwksUrl.origin !== issuerOrigin) {
+          throw new Error(`AS jwks_uri origin ${jwksUrl.origin} does not match issuer origin ${issuerOrigin}`)
+        }
+        return createRemoteJWKSet(jwksUrl)
       })().catch((err: unknown) => {
         cached = undefined // don't poison the cache on a transient failure
         throw err

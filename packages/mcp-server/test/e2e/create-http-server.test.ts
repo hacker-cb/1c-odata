@@ -108,5 +108,5 @@ describe('e2e: createHttpServer (production wiring)', () => {
       await new Promise<void>((r) => server.close(() => r()))
       await close()
     }
-  }, 30000)
+  })
 })
