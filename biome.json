@@ -71,6 +71,14 @@
           "complexity": { "useLiteralKeys": "off" }
         }
       }
+    },
+    {
+      "includes": ["packages/*/scripts/**"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" }
+        }
+      }
     }
   ]
 }

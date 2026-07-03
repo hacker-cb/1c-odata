@@ -17,6 +17,12 @@ export default defineConfig({
     // `test:e2e` positionally filters to test/e2e.
     include: ['test/**/*.test.ts'],
     environment: 'node',
+    // The auth e2e boots an ephemeral better-auth AS over PGlite (WASM init +
+    // schema push) and drives a full OAuth flow. On the slower Windows CI runner
+    // this exceeds vitest's default 5s test / 10s hook budgets, so raise both;
+    // unit tests finish in ms and are unaffected.
+    testTimeout: 60000,
+    hookTimeout: 60000,
     coverage,
   },
 })

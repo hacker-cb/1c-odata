@@ -6,6 +6,7 @@ import { FileConnectionSource, resolveDataDir } from '@1c-odata/mcp/internal'
 import { Command } from 'commander'
 import { createHttpServer } from './index.js'
 import { logger } from './logger.js'
+import type { Dialect } from './store/db.js'
 import { readPackageVersion } from './version.js'
 
 const DEFAULT_PORT = 3000
@@ -16,6 +17,9 @@ interface ServeOptions {
   insecureStorage?: boolean
   port: string
   host: string
+  publicUrl?: string
+  pgUrl?: string
+  authDataDir?: string
 }
 
 /**
@@ -56,6 +60,18 @@ function parsePort(raw: string): number {
   return port
 }
 
+/**
+ * Resolve the auth store dialect. Prod: --pg-url / DATABASE_URL → node-postgres.
+ * Dev: --auth-data-dir / ONEC_MCP_AUTH_DATA_DIR → persistent pglite; absent →
+ * in-memory pglite (state resets each run — dev/demo only).
+ */
+function resolveDialect(env: NodeJS.ProcessEnv, opts: ServeOptions): Dialect {
+  const pg = opts.pgUrl ?? env.DATABASE_URL
+  if (pg !== undefined && pg !== '') return { kind: 'pg', connectionString: pg }
+  const dir = opts.authDataDir ?? env.ONEC_MCP_AUTH_DATA_DIR
+  return dir !== undefined && dir !== '' ? { kind: 'pglite', dataDir: dir } : { kind: 'pglite' }
+}
+
 /** Build the commander program. Exported for unit tests. */
 export function buildProgram(): Command {
   const program = new Command()
@@ -74,16 +90,53 @@ export function buildProgram(): Command {
     .option('--insecure-storage', 'store passwords in a 0600 file instead of the OS keychain', false)
     .option('--port <port>', 'TCP port to listen on', String(DEFAULT_PORT))
     .option('--host <host>', 'host/interface to bind', DEFAULT_HOST)
-    .action((opts: ServeOptions) => {
+    // Auth (Slice 2). Absent --public-url → no-auth server (Slice-1 behavior).
+    .option('--public-url <url>', 'external https origin enabling OAuth auth (e.g. https://mcp.example.com)')
+    .option('--pg-url <url>', 'Postgres connection string for the auth store (else DATABASE_URL; else pglite)')
+    .option('--auth-data-dir <path>', 'persist the pglite auth store here (dev; else in-memory)')
+    .action(async (opts: ServeOptions) => {
       const dataDir = resolveDataDir(process.env, opts.dataDir)
       const insecure = opts.insecureStorage === true
       const port = parsePort(opts.port)
       const allowedHosts = resolveAllowedHosts(process.env, opts.host, port)
       const source = new FileConnectionSource({ dataDir, insecure })
-      const server = createHttpServer({ source, dataDir, allowedHosts })
-      server.listen(port, opts.host, () => {
-        logger.info({ host: opts.host, port, dataDir, allowedHosts }, 'MCP HTTP server listening')
+
+      const publicUrl = opts.publicUrl ?? process.env.ONEC_MCP_PUBLIC_URL
+      let auth: NonNullable<Parameters<typeof createHttpServer>[0]['auth']> | undefined
+      if (publicUrl !== undefined && publicUrl !== '') {
+        const secret = process.env.BETTER_AUTH_SECRET ?? process.env.AUTH_SECRET
+        if (secret === undefined || secret === '') {
+          throw new Error('BETTER_AUTH_SECRET is required when --public-url enables auth')
+        }
+        auth = { publicUrl, dialect: resolveDialect(process.env, opts), secret }
+      }
+
+      const { server, close } = await createHttpServer({
+        source,
+        dataDir,
+        allowedHosts,
+        ...(auth !== undefined ? { auth } : {}),
       })
+      server.on('error', (err: Error) => {
+        logger.error({ err: err.message }, 'HTTP server error')
+        void close()
+      })
+      server.listen(port, opts.host, () => {
+        logger.info(
+          { host: opts.host, port, dataDir, allowedHosts, auth: auth !== undefined },
+          'MCP HTTP server listening',
+        )
+      })
+      // Graceful shutdown: stop accepting connections, then drain the auth store
+      // (pg pool). Once both close, the event loop empties and the process exits.
+      const shutdown = (sig: NodeJS.Signals): void => {
+        logger.info({ sig }, 'shutting down')
+        server.close(() => {
+          void close()
+        })
+      }
+      process.once('SIGINT', () => shutdown('SIGINT'))
+      process.once('SIGTERM', () => shutdown('SIGTERM'))
     })
 
   return program
