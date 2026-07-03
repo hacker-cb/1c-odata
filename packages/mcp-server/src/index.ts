@@ -152,7 +152,9 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
     return {
       server: createServer(app),
       async close() {
-        healthJob?.stop() // stop probing BEFORE the DB handle closes (avoid an in-flight upsert race)
+        // Stop the timer AND await any in-flight sweep (incl. the runOnce seed)
+        // BEFORE the DB handle closes, so a probe/upsert can't race dbHandle.close().
+        await healthJob?.stop()
         await dbHandle.close()
       },
     }

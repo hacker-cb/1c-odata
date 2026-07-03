@@ -86,7 +86,12 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
   try {
     assertValidConnectionName(name)
   } catch {
-    reform(res, req.body, `Invalid base name "${name}" — ASCII letters/digits/-/_ only.`, editName)
+    reform(
+      res,
+      req.body,
+      `Invalid base name "${name}" — must start with an ASCII letter or digit, then letters, digits, hyphens or underscores.`,
+      editName,
+    )
     return
   }
 
