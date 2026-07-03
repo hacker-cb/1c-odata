@@ -53,13 +53,21 @@
     "test:integration:live": "echo no live integration in mcp-server && exit 0",
     "test:integration:write": "echo no write integration in mcp-server && exit 0",
     "test:e2e": "vitest run test/e2e",
-    "package:lint": "publint && attw --pack . --ignore-rules no-resolution cjs-resolves-to-esm"
+    "package:lint": "publint && attw --pack . --ignore-rules no-resolution cjs-resolves-to-esm",
+    "auth:schema": "npx -y @better-auth/cli@1.6.23 generate --config ./auth.config.ts --yes && drizzle-kit generate"
   },
   "dependencies": {
     "@1c-odata/mcp": "workspace:*",
+    "@better-auth/drizzle-adapter": "^1.6.23",
+    "@better-auth/oauth-provider": "^1.6.23",
+    "@electric-sql/pglite": "^0.5.4",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-auth": "^1.6.23",
     "commander": "^15.0.0",
+    "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
+    "jose": "^6.2.3",
+    "pg": "^8.22.0",
     "pino": "^10.3.1"
   },
   "publishConfig": {
@@ -68,6 +76,8 @@
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
     "msw": "^2.14.6"
   }
 }

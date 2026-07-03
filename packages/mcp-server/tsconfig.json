@@ -1,14 +1,15 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "src",
+    "rootDir": ".",
     "outDir": "dist",
     "lib": ["ES2023", "DOM"],
     "types": ["node"],
     "skipLibCheck": true
   },
+  "// rootDir": "Set to the package root (not src) so the generated auth-schema.ts — which lives at the root for drizzle-kit to scan — is inside rootDir when src/store/schema.ts re-exports it. Typecheck runs --noEmit; the real build is driven by tsdown's own entry points (src/cli.ts, src/index.ts), so this rootDir only bounds type-checking, not emit layout.",
   "// lib": "DOM is needed because @modelcontextprotocol/sdk's transport .d.ts references fetch globals (HeadersInit). The MCP server itself is server-only at runtime (HTTP transport, no browser APIs).",
   "// skipLibCheck": "Scoped override of the repo's base skipLibCheck:false. Two unavoidable third-party .d.ts do not compile under the repo's strict exactOptionalPropertyTypes: @modelcontextprotocol/sdk's StreamableHTTPServerTransport (its own class-implements-Transport onclose typing) and pino→thread-stream (worker_threads.TransferListItem). Our own sources are still fully type-checked.",
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "auth-schema.ts", "auth.config.ts"],
   "exclude": ["dist", "node_modules", "test"]
 }
