@@ -33,6 +33,9 @@ export class ScopedPool implements ReadPool {
 
   async list(): Promise<ConnectionSummary[]> {
     const granted = await this.grants()
+    // Fail-closed short-circuit: a zero-grant user sees nothing, so skip the shared
+    // pool's full list entirely (the common case for a token with no grants yet).
+    if (granted.size === 0) return []
     const all = await this.shared.list()
     return all.filter((c) => granted.has(c.name))
   }

@@ -13,19 +13,23 @@ export async function grantsPage(req: Request, res: Response, deps: AdminDeps): 
   })
   const bases = (await deps.baseRepo.list()).map((b) => b.name)
 
-  // matrix key = `${sub}|${base}` → scope. One resolve() per user (small N).
+  // matrix key = `${sub}|${base}` → scope. ONE query for every grant, not an
+  // N+1 resolve() per user (up to 200 sequential queries for a 200-user list).
   const matrix: Record<string, GrantScope> = {}
-  for (const u of users) {
-    const g = await deps.grantRepo.resolve(u.id)
-    for (const [base, scope] of g) matrix[`${u.id}|${base}`] = scope
-  }
+  for (const g of await deps.grantRepo.listAll()) matrix[`${g.sub}|${g.baseName}`] = g.scope
   page(res, 'grants_editor', { users, bases, matrix }, 'Grants')
 }
 
 /** POST /admin/grants/toggle — set/revoke one cell, return the swapped cell. */
 export async function toggleGrant(req: Request, res: Response, deps: AdminDeps): Promise<void> {
-  const sub = String(req.body.sub)
-  const base = String(req.body.base)
+  // Validate presence explicitly: `String(undefined)` would coerce a missing field
+  // to the literal "undefined" and silently grant/revoke a bogus (sub, base).
+  const sub = req.body.sub
+  const base = req.body.base
+  if (typeof sub !== 'string' || sub === '' || typeof base !== 'string' || base === '') {
+    res.status(400).type('html').send('<p class="err">Missing sub or base.</p>')
+    return
+  }
   const scope: GrantScope = req.body.scope === 'write' ? 'write' : 'read'
   const granted = req.body.granted === 'on'
 

@@ -39,6 +39,17 @@ describe('e2e: /mcp requires a valid Bearer JWT', () => {
     expect((await res.json()).jwks_uri).toContain('/jwks')
   })
 
+  it('discovery: 200 AS metadata at the issuer path-suffix /.well-known/oauth-authorization-server/api/auth', async () => {
+    // Our PRM advertises the issuer as `${publicUrl}/api/auth`, so an RFC 8414
+    // client appends its suffix → this path. It must serve the SAME document as
+    // the root route (CORS-open), else discovery breaks for clients without a
+    // root/OIDC fallback.
+    const res = await fetch(`${appBase}/.well-known/oauth-authorization-server/api/auth`)
+    expect(res.status).toBe(200)
+    expect((await res.json()).jwks_uri).toContain('/jwks')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+  })
+
   it('401 + WWW-Authenticate(resource_metadata) when no token', async () => {
     const res = await fetch(`${appBase}/mcp`, {
       method: 'POST',

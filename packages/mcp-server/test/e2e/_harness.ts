@@ -27,17 +27,40 @@ export interface AuthHarness {
   // biome-ignore lint/suspicious/noExplicitAny: the inferred betterAuth() type is not portable; only structural use here.
   auth: any
   /**
-   * Run signUp→signIn→DCR→authorize(+consent)→token. Sends `resource` on BOTH
-   * authorize and token when provided → a signed JWT; omit it → an opaque token.
+   * Run createUser(admin)→signIn→DCR→authorize(+consent)→token. Sends `resource`
+   * on BOTH authorize and token when provided → a signed JWT; omit it → an opaque
+   * token.
    */
   mintToken(o?: { resource?: string; scope?: string }): Promise<string>
   close(): Promise<void>
 }
 
-/** All the state-changing OAuth POSTs a browser client would make, carrying Origin for CSRF. */
+/**
+ * Provision a user through the admin() plugin's trusted server path (header-less,
+ * so the create-check is skipped — the same path `admin-create` uses). Public
+ * self-service sign-up is disabled in production (`disableSignUp: true`), so tests
+ * must create users this way rather than POSTing /sign-up/email.
+ */
+export async function createTestUser(
+  // biome-ignore lint/suspicious/noExplicitAny: the inferred betterAuth() type is not portable; only structural use here.
+  auth: any,
+  o: { email: string; password: string; name?: string },
+): Promise<void> {
+  await auth.api.createUser({
+    body: { email: o.email, password: o.password, name: o.name ?? 'E2E', role: 'user' },
+  })
+}
+
+/**
+ * All the state-changing OAuth POSTs a browser client would make, carrying Origin
+ * for CSRF. The user is provisioned through the admin plugin (`auth`) — public
+ * sign-up is disabled — then signed IN over HTTP to obtain the session cookie.
+ */
 export async function runFlow(
   base: string,
   publicUrl: string,
+  // biome-ignore lint/suspicious/noExplicitAny: the inferred betterAuth() type is not portable; only structural use here.
+  auth: any,
   opts: { resource?: string; scope?: string },
 ): Promise<string> {
   const scope = opts.scope ?? 'openid mcp:read offline_access'
@@ -46,12 +69,9 @@ export async function runFlow(
   const codeVerifier = b64url(randomBytes(32))
   const codeChallenge = b64url(createHash('sha256').update(codeVerifier).digest())
 
-  // Sign up, then sign in to obtain the session cookie.
-  await fetch(`${base}/sign-up/email`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', origin: publicUrl },
-    body: JSON.stringify({ email, password, name: 'E2E' }),
-  })
+  // Provision the user via the admin plugin (self-service sign-up is disabled),
+  // then sign in over HTTP to obtain the session cookie.
+  await createTestUser(auth, { email, password })
   const signIn = await fetch(`${base}/sign-in/email`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', origin: publicUrl },
@@ -231,7 +251,7 @@ export async function startAuthServer(extraResourcePaths: string[] = []): Promis
     publicUrl,
     mcpUrl,
     auth,
-    mintToken: (o = {}) => runFlow(base, publicUrl, o),
+    mintToken: (o = {}) => runFlow(base, publicUrl, auth, o),
     async close() {
       await new Promise<void>((r) => srv.server.close(() => r()))
     },

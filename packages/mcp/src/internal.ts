@@ -49,6 +49,10 @@ export { FileConnectionSource, type FileConnectionSourceOptions } from './file-c
 // Response limits.
 export { clampTop, DEFAULT_LIMITS, type Limits, resolveLimits } from './limits.js'
 export { passwordEnvVar, type SecretSource, SecretStore } from './secret-store.js'
+// The uniform tool-result wrapper — so a scoped remote server can register its own
+// small read-only tools (e.g. a redacted, DB-aware `server_info`) with the same
+// success/error envelope the built-in tools use.
+export { toolResult } from './tools/_result.js'
 // Read-only tool registrators — reused verbatim by a scoped remote server.
 export { registerDataTools } from './tools/data.js'
 export { registerSchemaTools } from './tools/schema.js'

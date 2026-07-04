@@ -158,6 +158,10 @@ export function buildProgram(): Command {
       })
       server.on('error', (err: Error) => {
         logger.error({ err: err.message }, 'HTTP server error')
+        // A listen failure (EADDRINUSE / EACCES) must not exit 0 — set a non-zero
+        // exit code so an orchestrator/CI sees the boot failure. `close()` is
+        // idempotent, so this is safe alongside the SIGINT/SIGTERM path.
+        process.exitCode = 1
         void close()
       })
       server.listen(port, opts.host, () => {
@@ -199,6 +203,16 @@ export function buildProgram(): Command {
         throw new Error('BETTER_AUTH_SECRET is required')
       }
       const dialect = resolveDialect(process.env, { ...opts, port: '', host: '' } as ServeOptions)
+      // A bootstrapped admin must OUTLIVE this process. An in-memory pglite (no
+      // --pg-url/DATABASE_URL and no --auth-data-dir/ONEC_MCP_AUTH_DATA_DIR) is
+      // discarded on close, so the admin would vanish before any `serve` — a silent
+      // no-op. Require a persistent store and fail loudly instead.
+      if (dialect.kind === 'pglite' && dialect.dataDir === undefined) {
+        throw new Error(
+          'admin-create needs a PERSISTENT auth store, else the admin is lost when this process exits. ' +
+            'Pass --pg-url (or DATABASE_URL), or --auth-data-dir (or ONEC_MCP_AUTH_DATA_DIR) matching your `serve`.',
+        )
+      }
       const dbHandle = createDb(dialect)
       try {
         await runAuthMigrations(dbHandle)

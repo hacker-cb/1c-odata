@@ -43,7 +43,9 @@ export function migrationsFolder(): string {
  */
 export async function runAuthMigrations(handle: DbHandle): Promise<void> {
   if (handle.dialect === 'pglite') {
-    // Dynamic import: drizzle-kit is a devDependency; never pulled into the prod path.
+    // Dynamic import so the pg (prod) path never loads drizzle-kit. It IS a runtime
+    // dependency (the CLI defaults to pglite), kept external from the bundle so it
+    // resolves from node_modules — see tsdown.config.ts.
     const { pushSchema } = await import('drizzle-kit/api')
     const { apply } = await pushSchema(
       schema as Record<string, unknown>,

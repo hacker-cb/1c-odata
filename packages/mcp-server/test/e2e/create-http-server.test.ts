@@ -74,7 +74,7 @@ describe('e2e: createHttpServer (production wiring)', () => {
   it('auth mode: the embedded AS gates /mcp, serves discovery, and admits a minted JWT', async () => {
     const port = await freePort()
     const publicUrl = `http://127.0.0.1:${port}`
-    const { server, close } = await createHttpServer({
+    const { server, close, auth } = await createHttpServer({
       source,
       dataDir: '/synthetic',
       auth: { publicUrl, dialect: { kind: 'pglite' }, secret: SECRET },
@@ -95,7 +95,9 @@ describe('e2e: createHttpServer (production wiring)', () => {
       expect(asm.status).toBe(200)
 
       // (3) A JWT minted against the server's OWN embedded AS passes the gate.
-      const token = await runFlow(`${publicUrl}/api/auth`, publicUrl, {
+      // Public sign-up is disabled, so the flow provisions the user via the admin
+      // plugin on the server's OWN better-auth instance (exposed on the handle).
+      const token = await runFlow(`${publicUrl}/api/auth`, publicUrl, auth, {
         resource: `${publicUrl}/mcp`,
         scope: 'mcp:read',
       })

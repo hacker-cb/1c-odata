@@ -95,7 +95,14 @@ export function buildAuth(opts: BuildAuthOptions): Auth {
     baseURL: urls.publicUrl, // → mount at /api/auth; `iss` defaults to this base
     secret,
     trustedOrigins: opts.trustedOrigins ?? [urls.publicUrl],
-    emailAndPassword: { enabled: true },
+    // Sign-IN stays enabled (the OAuth login page + admin login use it), but
+    // public self-service sign-UP is OFF: users are provisioned by an admin
+    // (the `admin-create` CLI seed and the admin panel's createUser go through
+    // the admin() plugin's trusted server path, which bypasses this flag). This
+    // closes the open-registration bypass — otherwise, on the auth-WITHOUT-keyring
+    // path (unscoped file pool), anyone could self-register and mint an mcp:read
+    // token that reads every configured base.
+    emailAndPassword: { enabled: true, disableSignUp: true },
     database: drizzleAdapter(db, { provider: 'pg' }), // "pg" for BOTH pglite and node-postgres
     plugins: [
       jwt(), // asymmetric signing + JWKS at /api/auth/jwks (default alg EdDSA/Ed25519)
