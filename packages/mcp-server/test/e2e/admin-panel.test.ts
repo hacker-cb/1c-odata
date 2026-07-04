@@ -154,6 +154,20 @@ describe('admin panel over HTTP', () => {
     })
   })
 
+  describe('required-field validation', () => {
+    it('a same-origin POST with a missing field is a 400, createUser not called', async () => {
+      session.value = { user: { role: 'admin' }, session: {} }
+      const res = await fetch(`${origin}/admin/users`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://127.0.0.1' },
+        body: 'email=e@x&role=user', // password omitted → must not coerce to "undefined"
+      })
+      expect(res.status).toBe(400)
+      expect(await res.text()).toContain('Missing email or password')
+      expect(createUserApi).not.toHaveBeenCalled()
+    })
+  })
+
   describe('plugin-level authz (second layer)', () => {
     it('forwards the admin session headers to createUser so the plugin can authorize', async () => {
       session.value = { user: { role: 'admin' }, session: {} }
