@@ -6,11 +6,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   fixedExtension: false,
-  // `drizzle-kit` is a RUNTIME dependency (it's dynamically imported on the pglite
-  // migration path — src/store/migrate.ts — and the CLI defaults to pglite), so it
-  // must resolve from node_modules at runtime rather than be bundled. Keep it (and
-  // the optional sqlite drivers it lazy-imports) EXTERNAL so the prod artifact
-  // stays lean and the build emits no UNRESOLVED_IMPORT noise for drivers we never
-  // touch. The pg path uses drizzle-orm's migrator, which IS bundled.
-  external: ['drizzle-kit', 'drizzle-kit/api'],
+  // Both migration paths (src/store/migrate.ts) use a drizzle-orm migrator, which
+  // bundles cleanly; nothing here imports drizzle-kit at runtime (it's a build-time
+  // dep for `drizzle-kit generate` only), so no runtime externals are needed.
 })

@@ -3,15 +3,13 @@ import { createHash, randomBytes } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { ConnectionPool, type ConnectionSource } from '@1c-odata/mcp/internal'
-import { PGlite } from '@electric-sql/pglite'
-import { pushSchema } from 'drizzle-kit/api'
-import { drizzle } from 'drizzle-orm/pglite'
 import { buildAuth } from '../../src/auth/better-auth.js'
 import { resolveCanonicalUrls } from '../../src/auth/config.js'
 import { createApp } from '../../src/http/app.js'
 import { createAuthMount } from '../../src/http/auth-mount.js'
 import { buildMcpServer } from '../../src/server-factory.js'
-import * as schema from '../../src/store/schema.js'
+import { createDb } from '../../src/store/db.js'
+import { runAuthMigrations } from '../../src/store/migrate.js'
 
 const REDIRECT_URI = 'http://127.0.0.1:9999/callback' // never dereferenced (headless)
 
@@ -231,19 +229,19 @@ export async function startAuthServer(extraResourcePaths: string[] = []): Promis
   const mcpUrl = `${publicUrl}/mcp`
   const base = `${publicUrl}/api/auth`
   const extraAudiences = extraResourcePaths.map((p) => `${base}${p}`)
-  // Use the REAL production buildAuth (not a hand-copied plugin set) so this e2e
-  // doubles as a schema-drift guard: the committed auth-schema.ts is pushed below,
-  // and if a plugin is added to buildAuth without regenerating the schema, the
+  // Use the REAL production wiring (createDb + runAuthMigrations + buildAuth, not a
+  // hand-copied plugin set or a separate schema push) so this e2e doubles as a
+  // migration-drift guard: it applies the committed ./drizzle SQL, and if a plugin
+  // is added to buildAuth without regenerating auth-schema.ts + the SQL, the
   // authorize→consent→token flow touches a missing table and the test fails.
-  const db = drizzle(new PGlite(), { schema })
+  const handle = createDb({ kind: 'pglite' })
   const auth = buildAuth({
     urls: resolveCanonicalUrls(publicUrl),
-    db,
+    db: handle.db,
     secret: 'e2e-secret-not-for-prod-0123456789',
     extraAudiences,
   })
-  const { apply } = await pushSchema(schema as Record<string, unknown>, db as never)
-  await apply()
+  await runAuthMigrations(handle)
   srv.setHandler((req) => auth.handler(req))
 
   return {
@@ -254,6 +252,7 @@ export async function startAuthServer(extraResourcePaths: string[] = []): Promis
     mintToken: (o = {}) => runFlow(base, publicUrl, auth, o),
     async close() {
       await new Promise<void>((r) => srv.server.close(() => r()))
+      await handle.close()
     },
   }
 }
