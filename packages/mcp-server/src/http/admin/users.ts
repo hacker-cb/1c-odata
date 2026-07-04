@@ -15,11 +15,20 @@ export async function usersPage(req: Request, res: Response, deps: AdminDeps): P
 
 /** POST /admin/users — create (admin session authorizes; role defaults to 'user'). */
 export async function createUser(req: Request, res: Response, deps: AdminDeps): Promise<void> {
+  // Validate presence explicitly: `String(undefined)` would coerce a missing field
+  // to the literal "undefined" and create a bogus user (or surface as a 500 from
+  // the admin error middleware). Mirror toggleGrant's 400 + HTML-fragment contract.
+  const email = req.body.email
+  const password = req.body.password
+  if (typeof email !== 'string' || email === '' || typeof password !== 'string' || password === '') {
+    res.status(400).type('html').send('<p class="err">Missing email or password.</p>')
+    return
+  }
   const { user } = await deps.auth.api.createUser({
     headers: fromNodeHeaders(req.headers),
     body: {
-      email: String(req.body.email),
-      password: String(req.body.password),
+      email,
+      password,
       name: String(req.body.name ?? ''),
       role: req.body.role === 'admin' ? 'admin' : 'user',
     },
