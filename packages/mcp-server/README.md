@@ -103,8 +103,9 @@ server.listen(3000)
   `localhost`/`127.0.0.1`) plus — when `--public-url` is set — the public origin's
   `Host`, so a reverse proxy that forwards the original `Host` needs no extra
   config. Only when the proxy presents a *different* `Host` set
-  `ONEC_MCP_ALLOWED_HOSTS` (comma-separated `host:port`, respected verbatim as an
-  override).
+  `ONEC_MCP_ALLOWED_HOSTS` — comma-separated raw `Host` values (`host` with the
+  default port omitted, as clients send it, or `host:port`), respected verbatim as
+  an override.
 - Sessions are pinned to the authenticated principal (`sub`): a request whose
   token belongs to a different user is rejected. 1С passwords are write-only in
   the admin UI and never returned in any response.

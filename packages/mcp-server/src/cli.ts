@@ -72,9 +72,11 @@ export function publicUrlHostVariants(publicUrl: string): string[] {
 }
 
 /**
- * `Host` allowlist for the transport's DNS-rebinding guard.
- * `ONEC_MCP_ALLOWED_HOSTS` (comma-separated `host:port`) is an explicit override,
- * respected verbatim. Otherwise derive it from the bind address plus the loopback
+ * `Host` allowlist for the transport's DNS-rebinding guard. The transport matches
+ * the raw `Host` header by exact string, so entries are raw `Host` values —
+ * `host` (default port omitted, as clients send it) or `host:port`.
+ * `ONEC_MCP_ALLOWED_HOSTS` (comma-separated) is an explicit override, respected
+ * verbatim. Otherwise derive it from the bind address plus the loopback
  * aliases a local client may present, AND — when `--public-url` is set — the
  * public origin's `Host` form, so a reverse-proxy deployment that forwards the
  * original `Host` needs no separate `ONEC_MCP_ALLOWED_HOSTS`.

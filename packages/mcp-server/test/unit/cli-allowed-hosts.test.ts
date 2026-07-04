@@ -46,4 +46,17 @@ describe('publicUrlHostVariants', () => {
   it('preserves a non-default port and adds no default variant', () => {
     expect(publicUrlHostVariants('https://a.example:8443')).toEqual(['a.example:8443'])
   })
+
+  it('still emits the portless form when the default port is written explicitly', () => {
+    // URL normalizes :443/:80 away, so port === '' and BOTH forms are produced —
+    // a client that omits the default port still matches.
+    expect(publicUrlHostVariants('https://a.example:443')).toEqual(['a.example', 'a.example:443'])
+    expect(publicUrlHostVariants('http://a.example:80')).toEqual(['a.example', 'a.example:80'])
+  })
+
+  it('keeps IPv6 hosts bracketed in both the bare and explicit-port forms', () => {
+    // URL.hostname returns the bracketed literal, so the Host-header form is exact.
+    expect(publicUrlHostVariants('https://[::1]')).toEqual(['[::1]', '[::1]:443'])
+    expect(publicUrlHostVariants('https://[::1]:3000')).toEqual(['[::1]:3000'])
+  })
 })
