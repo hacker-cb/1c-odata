@@ -49,13 +49,39 @@ function resolveKeyring(env: NodeJS.ProcessEnv, opts: ServeOptions): Keyring | u
 }
 
 /**
- * `Host` allowlist for the transport's DNS-rebinding guard.
- * `ONEC_MCP_ALLOWED_HOSTS` (comma-separated `host:port`) overrides for
- * reverse-proxy deployments where the public `Host` differs from the bound
- * address; otherwise derive it from the bind address plus the loopback aliases a
- * local client may present.
+ * The `Host`-header value(s) a client presents for the public origin. The
+ * transport matches the raw `Host` header by EXACT string, and clients drop a
+ * default port (`https://x` → `Host: x`, `https://x:8443` → `Host: x:8443`), so
+ * `URL.host` is the canonical form — plus, when the port is defaulted, the
+ * explicit `host:defaultPort` form in case a proxy keeps it. Returns `[]` for an
+ * unparseable URL (the origin is validated for real by `resolveCanonicalUrls`).
  */
-function resolveAllowedHosts(env: NodeJS.ProcessEnv, host: string, port: number): string[] {
+export function publicUrlHostVariants(publicUrl: string): string[] {
+  let url: URL
+  try {
+    url = new URL(publicUrl)
+  } catch {
+    return []
+  }
+  const variants = [url.host]
+  if (url.port === '') {
+    const def = url.protocol === 'https:' ? '443' : url.protocol === 'http:' ? '80' : ''
+    if (def !== '') variants.push(`${url.hostname}:${def}`)
+  }
+  return variants
+}
+
+/**
+ * `Host` allowlist for the transport's DNS-rebinding guard. The transport matches
+ * the raw `Host` header by exact string, so entries are raw `Host` values —
+ * `host` (default port omitted, as clients send it) or `host:port`.
+ * `ONEC_MCP_ALLOWED_HOSTS` (comma-separated) is an explicit override, respected
+ * verbatim. Otherwise derive it from the bind address plus the loopback
+ * aliases a local client may present, AND — when `--public-url` is set — the
+ * public origin's `Host` form, so a reverse-proxy deployment that forwards the
+ * original `Host` needs no separate `ONEC_MCP_ALLOWED_HOSTS`.
+ */
+export function resolveAllowedHosts(env: NodeJS.ProcessEnv, host: string, port: number, publicUrl?: string): string[] {
   const override = env.ONEC_MCP_ALLOWED_HOSTS?.trim()
   if (override !== undefined && override !== '') {
     return override
@@ -69,7 +95,12 @@ function resolveAllowedHosts(env: NodeJS.ProcessEnv, host: string, port: number)
   // Include both loopback families: a client may reach the server via either the
   // IPv4 or the IPv6 loopback regardless of the bind address (e.g. `--host ::`
   // still answers `http://[::1]:<port>`), and each yields a distinct `Host` header.
-  return [...new Set([`${bind}:${port}`, `localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`])]
+  const hosts = [`${bind}:${port}`, `localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`]
+  // Behind a proxy the public `Host` (from --public-url) differs from the bind
+  // address; auto-allow it so the common single-instance proxy case needs no
+  // ONEC_MCP_ALLOWED_HOSTS. An explicit override above still wins.
+  if (publicUrl !== undefined && publicUrl !== '') hosts.push(...publicUrlHostVariants(publicUrl))
+  return [...new Set(hosts)]
 }
 
 /**
@@ -128,10 +159,12 @@ export function buildProgram(): Command {
       const dataDir = resolveDataDir(process.env, opts.dataDir)
       const insecure = opts.insecureStorage === true
       const port = parsePort(opts.port)
-      const allowedHosts = resolveAllowedHosts(process.env, opts.host, port)
       const source = new FileConnectionSource({ dataDir, insecure })
 
       const publicUrl = opts.publicUrl ?? process.env.ONEC_MCP_PUBLIC_URL
+      // Fold the public origin's Host into the DNS-rebinding allowlist so a reverse
+      // proxy forwarding the original Host needs no separate ONEC_MCP_ALLOWED_HOSTS.
+      const allowedHosts = resolveAllowedHosts(process.env, opts.host, port, publicUrl)
       let auth: NonNullable<Parameters<typeof createHttpServer>[0]['auth']> | undefined
       if (publicUrl !== undefined && publicUrl !== '') {
         const secret = process.env.BETTER_AUTH_SECRET ?? process.env.AUTH_SECRET
