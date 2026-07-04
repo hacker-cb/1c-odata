@@ -99,9 +99,12 @@ server.listen(3000)
 ## Hardening
 
 - **DNS-rebinding protection** (via `serve`): the transport validates the `Host`
-  header against an allowlist derived from the bound address (`host:port` +
-  `localhost`/`127.0.0.1`). Behind a reverse proxy whose public host differs, set
-  `ONEC_MCP_ALLOWED_HOSTS` (comma-separated `host:port`).
+  header against an allowlist. It is derived from the bound address (`host:port` +
+  `localhost`/`127.0.0.1`) plus — when `--public-url` is set — the public origin's
+  `Host`, so a reverse proxy that forwards the original `Host` needs no extra
+  config. Only when the proxy presents a *different* `Host` set
+  `ONEC_MCP_ALLOWED_HOSTS` (comma-separated `host:port`, respected verbatim as an
+  override).
 - Sessions are pinned to the authenticated principal (`sub`): a request whose
   token belongs to a different user is rejected. 1С passwords are write-only in
   the admin UI and never returned in any response.
