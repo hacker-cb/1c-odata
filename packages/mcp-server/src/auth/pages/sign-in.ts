@@ -14,6 +14,15 @@ import type { Request, Response } from 'express'
  * request query is never interpolated into the server-rendered markup, so a
  * `</script>`-bearing query cannot break out of the inline script (reflected XSS).
  * The page is therefore fully static.
+ *
+ * Two arrival paths:
+ *   - OAuth login: the plugin appends the authorize query → after sign-in we
+ *     resume `/api/auth/oauth2/authorize?<same query>`.
+ *   - Admin gate: an anonymous `/admin` visit redirects to `/sign-in?next=/admin`
+ *     → after sign-in we go to that `next`. Only a SAFE same-origin relative path
+ *     (starts with a single `/`, not `//` — which is a protocol-relative URL to
+ *     another host) is honored client-side; anything else falls back to the OAuth
+ *     resume. This blocks an open-redirect via a crafted `next`.
  */
 export function signInPage(_req: Request, res: Response): void {
   res.status(200).type('html').send(SIGN_IN_HTML)
@@ -31,10 +40,17 @@ const SIGN_IN_HTML = `<!doctype html>
   <p id="err" style="color:#c00"></p>
 </form>
 <script>
-// Resume the OAuth flow after login by replaying THIS page's query (the authorize
-// params the plugin appended). Read client-side so no request data is ever
-// interpolated into the server-rendered markup.
-const RESUME = '/api/auth/oauth2/authorize' + window.location.search;
+// Decide where to land after a successful sign-in, client-side so no request data
+// is ever interpolated into the server-rendered markup.
+//   - a SAFE same-origin ?next (relative path: one leading '/', not '//') → go there
+//     (the admin gate sets ?next=/admin);
+//   - otherwise resume the OAuth flow by replaying the authorize params the plugin
+//     appended to this page's query.
+function resumeTarget() {
+  const next = new URLSearchParams(window.location.search).get('next');
+  if (next && next[0] === '/' && next[1] !== '/') return next;
+  return '/api/auth/oauth2/authorize' + window.location.search;
+}
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
@@ -44,7 +60,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
     credentials: 'same-origin',
     body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }),
   });
-  if (r.ok) { window.location.href = RESUME; }
+  if (r.ok) { window.location.href = resumeTarget(); }
   else { document.getElementById('err').textContent = 'Sign-in failed'; }
 });
 </script>

@@ -70,6 +70,15 @@ function extractScopes(payload: JWTPayload): string[] {
   return []
 }
 
+/** The confidential client id: `client_id`, else `azp`, else fall back to `sub`. */
+function extractClientId(payload: JWTPayload, sub: string): string {
+  const clientId = (payload as { client_id?: unknown }).client_id
+  if (typeof clientId === 'string') return clientId
+  const azp = (payload as { azp?: unknown }).azp
+  if (typeof azp === 'string') return azp
+  return sub
+}
+
 /**
  * jose-6-backed OAuthTokenVerifier for MCP's requireBearerAuth. Verifies the
  * signature against the AS's remote JWKS and pins BOTH `iss` and `aud`. JWT-only:
@@ -124,19 +133,20 @@ export function createJwtVerifier(opts: JwtVerifierOptions): OAuthTokenVerifier 
         throw new InvalidTokenError('Token has no exp claim')
       }
 
-      const clientId =
-        typeof (payload as { client_id?: unknown }).client_id === 'string'
-          ? (payload as { client_id: string }).client_id
-          : typeof (payload as { azp?: unknown }).azp === 'string'
-            ? (payload as { azp: string }).azp
-            : (payload.sub ?? '')
+      // A legitimate better-auth token always carries `sub`; without it, tenancy
+      // would resolve grants for an `undefined` subject (fail-closed empty pool,
+      // but still a malformed token). Reject rather than admit a subject-less JWT.
+      const sub = payload.sub
+      if (typeof sub !== 'string' || sub === '') {
+        throw new InvalidTokenError('Token has no sub claim')
+      }
 
       return {
         token,
-        clientId,
+        clientId: extractClientId(payload, sub),
         scopes: extractScopes(payload),
         expiresAt: payload.exp, // seconds — the middleware's presence+expiry check reads this
-        extra: { sub: payload.sub, iss: payload.iss },
+        extra: { sub, iss: payload.iss },
       }
     },
   }

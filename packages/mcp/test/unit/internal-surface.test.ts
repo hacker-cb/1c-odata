@@ -14,6 +14,7 @@ import {
   registerServerInfoTool,
   resolveLimits,
   SecretStore,
+  toolResult,
   verifyConnectivity,
 } from '@1c-odata/mcp/internal'
 import { describe, expect, it } from 'vitest'
@@ -31,6 +32,7 @@ describe('@1c-odata/mcp/internal surface', () => {
       registerSchemaTools,
       registerDataTools,
       registerServerInfoTool,
+      toolResult,
       resolveLimits,
       clampTop,
       SecretStore,

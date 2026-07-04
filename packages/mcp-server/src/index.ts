@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http'
 import { ConnectionPool, type ConnectionSource, type Limits, type ReadPool } from '@1c-odata/mcp/internal'
+import type { Auth } from './auth/better-auth.js'
 import { buildAuth } from './auth/better-auth.js'
 import { resolveCanonicalUrls } from './auth/config.js'
 import { type HealthJob, startHealthJob } from './http/admin/health-job.js'
@@ -49,8 +50,14 @@ export interface CreateHttpServerOptions {
 
 export interface HttpServerHandle {
   server: Server
-  /** Release auth-store resources (pg pool). No-op without auth. */
+  /** Release auth-store resources (pg pool). No-op without auth. Idempotent. */
   close(): Promise<void>
+  /**
+   * The embedded better-auth instance — present only on the auth path. Exposed so
+   * a caller (tests, an admin bootstrap) can drive `auth.api.*` (e.g. provision a
+   * user through the admin plugin) against the SAME instance the gate verifies.
+   */
+  auth?: Auth
 }
 
 /**
@@ -116,6 +123,9 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
         version,
         dataDir: opts.dataDir,
         ...(opts.limits !== undefined ? { limits: opts.limits } : {}),
+        // Tenancy path → REDACTED server_info (no host dataDir leaks to a tenant).
+        // Auth-without-tenancy keeps the file variant (single-tenant, host-owned).
+        ...(keyring !== undefined ? { serverInfo: 'tenancy' as const } : {}),
       })
     }
 
@@ -149,9 +159,15 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
       void healthJob.runOnce() // seed the dashboard so it isn't blank for the first interval
     }
 
+    // Guard double-close: cli.ts may call close() twice (the server 'error'
+    // handler AND a SIGINT/SIGTERM), and closing the pg pool twice throws.
+    let closed = false
     return {
       server: createServer(app),
+      auth,
       async close() {
+        if (closed) return
+        closed = true
         // Stop the timer AND await any in-flight sweep (incl. the runOnce seed)
         // BEFORE the DB handle closes, so a probe/upsert can't race dbHandle.close().
         await healthJob?.stop()

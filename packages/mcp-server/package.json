@@ -65,6 +65,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-auth": "^1.6.23",
     "commander": "^15.0.0",
+    "drizzle-kit": "^0.31.10",
     "drizzle-orm": "^0.45.2",
     "eta": "^4.6.0",
     "express": "^5.2.1",
@@ -79,7 +80,6 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/pg": "^8.20.0",
-    "drizzle-kit": "^0.31.10",
     "msw": "^2.14.6"
   }
 }

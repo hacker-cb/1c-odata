@@ -103,4 +103,28 @@ describe('buildMcpServer', () => {
     expect(res.isError).toBe(true)
     await client.close()
   })
+
+  it("tenancy server_info redacts the host dataDir and counts the CALLER's visible bases", async () => {
+    // A zero-grant scoped pool: server_info must report 0 connections and MUST NOT
+    // leak the operator's on-disk dataDir to the tenant.
+    const emptyPool = scopedPool(new ConnectionPool(source), new Set())
+    const server = buildMcpServer(emptyPool, {
+      version: '9.9.9',
+      dataDir: '/host/secret/data-dir',
+      serverInfo: 'tenancy',
+    })
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+    const client = new Client({ name: 'test', version: '0' })
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
+    try {
+      const res = await client.callTool({ name: 'server_info', arguments: {} })
+      const payload = JSON.stringify(res)
+      expect(res.isError).toBeFalsy()
+      expect(payload).not.toContain('/host/secret/data-dir')
+      expect(payload).not.toContain('dataDir')
+      expect(res.structuredContent).toMatchObject({ name: '1c-odata', version: '9.9.9', connections: 0 })
+    } finally {
+      await client.close()
+    }
+  })
 })

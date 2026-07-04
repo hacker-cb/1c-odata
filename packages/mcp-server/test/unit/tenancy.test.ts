@@ -128,8 +128,11 @@ describe('DbConnectionSource + grant scoping', () => {
   it('bob (no grants) sees no bases and every get throws not-found', async () => {
     const { src, bob } = await seed()
     const shared = fakeSharedPool((await src.listBases()).map((b) => b.name))
+    const listSpy = vi.spyOn(shared, 'list')
     const bobPool = new ScopedPool(shared, () => resolveGrants(handle.db, bob))
     expect(await bobPool.list()).toEqual([])
+    // Fail-closed short-circuit: a zero-grant list() must NOT touch the shared pool.
+    expect(listSpy).not.toHaveBeenCalled()
     await expect(bobPool.get('Trade')).rejects.toBeInstanceOf(InvalidArgumentError)
   })
 

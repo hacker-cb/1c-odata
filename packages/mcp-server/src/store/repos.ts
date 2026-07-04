@@ -135,6 +135,14 @@ export class GrantRepo {
   async listByBase(baseName: string): Promise<{ sub: string; scope: GrantScope }[]> {
     return this.db.select({ sub: grants.sub, scope: grants.scope }).from(grants).where(eq(grants.baseName, baseName))
   }
+
+  /**
+   * Every grant row (sub × base × scope) in ONE query — feeds the admin grant
+   * matrix without an N+1 `resolve()` per user (up to 200 sequential queries).
+   */
+  async listAll(): Promise<{ sub: string; baseName: string; scope: GrantScope }[]> {
+    return this.db.select({ sub: grants.sub, baseName: grants.baseName, scope: grants.scope }).from(grants)
+  }
 }
 
 /** Health-probe results (health job writes, dashboard/tool reads). */

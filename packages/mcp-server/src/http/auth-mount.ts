@@ -9,6 +9,24 @@ import { signInPage } from '../auth/pages/sign-in.js'
 import { resourceMetadataUrl } from '../auth/resource-metadata.js'
 import { createJwtVerifier } from '../auth/verifier.js'
 
+/**
+ * Anti-clickjacking + CSP for the first-party sign-in / consent pages. The consent
+ * page authorizes an OAuth grant, so it must never be framed for a clickjacking
+ * attack (`frame-ancestors 'none'` + the legacy `X-Frame-Options: DENY`). These
+ * two pages carry a small trusted inline `<script>` (never request data — see the
+ * page modules), so `script-src 'unsafe-inline'` is acceptable; the pages only
+ * talk to their own origin (`connect-src`/`form-action 'self'`).
+ */
+const authPageSecurityHeaders: RequestHandler = (_req, res, next) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; " +
+      "connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+  )
+  res.setHeader('X-Frame-Options', 'DENY')
+  next()
+}
+
 export interface AuthMountOptions {
   auth: Auth
   urls: CanonicalUrls
@@ -36,8 +54,10 @@ export function createAuthMount(opts: AuthMountOptions): AuthMount {
 
   const authRouter = Router()
   // Pages first (plain GET, before the catch-all splat so they aren't swallowed).
-  authRouter.get('/sign-in', signInPage)
-  authRouter.get('/consent', consentPage)
+  // Each carries anti-clickjacking + CSP headers (the consent page authorizes an
+  // OAuth grant and must never be framed).
+  authRouter.get('/sign-in', authPageSecurityHeaders, signInPage)
+  authRouter.get('/consent', authPageSecurityHeaders, consentPage)
   // Express 5 splat syntax; MUST match better-auth basePath (/api/auth).
   authRouter.all('/api/auth/*splat', toNodeHandler(auth))
 
