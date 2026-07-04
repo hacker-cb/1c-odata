@@ -23,7 +23,7 @@ export interface DbHandle {
   db: AuthDb
   /** The concrete driver, needed by migrate.ts to pick the pglite vs node-postgres migrator. */
   dialect: Dialect['kind']
-  /** Release underlying resources (pg pool close). No-op for in-memory pglite. */
+  /** Release underlying resources: the pg pool, or the pglite client (in-memory or on-disk). */
   close(): Promise<void>
 }
 
