@@ -42,7 +42,8 @@ Passing `--public-url` (or `ONEC_MCP_PUBLIC_URL`) mounts an embedded
 Client Registration + PKCE) alongside the resource server. A user adds the
 connector to Claude with **just the URL** — Claude self-registers via DCR, the
 user logs in on `/sign-in`, consents on `/consent`, and `/mcp` then requires a
-valid JWT (verified offline via JWKS). `BETTER_AUTH_SECRET` is required.
+valid JWT — verified locally against the AS's JWKS (no per-request introspection
+call; the JWKS itself is fetched once and cached). `BETTER_AUTH_SECRET` is required.
 
 Without a keyring (mode 3) this still uses the file data dir, so **every
 authenticated user sees every base** — sign-up is closed, so users are
@@ -90,7 +91,9 @@ const source = new FileConnectionSource({ dataDir: '/path/to/data' })
 // for OAuth (+ a keyring for multi-tenancy).
 const { server, close } = await createHttpServer({ source, dataDir: '/path/to/data' })
 server.listen(3000)
-// on shutdown: server.close(); await close()
+// On shutdown, stop accepting connections FIRST, then drain the auth store —
+// `server.close` is callback-based, so wait for it before calling `close()`:
+//   server.close(() => { void close() })
 ```
 
 ## Hardening
