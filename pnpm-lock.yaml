@@ -168,9 +168,6 @@ importers:
       commander:
         specifier: ^15.0.0
         version: 15.0.0
-      drizzle-kit:
-        specifier: ^0.31.10
-        version: 0.31.10
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@electric-sql/pglite@0.5.4)(@types/pg@8.20.0)(kysely@0.29.2)(pg@8.22.0)
@@ -196,6 +193,9 @@ importers:
       '@types/pg':
         specifier: ^8.20.0
         version: 8.20.0
+      drizzle-kit:
+        specifier: ^0.31.10
+        version: 0.31.10
       msw:
         specifier: ^2.14.6
         version: 2.14.6(@types/node@26.0.0)(typescript@6.0.3)

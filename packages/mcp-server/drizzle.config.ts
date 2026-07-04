@@ -8,9 +8,10 @@ import { defineConfig } from 'drizzle-kit'
  * tenancy tables (bases / base_secrets / grants / health) into ./drizzle. drizzle-kit
  * resolves the `export *` chain, so pointing at the barrel is enough.
  *
- * `generate` (SQL into ./drizzle) is what prod applies via migrate(); pglite tests
- * bypass SQL entirely (pushSchema in src/store/migrate.ts, over the same barrel).
- * The url is only needed for `push`/`migrate` against a live DB, not for `generate`.
+ * `generate` (SQL into ./drizzle) produces the single source of truth: BOTH prod
+ * (pg) and dev/tests (pglite) apply that same committed SQL via a drizzle-orm
+ * migrator — see src/store/migrate.ts. The url is only needed for `push`/`migrate`
+ * against a live DB, not for `generate`.
  */
 export default defineConfig({
   schema: './src/store/schema.ts',
