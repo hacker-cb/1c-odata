@@ -1,5 +1,10 @@
 {$MCP_PUBLIC_DOMAIN} {
-	# Caddy auto-provisions (and renews) a TLS cert for this domain via ACME, and
+	# Caddy auto-provisions (and auto-renews) a TLS cert for this domain via ACME.
+	# Caddy's default CA is Let's Encrypt (with ZeroSSL as a fallback); override it in
+	# a global-options block if you need to. Set an ACME account email there too for
+	# expiry notices — optional, certs work without it:
+	#   { email you@example.com }
+	#
 	# reverse_proxy PRESERVES the original Host header upstream by default — so the
 	# server's DNS-rebinding allowlist (auto-derived from ONEC_MCP_PUBLIC_URL) matches
 	# without any ONEC_MCP_ALLOWED_HOSTS. TLS terminates here; the app speaks plain
