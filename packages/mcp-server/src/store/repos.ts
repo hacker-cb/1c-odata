@@ -198,6 +198,24 @@ export class SetupTokenRepo {
   async clear(): Promise<void> {
     await this.db.delete(setupToken).where(eq(setupToken.id, SETUP_TOKEN_ID))
   }
+
+  /**
+   * Atomically consume the token: delete the singleton row IFF it still holds
+   * `token`, returning true only for the caller that won the delete. This makes
+   * first-admin creation single-use even under REAL concurrency: pglite serializes
+   * queries, but a prod `pg.Pool` runs concurrent POSTs on separate connections, so
+   * a read-compare-then-clear (non-atomic) could let two token holders each seed an
+   * admin. With an atomic delete-returning, only one concurrent POST proceeds.
+   */
+  async consume(token: string): Promise<boolean> {
+    // `.returning()` with no column selector — the union AuthDb narrows the
+    // arg-taking overload away; we only need the deleted-row count anyway.
+    const deleted = await this.db
+      .delete(setupToken)
+      .where(and(eq(setupToken.id, SETUP_TOKEN_ID), eq(setupToken.token, token)))
+      .returning()
+    return deleted.length > 0
+  }
 }
 
 /**

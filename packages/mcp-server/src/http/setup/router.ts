@@ -88,6 +88,12 @@ export function createSetupRouter(opts: CreateSetupRouterOptions): Router {
 
   const router = express.Router()
   router.use(adminCsp)
+  // The GET form embeds the one-time token in a hidden field; never let a browser,
+  // proxy, or CDN cache a /setup response and persist the token past its lifecycle.
+  router.use((_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store')
+    next()
+  })
   // The wizard POSTs urlencoded form data; the global express.json() in app.ts
   // won't parse it.
   router.use(express.urlencoded({ extended: false }))
@@ -114,8 +120,9 @@ export function createSetupRouter(opts: CreateSetupRouterOptions): Router {
         notFound(res)
         return
       }
-      // Mirror the admin createUser guard: a missing field must never coerce to the
-      // literal "undefined" and seed a bogus admin.
+      // Validate fields BEFORE consuming the token — a field error is retryable
+      // without burning the one-time token. Mirror the admin createUser guard: a
+      // missing field must never coerce to the literal "undefined" and seed a bogus admin.
       const email = req.body.email
       const password = req.body.password
       const confirm = req.body.confirm
@@ -132,6 +139,13 @@ export function createSetupRouter(opts: CreateSetupRouterOptions): Router {
         page(res, 'setup_wizard', { token, email, error: 'Passwords do not match.' }, 'Setup')
         return
       }
+      // Atomically consume the token: only the winner of a concurrent race proceeds,
+      // so EXACTLY ONE first admin is created even on real Postgres (pglite
+      // serializes, a prod pg.Pool does not). A loser sees the token already gone → 404.
+      if (!(await d.tokenRepo.consume(token))) {
+        notFound(res)
+        return
+      }
       try {
         // The SAME header-less trusted seed path `admin-create` uses: with no
         // session and no request/headers on the arg bag, the admin() plugin skips
@@ -140,8 +154,11 @@ export function createSetupRouter(opts: CreateSetupRouterOptions): Router {
           body: { email, password, name: 'Admin', role: 'admin' },
         })
       } catch (err) {
-        // Redacted — NEVER echo the password, and keep the raw error out of the DOM
-        // (a duplicate-email create, a too-short password, etc.).
+        // The token was already consumed — restore it (idempotent on the singleton
+        // key) so the operator can fix the input and retry without a restart.
+        // Redacted — NEVER echo the password or the raw error (duplicate-email, a
+        // too-short password, etc.) into the DOM.
+        await d.tokenRepo.ensure(token)
         logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'setup wizard createUser failed')
         page(
           res,
@@ -151,9 +168,7 @@ export function createSetupRouter(opts: CreateSetupRouterOptions): Router {
         )
         return
       }
-      // Single-use: burn the token so the wizard is closed for good, then send the
-      // operator to the normal sign-in page.
-      await d.tokenRepo.clear()
+      // Success — the token was already consumed above; send the operator to sign-in.
       res.redirect(302, '/sign-in')
     }, deps),
   )

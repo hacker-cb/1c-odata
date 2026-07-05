@@ -59,6 +59,16 @@ describe('SetupTokenRepo', () => {
     await repo.clear()
     expect(await repo.get()).toBeNull()
   })
+
+  it('consume() is atomic single-use — succeeds once, ignores a wrong token, then fails', async () => {
+    const repo = new SetupTokenRepo(handle.db)
+    await repo.ensure('one-shot')
+    expect(await repo.consume('wrong')).toBe(false) // wrong token → no-op
+    expect(await repo.get()).toBe('one-shot') // still present
+    expect(await repo.consume('one-shot')).toBe(true) // the winner consumes it
+    expect(await repo.get()).toBeNull() // gone
+    expect(await repo.consume('one-shot')).toBe(false) // a concurrent loser gets nothing
+  })
 })
 
 describe('countAdmins', () => {
