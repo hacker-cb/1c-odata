@@ -192,7 +192,14 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
     // configured, so sessions are not resumable — a dropped stream means the
     // client must re-initialize anyway.
     res.on('close', () => {
-      void transport.close()
+      // Fire-and-forget reclaim: swallow any close failure — an async rejection OR
+      // a sync throw — so it can't become an unhandledRejection/uncaughtException
+      // and crash the process (same hardening as the failed-init path above).
+      try {
+        void transport.close().catch(() => {})
+      } catch {
+        // ignore — best-effort reclaim of a dropped SSE stream
+      }
     })
     await transport.handleRequest(req, res)
   })
