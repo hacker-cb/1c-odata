@@ -21,8 +21,8 @@ command that follows:
 
 - **Installed / published** — `npx @1c-odata/mcp-server serve …`, or after a
   global install simply `1c-odata-mcp-server serve …`. Runs the compiled `dist/`
-  the package ships; no TypeScript toolchain needed. The Docker image (`deploy/`)
-  runs `dist/` too.
+  that the package ships; no TypeScript toolchain needed. The Docker image
+  (`deploy/`) runs `dist/` too.
 - **From a clone, production-like** — `pnpm -F @1c-odata/mcp-server start serve …`
   runs the built `dist/cli.js` (`pnpm install` builds it via the `prepare` hook).
 - **From a clone, development** — `pnpm -F @1c-odata/mcp-server dev serve …` runs
