@@ -14,10 +14,14 @@ function redact(err: unknown): string {
   return msg.replace(/https?:\/\/[^\s"']+/g, '<url>').slice(0, 200)
 }
 
-/** 401/403 from $metadata → auth_failed; anything else → unreachable. */
+/** Auth-ish $metadata errors (401/403, or "unauthorized"/"forbidden"/"credential"/"password" wording) → auth_failed; anything else → unreachable. */
 export function classifyProbe(err: unknown): { status: 'auth_failed' | 'unreachable'; message: string } {
   const msg = err instanceof Error ? err.message : String(err)
-  const authy = /\b(401|403|unauthor|forbidden|credential|password)\b/i.test(msg)
+  // Word tokens are matched as prefixes/substrings, NOT `\b…\b`: a trailing word
+  // boundary fails mid-word, so `\bunauthor\b` misses "Unauthorized" and
+  // `\bcredential\b` misses "credentials" — both common. Keep `\b…\b` only around
+  // the numeric codes so "401" doesn't match inside e.g. "14013".
+  const authy = /\b(?:401|403)\b|unauthor|forbidden|credential|password/i.test(msg)
   return { status: authy ? 'auth_failed' : 'unreachable', message: redact(err) }
 }
 

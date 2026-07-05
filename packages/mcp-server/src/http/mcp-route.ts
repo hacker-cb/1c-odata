@@ -152,8 +152,22 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
         // as `(() => void) | undefined`, which trips the repo's exactOptionalPropertyTypes
         // against Transport's exact-optional `onclose?: () => void`. It nominally
         // implements Transport — the mismatch is purely the upstream `| undefined`.
-        await opts.buildServer({ sub }).connect(transport as Transport)
-        await transport.handleRequest(req, res, req.body)
+        try {
+          await opts.buildServer({ sub }).connect(transport as Transport)
+          await transport.handleRequest(req, res, req.body)
+        } catch (err) {
+          // Init failed after the transport was created: close it so a half-open
+          // session can't linger in `transports` (when onsessioninitialized already
+          // fired) or leak the connected McpServer/pool. onclose drops the map entry.
+          // Swallow any close failure — sync throw OR async rejection — so it can
+          // never mask the original init error.
+          try {
+            await transport.close()
+          } catch {
+            // ignore — the original init error below takes precedence
+          }
+          throw err
+        }
       } finally {
         // The session (on success) is now in `transports`; drop the in-flight count.
         pendingInits -= 1
