@@ -187,9 +187,11 @@ export function createSetupRouter(opts: CreateSetupRouterOptions): Router {
 
 /** Terminal error handler for the setup router. Never leaks the raw error to the DOM. */
 const setupErrorHandler: ErrorRequestHandler = (err, req, res, _next) => {
-  // Log req.path, NOT req.originalUrl — the latter carries the `?token=…` query and
-  // would spread the one-time bootstrap token into error logs / aggregators.
-  logger.error({ err: err instanceof Error ? err.message : String(err), path: req.path }, 'setup handler failed')
+  // Log req.baseUrl (the mount path, e.g. `/setup`), NOT req.originalUrl — the latter
+  // carries the `?token=…` query and would spread the one-time bootstrap token into
+  // error logs / aggregators. (req.path here is just `/` — the router-relative path —
+  // so it loses the `/setup` context; baseUrl keeps it token-free AND actionable.)
+  logger.error({ err: err instanceof Error ? err.message : String(err), path: req.baseUrl }, 'setup handler failed')
   if (res.headersSent) return
   res.status(500).type('html').send('<p class="err">Internal error — setup did not complete.</p>')
 }
