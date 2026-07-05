@@ -22,7 +22,7 @@ cp .env.example .env
 # then edit .env — set the domain and generate the three secrets:
 #   BETTER_AUTH_SECRET=$(openssl rand -base64 32)
 #   ONEC_MCP_ENC_KEY=$(openssl rand -base64 32)
-#   POSTGRES_PASSWORD=$(openssl rand -base64 24)
+#   POSTGRES_PASSWORD=$(openssl rand -hex 24)     # hex — URL-safe for DATABASE_URL
 ```
 
 `MCP_PUBLIC_URL` is the origin you'll add to Claude — normally `https://${MCP_PUBLIC_DOMAIN}`.
@@ -66,6 +66,6 @@ Add a **custom connector** in Claude with the URL `MCP_PUBLIC_URL` (e.g. `https:
 
 ## Notes
 
-- The `mcp` service publishes no host ports — only Caddy is exposed. The internal surface (`/admin`, Postgres) never leaves the compose network.
+- Only Caddy publishes host ports; Postgres and the direct `mcp:3000` port stay on the internal compose network. **`/admin` _is_ reachable** through Caddy at `https://$MCP_PUBLIC_DOMAIN/admin` — it has to be, since its CSRF check is bound to the public origin — but it is gated by the better-auth `admin` role (login + same-origin). To narrow that surface, add an IP allow-list or extra auth in front of `/admin` in the `Caddyfile`.
 - Caddy preserves the original `Host` header, which the server's DNS-rebinding guard auto-allows from `ONEC_MCP_PUBLIC_URL` — no `ONEC_MCP_ALLOWED_HOSTS` needed. If you front this with a *different* proxy that rewrites `Host`, set `ONEC_MCP_ALLOWED_HOSTS` on the `mcp` service.
 - **Local trial without a public domain:** set `MCP_PUBLIC_DOMAIN=localhost` and `MCP_PUBLIC_URL=https://localhost` — Caddy serves a local self-signed cert (your client must trust Caddy's local CA). Real connector use needs a real domain.
