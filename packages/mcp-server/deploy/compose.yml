@@ -1,0 +1,65 @@
+name: onec-mcp
+
+# Single-instance production stack: the MCP server + its Postgres + a Caddy
+# reverse proxy that terminates TLS (auto-HTTPS) and forwards to the server.
+# Copy .env.example → .env and fill it in first. See README.md.
+
+services:
+  db:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mcp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: mcp
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mcp -d mcp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mcp:
+    build:
+      # Repo root — the workspace build needs @1c-odata/client + @1c-odata/mcp.
+      context: ../../..
+      dockerfile: packages/mcp-server/deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # OAuth issuer + MCP resource id; must match the URL you add to Claude.
+      ONEC_MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:?set MCP_PUBLIC_URL in .env}
+      # Signs sessions/JWTs; keep stable across restarts.
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
+      # AES-256 key encrypting 1С passwords at rest — turns on multi-tenancy.
+      ONEC_MCP_ENC_KEY: ${ONEC_MCP_ENC_KEY:?set ONEC_MCP_ENC_KEY in .env}
+      # Auth store; migrations run automatically on boot.
+      DATABASE_URL: postgres://mcp:${POSTGRES_PASSWORD}@db:5432/mcp
+    # No published ports — only Caddy reaches it on the internal compose network.
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - mcp
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Domain Caddy serves + provisions a TLS cert for (must resolve to this host).
+      MCP_PUBLIC_DOMAIN: ${MCP_PUBLIC_DOMAIN:?set MCP_PUBLIC_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist ACME certs + state so restarts don't re-issue (rate limits!).
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:

@@ -77,6 +77,9 @@ The store is Postgres in production (`--pg-url` / `DATABASE_URL`) or embedded
 PGlite for dev (`--auth-data-dir` to persist, else in-memory). Single instance:
 session state, the `$metadata` cache, and the health job are per-process.
 
+For a turnkey self-hosted stack (server + Postgres + Caddy auto-HTTPS) see
+[`deploy/README.md`](./deploy/README.md) — `docker compose up` from `.env`.
+
 ## Programmatic
 
 `createHttpServer` is **async** and returns a handle (the server is unstarted —

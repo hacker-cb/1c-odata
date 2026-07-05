@@ -1,0 +1,8 @@
+{$MCP_PUBLIC_DOMAIN} {
+	# Caddy auto-provisions (and renews) a TLS cert for this domain via ACME, and
+	# reverse_proxy PRESERVES the original Host header upstream by default — so the
+	# server's DNS-rebinding allowlist (auto-derived from ONEC_MCP_PUBLIC_URL) matches
+	# without any ONEC_MCP_ALLOWED_HOSTS. TLS terminates here; the app speaks plain
+	# HTTP on the internal network.
+	reverse_proxy mcp:3000
+}
