@@ -60,18 +60,26 @@ function wrap(handler: (req: Request, res: Response, deps: SetupDeps) => Promise
  * "wrong token" vs "already onboarded".
  */
 async function openToken(deps: SetupDeps, presented: unknown): Promise<string | null> {
-  if ((await countAdmins(deps.db)) > 0) return null // onboarding done → closed forever
-  const stored = await deps.tokenRepo.get()
-  if (stored === null) return null // no token minted → nothing to unlock
-  if (typeof presented !== 'string' || presented === '') return null
-  // Constant-time compare — a negligible risk for a 256-bit single-use secret
-  // behind the countAdmins() gate, but idiomatic for a bootstrap token. timingSafeEqual
-  // throws on a length mismatch, so length-check first; the token is fixed-length,
-  // so its length leaks nothing an attacker doesn't already know.
-  const a = Buffer.from(presented)
-  const b = Buffer.from(stored)
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return null
-  return stored
+  try {
+    if ((await countAdmins(deps.db)) > 0) return null // onboarding done → closed forever
+    const stored = await deps.tokenRepo.get()
+    if (stored === null) return null // no token minted → nothing to unlock
+    if (typeof presented !== 'string' || presented === '') return null
+    // Constant-time compare — a negligible risk for a 256-bit single-use secret
+    // behind the countAdmins() gate, but idiomatic for a bootstrap token. timingSafeEqual
+    // throws on a length mismatch, so length-check first; the token is fixed-length,
+    // so its length leaks nothing an attacker doesn't already know.
+    const a = Buffer.from(presented)
+    const b = Buffer.from(stored)
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return null
+    return stored
+  } catch (err) {
+    // Fail CLOSED: a DB error in the gate must NOT bubble to a 500 — that would be a
+    // response distinguishable from the uniform 404 (hinting the wizard route exists
+    // / errored). Log it for the operator and deny the request like any other miss.
+    logger.error({ err: err instanceof Error ? err.message : String(err) }, 'setup gate check failed')
+    return null
+  }
 }
 
 /** Uniform 404 for every closed-wizard path (do not reveal the page exists). */
@@ -179,7 +187,11 @@ export function createSetupRouter(opts: CreateSetupRouterOptions): Router {
 
 /** Terminal error handler for the setup router. Never leaks the raw error to the DOM. */
 const setupErrorHandler: ErrorRequestHandler = (err, req, res, _next) => {
-  logger.error({ err: err instanceof Error ? err.message : String(err), path: req.originalUrl }, 'setup handler failed')
+  // Log req.baseUrl (the mount path, e.g. `/setup`), NOT req.originalUrl — the latter
+  // carries the `?token=…` query and would spread the one-time bootstrap token into
+  // error logs / aggregators. (req.path here is just `/` — the router-relative path —
+  // so it loses the `/setup` context; baseUrl keeps it token-free AND actionable.)
+  logger.error({ err: err instanceof Error ? err.message : String(err), path: req.baseUrl }, 'setup handler failed')
   if (res.headersSent) return
   res.status(500).type('html').send('<p class="err">Internal error — setup did not complete.</p>')
 }
