@@ -13,6 +13,26 @@ The connection-management tools (`add` / `remove` / `set_credentials` /
 surface. The MCP endpoint is `POST/GET/DELETE /mcp` (stateful, per-session);
 `GET /healthz` is a liveness probe.
 
+## Running the CLI
+
+`serve` and `admin-create` are subcommands of the `1c-odata-mcp-server` bin. How
+you invoke it depends on context — pick one and read the examples below as the
+command that follows:
+
+- **Installed / published** — `npx @1c-odata/mcp-server serve …`, or after a
+  global install simply `1c-odata-mcp-server serve …`. Runs the compiled `dist/`
+  the package ships; no TypeScript toolchain needed. The Docker image (`deploy/`)
+  runs `dist/` too.
+- **From a clone, production-like** — `pnpm -F @1c-odata/mcp-server start serve …`
+  runs the built `dist/cli.js` (`pnpm install` builds it via the `prepare` hook).
+- **From a clone, development** — `pnpm -F @1c-odata/mcp-server dev serve …` runs
+  `src/cli.ts` through `tsx` — no build step, always the current source. Types
+  aren't checked on the fly (run `pnpm -F @1c-odata/mcp-server typecheck`
+  separately), and the workspace deps still need to be built once.
+
+  (Append the CLI's args directly — no `--` separator, which pnpm would forward
+  literally into the process.)
+
 ## Three run modes
 
 The `serve` bin has three progressively-more-secure modes, selected by flags.

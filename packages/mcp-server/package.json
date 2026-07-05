@@ -46,6 +46,8 @@
   ],
   "scripts": {
     "build": "tsdown",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
     "prepare": "pnpm build",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "test:unit": "vitest run --exclude \"test/integration/**\" --exclude \"test/e2e/**\"",
