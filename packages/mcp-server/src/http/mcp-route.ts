@@ -158,9 +158,14 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
         } catch (err) {
           // Init failed after the transport was created: close it so a half-open
           // session can't linger in `transports` (when onsessioninitialized already
-          // fired) or leak the connected McpServer/pool. onclose drops the map entry;
-          // swallow a close error so it can't mask the original failure.
-          await transport.close().catch(() => {})
+          // fired) or leak the connected McpServer/pool. onclose drops the map entry.
+          // Swallow any close failure — sync throw OR async rejection — so it can
+          // never mask the original init error.
+          try {
+            await transport.close()
+          } catch {
+            // ignore — the original init error below takes precedence
+          }
           throw err
         }
       } finally {

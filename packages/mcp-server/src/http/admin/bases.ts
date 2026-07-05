@@ -14,7 +14,7 @@ function redact(err: unknown): string {
   return msg.replace(/https?:\/\/[^\s"']+/g, '<url>').slice(0, 200)
 }
 
-/** 401/403 from $metadata → auth_failed; anything else → unreachable. */
+/** Auth-ish $metadata errors (401/403, or "unauthorized"/"forbidden"/"credential"/"password" wording) → auth_failed; anything else → unreachable. */
 export function classifyProbe(err: unknown): { status: 'auth_failed' | 'unreachable'; message: string } {
   const msg = err instanceof Error ? err.message : String(err)
   // Word tokens are matched as prefixes/substrings, NOT `\b…\b`: a trailing word
