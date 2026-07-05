@@ -4,7 +4,7 @@ A single-command, self-contained production stack for `@1c-odata/mcp-server`:
 
 - **mcp** — the server in multi-tenant mode (DB-backed bases, per-user grants, admin panel), built from this repo.
 - **db** — Postgres for the auth/tenancy store. Schema migrations run automatically on boot.
-- **caddy** — reverse proxy that terminates TLS with an **auto-provisioned, auto-renewed** certificate (**Let's Encrypt** via ACME, ZeroSSL fallback) and forwards to the server.
+- **caddy** — reverse proxy that terminates TLS with an **auto-provisioned, auto-renewed** certificate via ACME (Caddy's default CA is **Let's Encrypt**, with a ZeroSSL fallback) and forwards to the server.
 
 > Single instance by design — session state, the `$metadata` cache and the health job are per-process. Run one stack; do not scale `mcp` to >1 replica.
 
@@ -94,13 +94,14 @@ Add a **custom connector** in Claude with the URL `MCP_PUBLIC_URL` (e.g. `https:
 - Only Caddy publishes host ports; Postgres and the direct `mcp:3000` port stay on the internal compose network. **`/admin` _is_ reachable** through Caddy at `https://$MCP_PUBLIC_DOMAIN/admin` — it has to be, since its CSRF check is bound to the public origin — but it is gated by the better-auth `admin` role (login + same-origin). To narrow that surface, add an IP allow-list or extra auth in front of `/admin` in the `Caddyfile`.
 - Caddy preserves the original `Host` header, which the server's DNS-rebinding guard auto-allows from `ONEC_MCP_PUBLIC_URL` — no `ONEC_MCP_ALLOWED_HOSTS` needed. If you front this with a *different* proxy that rewrites `Host`, set `ONEC_MCP_ALLOWED_HOSTS` on the `mcp` service.
 - **Local trial without a public domain:** set `MCP_PUBLIC_DOMAIN=localhost` and `MCP_PUBLIC_URL=https://localhost` — Caddy serves a local self-signed cert (your client must trust Caddy's local CA). Real connector use needs a real domain.
-- **TLS is automatic** — Caddy obtains a **Let's Encrypt** certificate on the first HTTPS request and renews it before expiry; no certbot, cron, or manual step. It just needs the domain to resolve to this host and ports **80 + 443** open (80 for the ACME challenge). Keep the `caddy-data` volume — it holds the cert + ACME account, so wiping it forces re-issuance and can hit Let's Encrypt's rate limit (5 certs per domain per week). Optionally set an ACME email for expiry notices (see the `Caddyfile`).
+- **TLS is automatic** — on the first HTTPS request Caddy obtains a certificate from its default ACME CA (**Let's Encrypt**) and renews it before expiry; no certbot, cron, or manual step. It just needs the domain to resolve to this host and ports **80 + 443** open (80 for the ACME challenge). Keep the `caddy-data` volume — it holds the cert + ACME account, so wiping it forces re-issuance and can run into the CA's issuance rate limits. Optionally set an ACME email for expiry notices (see the `Caddyfile`).
 
 ## Other deployment targets
 
 Docker Compose (above) is the reference, but nothing here is Compose-specific — the
-same published package / image runs on **any Node host or container platform** with
-the SAME env contract: `BETTER_AUTH_SECRET`, `ONEC_MCP_ENC_KEY`, `DATABASE_URL`,
+same binary — the published npm package, or an image you build from the
+`Dockerfile` — runs on **any Node host or container platform** with the SAME env
+contract: `BETTER_AUTH_SECRET`, `ONEC_MCP_ENC_KEY`, `DATABASE_URL`,
 `ONEC_MCP_PUBLIC_URL` (see the package [README](../README.md#running-the-cli) for
 invocation and the auth modes). Whatever you pick, a deploy must satisfy:
 
