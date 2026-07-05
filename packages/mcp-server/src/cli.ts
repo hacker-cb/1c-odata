@@ -36,6 +36,30 @@ interface AdminCreateOptions {
   authDataDir?: string
 }
 
+interface SetPasswordOptions {
+  email: string
+  password: string
+  publicUrl?: string
+  pgUrl?: string
+  authDataDir?: string
+}
+
+/**
+ * Minimal structural view of better-auth's `$context` — the internal handle the
+ * break-glass `set-password` drives. `setUserPassword`/`listUsers` (admin plugin)
+ * require an admin SESSION and 401 on the header-less CLI path, so we instead go
+ * through the same internal adapter + password hasher those endpoints use.
+ */
+interface AuthContext {
+  password: { hash(plain: string): Promise<string> }
+  internalAdapter: {
+    findUserByEmail(email: string): Promise<{ user: { id: string } } | null>
+    findAccounts(userId: string): Promise<{ providerId: string }[]>
+    updatePassword(userId: string, hashed: string): Promise<unknown>
+    createAccount(input: { userId: string; providerId: string; accountId: string; password: string }): Promise<unknown>
+  }
+}
+
 /**
  * Build the encryption keyring iff a KEK is supplied (flag or env) — this is what
  * opts multi-tenancy in on the auth path. Absent → undefined (auth without
@@ -257,6 +281,70 @@ export function buildProgram(): Command {
           body: { email: opts.email, password: opts.password, name: opts.name ?? 'Admin', role: 'admin' },
         })
         logger.info({ id: user.id, email: user.email }, 'admin user created')
+      } finally {
+        await dbHandle.close()
+      }
+    })
+
+  program
+    .command('set-password')
+    .description(
+      "Break-glass: reset an existing user's password directly in the auth store (no session; for a forgotten password)",
+    )
+    .requiredOption('--email <email>', 'email of the user to update')
+    .requiredOption('--password <password>', 'the new password')
+    .option('--public-url <url>', 'external https origin (else ONEC_MCP_PUBLIC_URL)')
+    .option('--pg-url <url>', 'Postgres connection string for the auth store (else DATABASE_URL; else pglite)')
+    .option('--auth-data-dir <path>', 'persist the pglite auth store here (must match `serve`)')
+    .action(async (opts: SetPasswordOptions) => {
+      const publicUrl = opts.publicUrl ?? process.env.ONEC_MCP_PUBLIC_URL
+      if (publicUrl === undefined || publicUrl === '') {
+        throw new Error('--public-url (or ONEC_MCP_PUBLIC_URL) is required')
+      }
+      const secret = process.env.BETTER_AUTH_SECRET ?? process.env.AUTH_SECRET
+      if (secret === undefined || secret === '') {
+        throw new Error('BETTER_AUTH_SECRET is required')
+      }
+      const dialect = resolveDialect(process.env, { ...opts, port: '', host: '' } as ServeOptions)
+      // Same guard as admin-create: an in-memory pglite is discarded on close, so a
+      // password reset against it would be a silent no-op. Require a PERSISTENT store.
+      if (dialect.kind === 'pglite' && dialect.dataDir === undefined) {
+        throw new Error(
+          'set-password needs a PERSISTENT auth store (the SAME one your `serve` uses). ' +
+            'Pass --pg-url (or DATABASE_URL), or --auth-data-dir (or ONEC_MCP_AUTH_DATA_DIR).',
+        )
+      }
+      const dbHandle = createDb(dialect)
+      try {
+        await runAuthMigrations(dbHandle)
+        const auth = buildAuth({ urls: resolveCanonicalUrls(publicUrl), db: dbHandle.db, secret })
+        // The admin plugin's setUserPassword/listUsers require an admin SESSION and
+        // 401 on this header-less path, so drive the SAME internal adapter + hasher
+        // they use under the hood. `$context` is a promise on the better-auth
+        // instance; it is not part of our exported `Auth` alias (the inferred type is
+        // not .d.ts-portable), so reach it through a narrowly-typed cast.
+        const ctx = (await (auth as unknown as { $context: Promise<AuthContext> }).$context) satisfies AuthContext
+        const found = await ctx.internalAdapter.findUserByEmail(opts.email)
+        if (found === null) {
+          // Fail loudly — never create a user here (that is admin-create's job).
+          throw new Error(`No user with email ${JSON.stringify(opts.email)} in the auth store.`)
+        }
+        const userId = found.user.id
+        const hashed = await ctx.password.hash(opts.password)
+        const accounts = await ctx.internalAdapter.findAccounts(userId)
+        const credential = accounts.find((a) => a.providerId === 'credential')
+        if (credential !== undefined) {
+          await ctx.internalAdapter.updatePassword(userId, hashed)
+        } else {
+          // No password account yet (e.g. an SSO-only user) — create the credential.
+          await ctx.internalAdapter.createAccount({
+            userId,
+            providerId: 'credential',
+            accountId: userId,
+            password: hashed,
+          })
+        }
+        logger.info({ id: userId, email: opts.email }, 'password updated')
       } finally {
         await dbHandle.close()
       }

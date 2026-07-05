@@ -6,10 +6,11 @@
  * drizzle's fluent API is parameterized (no SQL-injection surface).
  */
 import type { ListedConnection, StoredConnection } from '@1c-odata/mcp/internal'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, like } from 'drizzle-orm'
+import { user } from '../../auth-schema.js'
 import type { SealedSecret } from './crypto.js'
 import type { AuthDb } from './db.js'
-import { baseSecrets, bases, type DataShapeJson, grants, health } from './tenancy-schema.js'
+import { baseSecrets, bases, type DataShapeJson, grants, health, setupToken } from './tenancy-schema.js'
 
 // The client's `DataShape`, derived from StoredConnection.shape rather than
 // imported from `@1c-odata/client` — mcp-server does not depend on client directly
@@ -157,4 +158,58 @@ export class HealthRepo {
   async list(): Promise<(typeof health.$inferSelect)[]> {
     return this.db.select().from(health)
   }
+}
+
+/** The fixed primary key of the single setup-token row (enforces one row). */
+const SETUP_TOKEN_ID = 'singleton'
+
+/**
+ * The one-time first-run setup token backing the `/setup` wizard. Exactly one row
+ * (keyed by {@link SETUP_TOKEN_ID}): `ensure` mints it once and keeps it across
+ * restarts, `get` reads it, `clear` deletes it when the first admin is created
+ * (single-use). See {@link setupToken} for why the value is stored in the clear.
+ */
+export class SetupTokenRepo {
+  constructor(private readonly db: AuthDb) {}
+
+  /** The current token value, or null when none is stored. */
+  async get(): Promise<string | null> {
+    const [row] = await this.db
+      .select({ token: setupToken.token })
+      .from(setupToken)
+      .where(eq(setupToken.id, SETUP_TOKEN_ID))
+      .limit(1)
+    return row?.token ?? null
+  }
+
+  /**
+   * Ensure the token exists, returning the effective value. The fixed `id` makes
+   * this idempotent AND race-safe: a restart or concurrent boot inserting a fresh
+   * token conflicts on the singleton key and KEEPS the first token (so the logged
+   * URL is stable), rather than accumulating a second row.
+   */
+  async ensure(token: string): Promise<string> {
+    await this.db.insert(setupToken).values({ id: SETUP_TOKEN_ID, token }).onConflictDoNothing()
+    // Re-read: on a conflict the existing row's token (not `token`) is authoritative.
+    return (await this.get()) ?? token
+  }
+
+  /** Delete the token (single-use — called once the first admin is created). */
+  async clear(): Promise<void> {
+    await this.db.delete(setupToken).where(eq(setupToken.id, SETUP_TOKEN_ID))
+  }
+}
+
+/**
+ * Number of admin-role users in the better-auth `user` table. Matches
+ * {@link adminGate}'s role parsing EXACTLY: better-auth may store roles as a
+ * comma/space-separated list (e.g. "admin,user"), and the admin gate authorizes any
+ * such value that contains "admin" — so the first-run gate must count them as
+ * admins too, else `/setup` would reopen despite an existing (multi-role) admin.
+ * The SQL `LIKE '%admin%'` prefilter narrows the scan; JS then confirms exact
+ * membership (so "superadmin" is excluded). Drives the gate: zero admins ⇒ `/setup` open.
+ */
+export async function countAdmins(db: AuthDb): Promise<number> {
+  const rows = await db.select({ role: user.role }).from(user).where(like(user.role, '%admin%'))
+  return rows.filter((r) => (r.role ?? '').split(/[,\s]+/).some((x) => x === 'admin')).length
 }

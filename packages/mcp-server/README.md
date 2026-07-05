@@ -85,12 +85,26 @@ they are **granted**. Users are managed through an admin panel gated by the
 better-auth `admin` role (server-rendered, internal-only) — CRUD of bases /
 grants / users, connection health, all under `/admin`.
 
-Bootstrap the first admin:
+**Bootstrap the first admin — the setup wizard.** On boot, while no admin exists,
+the server prints a one-time `…/setup?token=…` URL to its log (at `warn` level,
+re-printed on every restart until an admin is created). Open it in a browser to
+create the first admin. The wizard is reachable **only** while no admin exists
+**and** the token matches; it 404s forever once the first admin is created, and
+the token is single-use. `/sign-in` shows a "first-run setup pending" hint (the
+token is only ever in the log, never in a page).
+
+Break-glass alternatives, both requiring a PERSISTENT store:
 
 ```bash
+# Non-interactive first-admin seed (equivalent to the wizard, for automation):
 BETTER_AUTH_SECRET=... ONEC_MCP_ENC_KEY=... \
 1c-odata-mcp-server admin-create --email admin@example.com --password '…' \
-  --pg-url postgres://…            # a PERSISTENT store is required
+  --pg-url postgres://…
+
+# Reset a forgotten password for an existing user:
+BETTER_AUTH_SECRET=... \
+1c-odata-mcp-server set-password --email admin@example.com --password '…' \
+  --pg-url postgres://…
 ```
 
 The store is Postgres in production (`--pg-url` / `DATABASE_URL`) or embedded
