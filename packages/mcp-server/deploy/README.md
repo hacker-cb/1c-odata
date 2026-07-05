@@ -44,14 +44,39 @@ curl -fsS https://$MCP_PUBLIC_DOMAIN/healthz && echo OK   # liveness probe
 
 ## 3. Bootstrap the first admin
 
-Sign-up is closed, so seed one admin directly in the store (reuses the `mcp` service env):
+Sign-up is closed, so the server seeds the first admin through a **one-time setup
+wizard** gated by a token it prints to its own log at boot (and re-prints on every
+restart until an admin exists). No crafted console command is needed.
+
+After `docker compose up`, find the printed URL:
 
 ```bash
-docker compose run --rm mcp admin-create \
-  --email you@example.com --password 'a-strong-password'
+docker compose logs mcp | grep 'FIRST-RUN SETUP'
+# → …/setup?token=<one-time-token>
 ```
 
-Then open `https://$MCP_PUBLIC_DOMAIN/admin`, sign in, and add your 1С bases + user grants.
+Open that `https://$MCP_PUBLIC_DOMAIN/setup?token=…` URL in a browser and create
+the first admin (email + password). The wizard is reachable **only** while no
+admin exists **and** the token matches; it 404s the instant the first admin is
+created, and the token is single-use. Then sign in at
+`https://$MCP_PUBLIC_DOMAIN/sign-in` and add your 1С bases + user grants under
+`/admin`.
+
+> **Treat the printed URL as a secret** — it carries the one-time token (and so
+> can leak via browser history, `Referer`, or a proxy log). Don't paste it into
+> shared tools; open it directly. It self-closes once the first admin is created.
+
+**Alternatives (break-glass):**
+
+```bash
+# Non-interactive seed (equivalent to the wizard, for automation):
+docker compose run --rm mcp admin-create \
+  --email you@example.com --password 'a-strong-password'
+
+# Forgotten password — reset an existing user's password directly in the store:
+docker compose run --rm mcp set-password \
+  --email you@example.com --password 'a-new-strong-password'
+```
 
 ## 4. Connect Claude
 

@@ -9,6 +9,7 @@ import type { AuthDb } from '../store/db.js'
 import { createAdminRouter } from './admin/router.js'
 import { createDiscoveryRouter } from './discovery.js'
 import { createMcpRouter } from './mcp-route.js'
+import { createSetupRouter } from './setup/router.js'
 
 /** Optional auth wiring. When present, /mcp is gated and discovery + BA are mounted. */
 export interface AppAuthOptions {
@@ -72,8 +73,19 @@ export function createApp(opts: CreateAppOptions): Express {
     app.use(createDiscoveryRouter({ auth: opts.auth.auth, urls: opts.auth.urls }))
   }
 
-  // (3.5) Admin panel — only on the tenancy path (needs db + keyring + shared pool).
+  // (3.5) Admin panel + first-run setup wizard — only on the tenancy path (needs
+  // db + keyring + shared pool). Both gate on the SAME condition that mounts /admin.
   if (opts.auth?.db !== undefined && opts.auth.keyring !== undefined && opts.auth.sharedPool !== undefined) {
+    // /setup: the one-time, token-gated first-admin wizard. It self-closes (404s)
+    // once any admin exists, so mounting it unconditionally here is safe.
+    app.use(
+      '/setup',
+      createSetupRouter({
+        auth: opts.auth.auth,
+        db: opts.auth.db,
+        publicUrl: opts.auth.urls.publicUrl,
+      }),
+    )
     app.use(
       '/admin',
       createAdminRouter({

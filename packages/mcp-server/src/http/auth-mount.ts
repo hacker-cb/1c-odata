@@ -5,7 +5,7 @@ import { type RequestHandler, Router } from 'express'
 import type { Auth } from '../auth/better-auth.js'
 import type { CanonicalUrls } from '../auth/config.js'
 import { consentPage } from '../auth/pages/consent.js'
-import { signInPage } from '../auth/pages/sign-in.js'
+import { type FirstRunCheck, makeSignInPage } from '../auth/pages/sign-in.js'
 import { resourceMetadataUrl } from '../auth/resource-metadata.js'
 import { createJwtVerifier } from '../auth/verifier.js'
 
@@ -32,6 +32,12 @@ export interface AuthMountOptions {
   urls: CanonicalUrls
   /** Scopes every /mcp request must carry. Default ['mcp:read']. */
   requiredScopes?: string[]
+  /**
+   * First-run probe (tenancy path only). When it resolves true (no admin yet),
+   * `/sign-in` shows a "setup pending" hint pointing at the server log. It never
+   * receives or renders the setup token.
+   */
+  firstRunCheck?: FirstRunCheck
 }
 
 export interface AuthMount {
@@ -56,7 +62,7 @@ export function createAuthMount(opts: AuthMountOptions): AuthMount {
   // Pages first (plain GET, before the catch-all splat so they aren't swallowed).
   // Each carries anti-clickjacking + CSP headers (the consent page authorizes an
   // OAuth grant and must never be framed).
-  authRouter.get('/sign-in', authPageSecurityHeaders, signInPage)
+  authRouter.get('/sign-in', authPageSecurityHeaders, makeSignInPage(opts.firstRunCheck))
   authRouter.get('/consent', authPageSecurityHeaders, consentPage)
   // Express 5 splat syntax; MUST match better-auth basePath (/api/auth).
   authRouter.all('/api/auth/*splat', toNodeHandler(auth))

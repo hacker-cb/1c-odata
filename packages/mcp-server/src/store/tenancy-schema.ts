@@ -91,6 +91,29 @@ export const grants = pgTable(
   ],
 )
 
+/**
+ * First-run setup token — the one-time bootstrap secret gating the `/setup`
+ * wizard. A single logical row: the boot hook generates one while no admin
+ * exists, and the wizard deletes it once the first admin is created (single-use).
+ *
+ * The token value is stored in the clear ON PURPOSE. It is an ephemeral bootstrap
+ * secret with a hard lifecycle bound: it only unlocks `/setup`, and `/setup`
+ * itself is 404 the instant ANY admin exists — so a leaked token is worthless
+ * once onboarding is done. It is also never presented to an untrusted party (it
+ * is printed only to the server log). And DB-read access already implies host
+ * compromise, at which point the attacker can seed an admin row directly and the
+ * token is moot — hashing it here would add no defense against that threat.
+ */
+export const setupToken = pgTable('setup_token', {
+  // Fixed key (always the string 'singleton'): a restart or concurrent boot that
+  // inserts a fresh token conflicts on `id` and KEEPS the first token, so the
+  // logged /setup URL stays stable and the table never grows past one row. (Making
+  // `token` itself the PK would let each boot's new random token insert a new row.)
+  id: text('id').primaryKey(),
+  token: text('token').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+})
+
 /** Last connectivity/health probe per base. Redacted status/error — never a secret. */
 export const health = pgTable('health', {
   baseName: text('base_name')

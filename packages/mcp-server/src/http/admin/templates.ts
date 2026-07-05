@@ -115,4 +115,22 @@ export const TEMPLATES: Record<string, string> = {
 <option value="user" <%= it.user.role==='user' ? 'selected' : '' %>>user</option>
 <option value="admin" <%= it.user.role==='admin' ? 'selected' : '' %>>admin</option>
 </select></td></tr>`,
+
+  // ---- First-run setup wizard ----
+  // A plain (non-htmx) form: it POSTs back to /setup carrying the token in a hidden
+  // field so the same-origin submit re-presents it. `it.token` is the validated
+  // token (already matched against the stored value) — escaped like all data.
+  // `it.email` is echoed back on a re-render after a failed submit (never the
+  // password). `it.error` is a redacted, trusted message.
+  setup_wizard: `<h1>First-run setup</h1>
+<p>Create the first administrator for this server. This page is available only until the first admin exists.</p>
+<form method="post" action="/setup">
+<fieldset><legend>Create administrator</legend>
+<% if (it.error) { %><p class="err"><%= it.error %></p><% } %>
+<input type="hidden" name="token" value="<%= it.token %>">
+<label>Email <input name="email" type="email" value="<%= it.email || '' %>" autocomplete="username" required></label><br>
+<label>Password <input name="password" type="password" autocomplete="new-password" required></label><br>
+<label>Confirm password <input name="confirm" type="password" autocomplete="new-password" required></label><br>
+<button type="submit">Create admin</button>
+</fieldset></form>`,
 }
