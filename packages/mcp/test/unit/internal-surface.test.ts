@@ -4,14 +4,18 @@
 
 import * as internal from '@1c-odata/mcp/internal'
 import {
+  assertValidConnectionName,
   ConnectionPool,
   clampTop,
   DEFAULT_LIMITS,
   FileConnectionSource,
+  InvalidArgumentError,
+  isValidConnectionName,
   passwordEnvVar,
   registerDataTools,
   registerSchemaTools,
   registerServerInfoTool,
+  resolveDataDir,
   resolveLimits,
   SecretStore,
   toolResult,
@@ -38,6 +42,11 @@ describe('@1c-odata/mcp/internal surface', () => {
       SecretStore,
       passwordEnvVar,
       verifyConnectivity,
+      // Additionally relied on by @1c-odata/mcp-server (tenancy + CLI):
+      resolveDataDir,
+      assertValidConnectionName,
+      isValidConnectionName,
+      InvalidArgumentError,
     ]) {
       expect(typeof fn).toBe('function')
     }
