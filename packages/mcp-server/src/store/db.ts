@@ -27,25 +27,6 @@ export interface DbHandle {
   close(): Promise<void>
 }
 
-/**
- * Fail loudly on a malformed Postgres URI BEFORE handing it to `pg`. The common
- * footgun: a `POSTGRES_PASSWORD` with a raw `/` (e.g. an `openssl rand -base64`
- * value) corrupts the userinfo section — `pg` then connects to the wrong host or
- * throws an opaque error deep in the pool. `deploy/.env.example` already mandates
- * a URL-safe password (`openssl rand -hex`); this turns that prose into an
- * enforced check. Only URI-form strings are validated — the libpq keyword form
- * (`host=… password=…`) is left for `pg` to parse.
- */
-function assertValidPgUri(connectionString: string): void {
-  if (!/^postgres(ql)?:\/\//i.test(connectionString)) return // keyword/DSN form — not a URI
-  if (URL.parse(connectionString) === null) {
-    throw new Error(
-      'Invalid Postgres connection URI (DATABASE_URL / --pg-url). A password with URL-unsafe ' +
-        "characters (e.g. '/') corrupts it — regenerate it URL-safe, e.g. `openssl rand -hex 24`.",
-    )
-  }
-}
-
 /** Build the Drizzle DB for the requested dialect. Both use `provider: "pg"` downstream. */
 export function createDb(dialect: Dialect): DbHandle {
   if (dialect.kind === 'pglite') {
@@ -59,7 +40,6 @@ export function createDb(dialect: Dialect): DbHandle {
       },
     }
   }
-  assertValidPgUri(dialect.connectionString)
   const pool = new Pool({ connectionString: dialect.connectionString })
   const db = drizzlePg(pool, { schema })
   return {

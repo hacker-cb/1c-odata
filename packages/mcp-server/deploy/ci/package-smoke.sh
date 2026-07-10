@@ -48,24 +48,32 @@ fs.writeFileSync('package.json', JSON.stringify({
 npm install --install-links --no-audit --no-fund
 
 # The migrations SQL must actually ship in the published `files` set — a direct
-# guard that cannot silently pass (a dropped `drizzle/` ENOENTs the migrator).
+# guard that cannot silently pass (a dropped `drizzle/` ENOENTs the migrator). The
+# resolved path is also the bin's own dist neighbour we invoke serve through below.
 ls node_modules/@1c-odata/mcp-server/drizzle/*.sql >/dev/null
-npx 1c-odata-mcp-server --help | grep -q admin-create   # bin mapping + commander resolve
+BIN=node_modules/@1c-odata/mcp-server/dist/cli.js
+# Materialize-then-match (not `… | grep -q`): under pipefail a late writer hitting
+# the pipe grep -q already closed would SIGPIPE and trip set -e.
+help=$(npx 1c-odata-mcp-server --help); grep -q admin-create <<<"$help"   # bin mapping + commander resolve
 
 # AUTH path from the installed tree: admin-create runs runAuthMigrations, which
 # walks migrationsFolder() dist→package.json→drizzle/ in the node_modules layout.
 # A dropped drizzle/ now fails HERE instead of passing green.
 export BETTER_AUTH_SECRET
 BETTER_AUTH_SECRET=$(openssl rand -base64 32)
-npx 1c-odata-mcp-server admin-create \
+seed=$(npx 1c-odata-mcp-server admin-create \
   --auth-data-dir "$TMP/store" --public-url http://127.0.0.1:3010 \
-  --email a@b.co --password 'Password123!' 2>&1 | grep -qi 'admin user created'
+  --email a@b.co --password 'Password123!' 2>&1)
+grep -qi 'admin user created' <<<"$seed"
 
-# And boot the auth serve against that same persistent pglite store.
+# And boot the auth serve against that same persistent pglite store. Invoke the bin
+# via `node` directly (not `npx`) so $! is the server PID the trap must kill — an
+# npx shim can outlive a SIGTERM that only reached the wrapper.
 ONEC_MCP_PUBLIC_URL=http://127.0.0.1:3010 \
-  npx 1c-odata-mcp-server serve --auth-data-dir "$TMP/store" --host 127.0.0.1 --port 3010 >"$TMP/pk.log" 2>&1 &
+  node "$BIN" serve --auth-data-dir "$TMP/store" --host 127.0.0.1 --port 3010 >"$TMP/pk.log" 2>&1 &
 PK=$!
 trap 'kill -TERM "$PK" 2>/dev/null || true' EXIT
-curl -fsS --retry 30 --retry-delay 1 --retry-connrefused --max-time 2 http://127.0.0.1:3010/healthz | grep -q '"ok"'
+health=$(curl -fsS --retry 30 --retry-delay 1 --retry-connrefused --max-time 2 http://127.0.0.1:3010/healthz)
+grep -q '"ok"' <<<"$health"
 
 echo "deploy-package-smoke: OK"

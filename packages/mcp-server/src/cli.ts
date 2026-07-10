@@ -234,11 +234,12 @@ export function buildProgram(): Command {
         server.close(() => {
           void close()
         })
-        // Actively terminate idle keep-alive sockets (and any lingering SSE GET on
-        // /mcp) so `server.close` resolves promptly instead of waiting out each
-        // client — the orchestrator's SIGTERM→SIGKILL grace window is finite
-        // (compose defaults to 10s). Safe alongside close(): it only ends sockets.
-        server.closeAllConnections()
+        // Close only IDLE keep-alive sockets so `server.close` resolves promptly
+        // (an idle undici keep-alive would otherwise hold it open to the
+        // orchestrator's finite SIGTERM→SIGKILL window, ~10s under compose). In-
+        // flight requests keep their sockets and drain normally — do NOT use
+        // closeAllConnections(), which would abort an active /setup or admin write.
+        server.closeIdleConnections()
       }
       process.once('SIGINT', () => shutdown('SIGINT'))
       process.once('SIGTERM', () => shutdown('SIGTERM'))

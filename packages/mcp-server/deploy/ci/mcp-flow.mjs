@@ -6,10 +6,9 @@
 // server's DNS-rebinding Host guard is live END-TO-END through whatever fronts it.
 //
 // It exists so CI can assert the ONE seam no cheaper test reaches: on `/mcp` the
-// bearer gate runs BEFORE the Host guard (app.ts mounts [bearerMiddleware,
-// mcpRouter] and the Host check lives inside transport.handleRequest), so the
-// guard is only reachable WITH a valid token — every Host assertion must be
-// bearer-driven. An unauthenticated `curl /mcp` is a 401 and proves nothing.
+// bearer gate runs BEFORE the DNS-rebinding Host guard, so the guard is only
+// reachable WITH a valid token — every Host assertion must be bearer-driven. An
+// unauthenticated `curl /mcp` is a 401 and proves nothing.
 //
 // Deliberately dependency-free (global fetch only) so it runs against the shipped
 // `--prod` deploy tree, which has no dev deps. It mirrors the OAuth flow in
@@ -197,6 +196,9 @@ function initialize(token, hostHeader) {
       res.resume() // drain; we only need status + headers
       resolve({ status: res.statusCode, sessionId: res.headers['mcp-session-id'] })
     })
+    // node:http has NO default timeout — bound a server that accepts the socket but
+    // never responds, so this fails fast instead of hanging the CI job.
+    req.setTimeout(15000, () => req.destroy(new Error('initialize timed out')))
     req.on('error', reject)
     req.end(body)
   })

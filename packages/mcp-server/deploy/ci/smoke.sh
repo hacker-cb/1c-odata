@@ -69,14 +69,19 @@ ADMIN=$(awk '$1==302{print $2}' /tmp/race.txt)
 [ "$(code "$BASE/setup?token=$TOKEN")" = 404 ]                         # single-use: token burned, wizard self-closed
 
 # ── Host guard ENFORCEMENT (bearer-driven; the gate precedes the guard on /mcp) ─
-curl -s -D - -o /dev/null -X POST "$BASE/mcp" \
-  -H 'accept: application/json, text/event-stream' -H 'content-type: application/json' --data '{}' \
-  | grep -qi 'www-authenticate'                                        # unauth → 401 + RFC 9728 pointer
-node "$here/mcp-flow.mjs" "$BASE" "$ADMIN" 'Password123!' \
+# Materialize then match (not `curl | grep -q`): grep -q closes the pipe on match,
+# and under pipefail a late writer hitting SIGPIPE would trip set -e.
+headers=$(curl -s -D - -o /dev/null -X POST "$BASE/mcp" \
+  -H 'accept: application/json, text/event-stream' -H 'content-type: application/json' --data '{}')
+grep -qi 'www-authenticate' <<<"$headers"                              # unauth → 401 + RFC 9728 pointer
+# `timeout` bounds a stalled server (a hung /authorize or /mcp) to fail fast rather
+# than block the job to GitHub's outer timeout — the bounded-poll contract.
+timeout 60 node "$here/mcp-flow.mjs" "$BASE" "$ADMIN" 'Password123!' \
   --host-ok 127.0.0.1:3000 --host-evil evil.test                      # 200 canonical Host, 403 spoofed
 
 # ── Break-glass on the real store ──────────────────────────────────────────────
-node "$APP_DIR/dist/cli.js" set-password --email "$ADMIN" --password 'Rotated456!' 2>&1 | grep -q 'password updated'
+setpw=$(node "$APP_DIR/dist/cli.js" set-password --email "$ADMIN" --password 'Rotated456!' 2>&1)
+grep -q 'password updated' <<<"$setpw"
 
 # ── SIGTERM drain within compose's 10s window, then IDEMPOTENT re-boot ──────────
 kill -TERM "$MCP"

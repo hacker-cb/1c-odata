@@ -46,14 +46,23 @@ jobs:
         with:
           persist-credentials: false # the job never uses the git token
       - uses: docker/setup-buildx-action@v3
-      - name: Lint the shipped Caddyfile (compensating control for un-runnable real ACME)
+      - name: Lint both Caddyfiles (compensating control for un-runnable real ACME)
+        # Validate the SHIPPED Caddyfile AND the CI-only root config that actually
+        # drives this run (Caddyfile.ci imports the shipped file as /etc/caddy/site.caddy)
+        # — else a syntax error in the file that DIFFERS from prod would only surface
+        # as a slow crash-loop that times out `up --wait`, not a fast, attributed error.
         # MCP_PUBLIC_DOMAIN MUST be set: the shipped Caddyfile's site address is
         # {$MCP_PUBLIC_DOMAIN}{…}; unset → empty → a leading {…} parsed as a bogus
         # global-options block → validate fails for the WRONG reason.
-        run: >-
-          docker run --rm -e MCP_PUBLIC_DOMAIN=mcp.test
-          -v "$PWD/packages/mcp-server/deploy/Caddyfile:/f:ro"
-          caddy:2 caddy validate --config /f --adapter caddyfile
+        run: |
+          d=packages/mcp-server/deploy
+          docker run --rm -e MCP_PUBLIC_DOMAIN=mcp.test \
+            -v "$PWD/$d/Caddyfile:/f:ro" \
+            caddy:2 caddy validate --config /f --adapter caddyfile
+          docker run --rm -e MCP_PUBLIC_DOMAIN=mcp.test \
+            -v "$PWD/$d/ci/Caddyfile.ci:/etc/caddy/Caddyfile:ro" \
+            -v "$PWD/$d/Caddyfile:/etc/caddy/site.caddy:ro" \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Build the image (GHA-cached)
         uses: docker/build-push-action@v6
         with:

@@ -35,10 +35,12 @@ done
 # The wizard, through Caddy (Host preserved). No concurrency race here — a single
 # compose stack has no request-level parallelism to exercise (that lives in Tier 1
 # on the real pg.Pool) — so a fixed email is deterministic and correct.
-TOKEN=$($DC logs --no-color --no-log-prefix mcp | grep 'FIRST-RUN' | tail -1 | grep -oE 'token=[A-Za-z0-9_-]+' | cut -d= -f2)
+# `|| true` so an empty grep doesn't abort the substitution (pipefail) BEFORE the
+# diagnostic below can run.
+TOKEN=$($DC logs --no-color --no-log-prefix mcp | grep 'FIRST-RUN' | tail -1 | grep -oE 'token=[A-Za-z0-9_-]+' | cut -d= -f2 || true)
 [ -n "$TOKEN" ] || { echo "::error::setup token not found in mcp logs"; exit 1; }
 
-$C "https://mcp.test/setup?token=$TOKEN" | grep -qi 'setup' # wizard OPEN through the proxy
+[ "$(code "https://mcp.test/setup?token=$TOKEN")" = 200 ] # wizard OPEN through the proxy (status, not just body)
 [ "$(code -X POST https://mcp.test/setup -H 'Origin: https://mcp.test' \
      --data-urlencode "token=$TOKEN" --data-urlencode email=a@b.co \
      --data-urlencode 'password=Password123!' --data-urlencode 'confirm=Password123!')" = 302 ]
@@ -49,10 +51,12 @@ $C "https://mcp.test/setup?token=$TOKEN" | grep -qi 'setup' # wizard OPEN throug
 # curl's --cacert/--resolve — so the caller adds the /etc/hosts entry and we pass
 # the CA here. A future `header_up Host` in the Caddyfile would break this → red.
 # No --host-evil: through a proxy the negative case tests the proxy's routing, not
-# this server's guard (that assertion lives in Tier 1, direct to the app).
-NODE_EXTRA_CA_CERTS="$PWD/ci-root.crt" node ci/mcp-flow.mjs https://mcp.test a@b.co 'Password123!' --host-ok mcp.test
+# this server's guard (that assertion lives in Tier 1, direct to the app). `timeout`
+# bounds a stalled server so a hang fails fast instead of blocking to the job timeout.
+NODE_EXTRA_CA_CERTS="$PWD/ci-root.crt" timeout 60 node ci/mcp-flow.mjs https://mcp.test a@b.co 'Password123!' --host-ok mcp.test
 
 # Break-glass at the container boundary (README §3; ENTRYPOINT is the bin).
-$DC run --rm mcp set-password --email a@b.co --password 'Rotated456!' 2>&1 | grep -q 'password updated'
+setpw=$($DC run --rm mcp set-password --email a@b.co --password 'Rotated456!' 2>&1)
+grep -q 'password updated' <<<"$setpw"
 
 echo "deploy-compose-smoke: OK"
