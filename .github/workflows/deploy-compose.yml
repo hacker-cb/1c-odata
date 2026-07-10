@@ -1,0 +1,93 @@
+name: Deploy compose smoke
+
+# Brings up the FULL shipped Docker Compose stack (db + mcp + caddy) and drives it
+# through Caddy over real TLS (Caddy's internal CA, verified chain — never -k). The
+# ONLY prod-vs-CI delta is the cert issuer: real ACME/Let's Encrypt needs public
+# DNS + inbound 80/443, which a hosted runner cannot provide. Everything else — the
+# image, compose orchestration, auto-HTTPS wiring, Host preservation through the
+# proxy, the wizard, the break-glass CLI — is exercised as shipped.
+#
+# Path-scoped + nightly + manual, NOT a required check: a path-scoped required
+# check skips-and-blocks on unrelated PRs, so it lives in its own file rather than
+# in ci.yml's required matrix.
+#
+# SECURITY — READ BEFORE EDITING (mirrors ci.yml's maintainer warning):
+#   This job BUILDS AND RUNS fork-PR code (Dockerfile RUN steps + the app). It is
+#   safe ONLY because it uses `pull_request` (never pull_request_target),
+#   `permissions: contents: read`, and references ZERO secrets. Do NOT add
+#   `pull_request_target`. Do NOT add any `secrets.*` — a secret-bearing variant
+#   (e.g. a live-1С egress overlay) belongs in a SEPARATE file with the
+#   detect-secrets owner gate.
+on:
+  pull_request:
+    paths:
+      - "packages/mcp-server/deploy/**"
+      - "packages/mcp-server/drizzle/**"
+      - "packages/mcp-server/src/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/deploy-compose.yml"
+  push:
+    branches: [dev, master, "umbrella/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false # the job never uses the git token
+      - uses: docker/setup-buildx-action@v3
+      - name: Lint the shipped Caddyfile (compensating control for un-runnable real ACME)
+        # MCP_PUBLIC_DOMAIN MUST be set: the shipped Caddyfile's site address is
+        # {$MCP_PUBLIC_DOMAIN}{…}; unset → empty → a leading {…} parsed as a bogus
+        # global-options block → validate fails for the WRONG reason.
+        run: >-
+          docker run --rm -e MCP_PUBLIC_DOMAIN=mcp.test
+          -v "$PWD/packages/mcp-server/deploy/Caddyfile:/f:ro"
+          caddy:2 caddy validate --config /f --adapter caddyfile
+      - name: Build the image (GHA-cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: . # repo root — the workspace build needs the sibling packages
+          file: packages/mcp-server/deploy/Dockerfile
+          load: true
+          tags: onec-mcp:ci
+          cache-from: type=gha
+          # Restrict cache WRITE to trusted push events — on a fork PR, mode=max
+          # would cache builder stages built from PR-controlled RUN steps.
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max' || '' }}
+      - name: Up (internal-CA TLS) + smoke through Caddy
+        working-directory: packages/mcp-server/deploy
+        run: |
+          # URL-safe password: compose.yml interpolates POSTGRES_PASSWORD RAW into
+          # DATABASE_URL, and db.ts now rejects a non-URL-safe one at boot.
+          {
+            echo "MCP_PUBLIC_DOMAIN=mcp.test"
+            echo "MCP_PUBLIC_URL=https://mcp.test"
+            echo "BETTER_AUTH_SECRET=$(openssl rand -base64 32)"
+            echo "ONEC_MCP_ENC_KEY=$(openssl rand -base64 32)"
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"
+          } > .env
+          # Resolve mcp.test → loopback so undici (mcp-flow) and curl both reach it.
+          echo '127.0.0.1 mcp.test' | sudo tee -a /etc/hosts
+          docker compose -f compose.yml -f ci/compose.ci.yml up -d --wait --wait-timeout 300
+          bash ci/compose-smoke.sh
+      - name: Dump compose logs on failure
+        if: failure()
+        working-directory: packages/mcp-server/deploy
+        run: |
+          docker compose -f compose.yml -f ci/compose.ci.yml logs --no-color || true
+          docker compose -f compose.yml -f ci/compose.ci.yml ps || true
+      - name: Tear down
+        if: always()
+        working-directory: packages/mcp-server/deploy
+        run: docker compose -f compose.yml -f ci/compose.ci.yml down -v || true
