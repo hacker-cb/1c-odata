@@ -77,8 +77,8 @@ jobs:
       - name: Up (internal-CA TLS) + smoke through Caddy
         working-directory: packages/mcp-server/deploy
         run: |
-          # URL-safe password: compose.yml interpolates POSTGRES_PASSWORD RAW into
-          # DATABASE_URL, and db.ts now rejects a non-URL-safe one at boot.
+          # POSTGRES_PASSWORD must be URL-safe: compose.yml interpolates it RAW into
+          # DATABASE_URL, so `openssl rand -hex` (never -base64, which can emit '/').
           {
             echo "MCP_PUBLIC_DOMAIN=mcp.test"
             echo "MCP_PUBLIC_URL=https://mcp.test"
@@ -86,8 +86,8 @@ jobs:
             echo "ONEC_MCP_ENC_KEY=$(openssl rand -base64 32)"
             echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"
           } > .env
-          # Resolve mcp.test → loopback so undici (mcp-flow) and curl both reach it.
-          echo '127.0.0.1 mcp.test' | sudo tee -a /etc/hosts
+          # The smoke reaches Caddy's base 0.0.0.0:443 publish via curl --resolve,
+          # so no /etc/hosts entry is needed.
           docker compose -f compose.yml -f ci/compose.ci.yml up -d --wait --wait-timeout 300
           bash ci/compose-smoke.sh
       - name: Dump compose logs on failure
