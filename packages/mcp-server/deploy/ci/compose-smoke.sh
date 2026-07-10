@@ -35,9 +35,12 @@ done
 # The wizard, through Caddy (Host preserved). No concurrency race here — a single
 # compose stack has no request-level parallelism to exercise (that lives in Tier 1
 # on the real pg.Pool) — so a fixed email is deterministic and correct.
-# `|| true` so an empty grep doesn't abort the substitution (pipefail) BEFORE the
-# diagnostic below can run.
-TOKEN=$($DC logs --no-color --no-log-prefix mcp | grep 'FIRST-RUN' | tail -1 | grep -oE 'token=[A-Za-z0-9_-]+' | cut -d= -f2 || true)
+# `head -1` is load-bearing: the pino FIRST-RUN line carries the token TWICE (the
+# `setupUrl` field AND the message text), so grep -oE matches twice — without
+# head -1 the substitution yields "TOKEN\nTOKEN" and the embedded newline makes the
+# request URL malformed (curl error 3). `|| true` so an empty grep doesn't abort
+# the substitution (pipefail) BEFORE the diagnostic below can run.
+TOKEN=$($DC logs --no-color --no-log-prefix mcp | grep 'FIRST-RUN' | grep -oE 'token=[A-Za-z0-9_-]+' | head -1 | cut -d= -f2 || true)
 [ -n "$TOKEN" ] || { echo "::error::setup token not found in mcp logs"; exit 1; }
 
 [ "$(code "https://mcp.test/setup?token=$TOKEN")" = 200 ] # wizard OPEN through the proxy (status, not just body)
