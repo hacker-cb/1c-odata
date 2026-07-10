@@ -94,7 +94,10 @@ jobs:
         if: failure()
         working-directory: packages/mcp-server/deploy
         run: |
-          docker compose -f compose.yml -f ci/compose.ci.yml logs --no-color || true
+          # Redact the first-run setup token: a failure before the wizard POST
+          # consumes it would otherwise print a still-live one-time token.
+          docker compose -f compose.yml -f ci/compose.ci.yml logs --no-color 2>&1 \
+            | sed -E 's/token=[A-Za-z0-9_-]+/token=REDACTED/g' || true
           docker compose -f compose.yml -f ci/compose.ci.yml ps || true
       - name: Tear down
         if: always()

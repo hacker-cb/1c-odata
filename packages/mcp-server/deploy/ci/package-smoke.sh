@@ -23,11 +23,13 @@ mkdir -p "$TARS" "$SCRATCH"
     --filter '@1c-odata/metadata' --filter '@1c-odata/client' pack --pack-destination "$TARS" )
 
 # Resolve exact tarball paths. The `mcp` glob must exclude `mcp-server`, so match a
-# digit right after `mcp-` (versions start with a digit).
-S=$(ls "$TARS"/1c-odata-mcp-server-*.tgz)
-M=$(ls "$TARS"/1c-odata-mcp-[0-9]*.tgz)
-C=$(ls "$TARS"/1c-odata-client-*.tgz)
-D=$(ls "$TARS"/1c-odata-metadata-*.tgz)
+# digit right after `mcp-` (versions start with a digit). `head -1` guards against a
+# stray second tarball (TARS is a fresh dir, but be defensive so a multi-line value
+# can't slip into the file: specs below).
+S=$(ls "$TARS"/1c-odata-mcp-server-*.tgz | head -1)
+M=$(ls "$TARS"/1c-odata-mcp-[0-9]*.tgz | head -1)
+C=$(ls "$TARS"/1c-odata-client-*.tgz | head -1)
+D=$(ls "$TARS"/1c-odata-metadata-*.tgz | head -1)
 
 # Pin EVERY @1c-odata/* to its local tarball via `overrides` so npm resolves the
 # unpublished siblings from disk, never the registry (which would 404).

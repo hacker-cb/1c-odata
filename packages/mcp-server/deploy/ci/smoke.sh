@@ -21,8 +21,16 @@ export ONEC_MCP_ENC_KEY="${ONEC_MCP_ENC_KEY:-$(openssl rand -base64 32)}" # 32 b
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 serve() { node "$APP_DIR/dist/cli.js" serve --host 127.0.0.1 --port 3000 >"$1" 2>&1 & echo $!; }
-wait_health() { curl -fsS --retry 40 --retry-delay 1 --retry-connrefused --max-time 2 "$BASE/healthz" | grep -q '"ok"'; }
-code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+# Capture then match (not `curl | grep -q`): keeps `-fsS`'s fail-fast on an HTTP
+# error while avoiding a SIGPIPE if grep -q closes the pipe before curl finishes.
+wait_health() {
+  local body
+  body=$(curl -fsS --retry 40 --retry-delay 1 --retry-connrefused --max-time 2 "$BASE/healthz") || return 1
+  grep -q '"ok"' <<<"$body"
+}
+# --max-time bounds a stalled server (accepts the socket, never responds) so a hang
+# fails fast instead of blocking the job to GitHub's outer timeout.
+code() { curl -s --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' "$@"; }
 
 # ── Boot #1: node-postgres migrator vs REAL pg, + the first-run wizard ──────────
 MCP=$(serve /tmp/mcp1.log)
@@ -71,7 +79,7 @@ ADMIN=$(awk '$1==302{print $2}' /tmp/race.txt)
 # ── Host guard ENFORCEMENT (bearer-driven; the gate precedes the guard on /mcp) ─
 # Materialize then match (not `curl | grep -q`): grep -q closes the pipe on match,
 # and under pipefail a late writer hitting SIGPIPE would trip set -e.
-headers=$(curl -s -D - -o /dev/null -X POST "$BASE/mcp" \
+headers=$(curl -s --connect-timeout 5 --max-time 15 -D - -o /dev/null -X POST "$BASE/mcp" \
   -H 'accept: application/json, text/event-stream' -H 'content-type: application/json' --data '{}')
 grep -qi 'www-authenticate' <<<"$headers"                              # unauth → 401 + RFC 9728 pointer
 # `timeout` bounds a stalled server (a hung /authorize or /mcp) to fail fast rather

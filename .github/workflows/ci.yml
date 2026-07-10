@@ -227,9 +227,9 @@ jobs:
         run: bash packages/mcp-server/deploy/ci/smoke.sh
       - name: Dump server logs on failure
         if: failure()
-        # The setup token is single-use and already consumed by this point, so the
-        # log carries no live secret.
-        run: cat /tmp/mcp1.log /tmp/mcp2.log 2>/dev/null || true
+        # Redact the first-run setup token: a failure BEFORE the race consumes it
+        # would otherwise print a still-live one-time token into the CI log.
+        run: cat /tmp/mcp1.log /tmp/mcp2.log 2>/dev/null | sed -E 's/token=[A-Za-z0-9_-]+/token=REDACTED/g' || true
 
   deploy-package-smoke:
     runs-on: ubuntu-latest

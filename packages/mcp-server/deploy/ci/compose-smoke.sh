@@ -18,7 +18,8 @@ done
 [ -s ci-root.crt ] || { echo "::error::Caddy internal-CA root.crt never appeared"; exit 1; }
 
 # Reach the base 0.0.0.0:443/80 publish via loopback; verify with the extracted CA.
-C="curl -sS --cacert ci-root.crt --resolve mcp.test:443:127.0.0.1 --resolve mcp.test:80:127.0.0.1"
+# --max-time bounds a stalled server so a hang fails fast, not to the job timeout.
+C="curl -sS --connect-timeout 5 --max-time 15 --cacert ci-root.crt --resolve mcp.test:443:127.0.0.1 --resolve mcp.test:80:127.0.0.1"
 code() { $C -o /dev/null -w '%{http_code}' "$@"; }
 
 # root.crt existing does NOT mean the per-site LEAF for mcp.test is issued — that
