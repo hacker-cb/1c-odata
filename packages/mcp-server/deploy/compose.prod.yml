@@ -1,0 +1,19 @@
+# compose.prod.yml — run the stack from the PUBLISHED image instead of building
+# from source. Overlay on top of compose.yml:
+#
+#   export MCP_IMAGE_TAG=0.7.0   # pin an exact version in production
+#   docker compose -f compose.yml -f compose.prod.yml pull
+#   docker compose -f compose.yml -f compose.prod.yml up -d
+#
+# This needs only compose.yml + compose.prod.yml + Caddyfile + .env on the host —
+# no monorepo checkout and no build toolchain (the base compose.yml's `build:`
+# context is `../../..`, which only exists in a full source tree).
+services:
+  mcp:
+    # Drop the base `build:` block entirely (Compose `!reset` merge tag) so compose
+    # never tries to build from the (absent) repo root — it only pulls the image.
+    build: !reset null
+    image: ghcr.io/hacker-cb/1c-odata-mcp-server:${MCP_IMAGE_TAG:-latest}
+    # `latest` is mutable, so always re-check the registry digest on `up`. For a
+    # pinned immutable tag this is just a cheap HEAD; the layers are cached.
+    pull_policy: always

@@ -21,6 +21,12 @@ jobs:
       contents: write
       pull-requests: write
       id-token: write   # for npm provenance
+    outputs:
+      # Consumed by the publish-image job below. `hasChangesets == 'false'` is the
+      # same signal the npm-publish step gates on (release PR merged, or a plain
+      # master push). `version` is the fixed-group version (client stands in for all).
+      has_changesets: ${{ steps.changesets.outputs.hasChangesets }}
+      version: ${{ steps.relmeta.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -32,6 +38,14 @@ jobs:
       # OIDC token is fetched directly by `npm publish` via the
       # `id-token: write` permission — no .npmrc auth needed.
       - uses: ./.github/actions/setup
+      # The fixed-group version (all packages share it) — surfaced as a job output
+      # so publish-image tags the container image with the same version npm gets.
+      # On a release-PR run the tree still holds the OLD version, but publish-image
+      # only consumes this when has_changesets=='false' (post-merge), where master
+      # already carries the bumped version.
+      - name: Resolve release version
+        id: relmeta
+        run: echo "version=$(node -p "require('./packages/client/package.json').version")" >> "$GITHUB_OUTPUT"
       # Same gate sequence as ci.yml, shared via ./.github/actions/gates (each
       # gate is a separate turbo invocation — the action documents why). Typecheck
       # stays inline here because ci.yml runs it in a separate matrix job.
@@ -134,3 +148,19 @@ jobs:
           if [ -z "$PR_NUM" ]; then exit 0; fi
           VERSION=$(gh api "repos/${{ github.repository }}/contents/packages/client/package.json?ref=changeset-release/master" --jq '.content' | base64 -d | jq -r '.version')
           gh pr edit "$PR_NUM" --title "chore(release): v${VERSION}"
+
+  # Publish the multi-arch container image to GHCR, tagged with the just-released
+  # fixed-group version. Gated the same way as the npm publish step (release PR
+  # merged, or a plain master push) — release-image.yml is itself idempotent, so a
+  # no-op push is cheap. A separate job (not a step) because a reusable workflow is
+  # invoked at job level; keeps the image build logic in its own file.
+  publish-image:
+    needs: release
+    if: needs.release.outputs.has_changesets == 'false'
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/release-image.yml
+    with:
+      version: ${{ needs.release.outputs.version }}
