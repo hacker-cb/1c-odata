@@ -159,8 +159,7 @@ jobs:
     if: needs.release.outputs.has_changesets == 'false'
     permissions:
       contents: read
-      packages: write
-      id-token: write
+      packages: write # GHCR push; no id-token (build-push provenance is unsigned)
     uses: ./.github/workflows/release-image.yml
     with:
       version: ${{ needs.release.outputs.version }}
