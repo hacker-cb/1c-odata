@@ -42,6 +42,22 @@ docker compose ps
 curl -fsS https://$MCP_PUBLIC_DOMAIN/healthz && echo OK   # liveness probe
 ```
 
+### Run from the published image (no build)
+
+Each release publishes a multi-arch (`amd64` + `arm64`) image to GHCR:
+`ghcr.io/hacker-cb/1c-odata-mcp-server`, tagged `X.Y.Z` (exact), `X.Y` (latest
+patch), and `latest`. The `compose.prod.yml` overlay swaps the source build for a
+pull, so a host needs only `compose.yml`, `compose.prod.yml`, `Caddyfile`, and
+`.env` — no monorepo checkout, no build toolchain:
+
+```bash
+export MCP_IMAGE_TAG=0.7.0                                   # pin an exact version
+docker compose -f compose.yml -f compose.prod.yml pull
+docker compose -f compose.yml -f compose.prod.yml up -d
+```
+
+Updating is then just `MCP_IMAGE_TAG=<new> docker compose -f compose.yml -f compose.prod.yml pull && … up -d` — migrations re-run idempotently on boot.
+
 ## 3. Bootstrap the first admin
 
 Sign-up is closed, so the server seeds the first admin through a **one-time setup
@@ -115,9 +131,10 @@ invocation and the auth modes). Whatever you pick, a deploy must satisfy:
 
 Concretely:
 
-- **PaaS (Fly.io / Render / Railway):** deploy the `Dockerfile` and attach the
-  platform's managed Postgres; TLS + the domain come from the platform, so you can
-  drop the `caddy` service. Pin the app to a single machine/replica.
+- **PaaS (Fly.io / Render / Railway):** point the platform at the prebuilt
+  `ghcr.io/hacker-cb/1c-odata-mcp-server` image (or build the `Dockerfile`) and
+  attach the platform's managed Postgres; TLS + the domain come from the platform,
+  so you can drop the `caddy` service. Pin the app to a single machine/replica.
 - **Bare VPS (systemd):** `npm i -g @1c-odata/mcp-server`, run `1c-odata-mcp-server
   serve --host 0.0.0.0 --port 3000` under a `systemd` unit, front it with your own
   TLS proxy (nginx/Caddy), and point `DATABASE_URL` at a system Postgres.

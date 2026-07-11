@@ -23,6 +23,13 @@ RUN pnpm --filter @1c-odata/mcp-server deploy --prod --legacy /app
 # ── Runtime: just Node + the deploy tree, unprivileged ──────────────────────────
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production
+# Static OCI labels so a local `docker compose --build` image is traceable and the
+# GHCR package auto-links to the repo. CI (docker/metadata-action in
+# release-image.yml) overrides the dynamic ones (version/revision/created) per release.
+LABEL org.opencontainers.image.source="https://github.com/hacker-cb/1c-odata" \
+      org.opencontainers.image.title="1c-odata-mcp-server" \
+      org.opencontainers.image.description="Remote MCP server for 1С:Enterprise OData bases" \
+      org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 COPY --from=builder /app ./
 # The node image ships an unprivileged `node` user; drop root.
