@@ -16,7 +16,7 @@ function toRows(health: { baseName: string; status: string; lastCheck: Date; err
 /** GET /admin — dashboard shell. */
 export async function dashboardPage(_req: Request, res: Response, deps: AdminDeps): Promise<void> {
   const [serverInfo, health] = await Promise.all([adminServerInfo(deps), deps.healthRepo.list()])
-  page(res, 'dashboard', { serverInfo, rows: toRows(health) }, 'Dashboard')
+  page(res, 'dashboard', { serverInfo, rows: toRows(health) }, 'Dashboard', 'dashboard')
 }
 
 /** GET /admin/health/table — htmx poll target. */

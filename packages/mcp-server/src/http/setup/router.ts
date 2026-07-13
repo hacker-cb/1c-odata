@@ -26,7 +26,7 @@ import { logger } from '../../logger.js'
 import type { AuthDb } from '../../store/db.js'
 import { countAdmins, SetupTokenRepo } from '../../store/repos.js'
 import { adminCsp, adminCsrf } from '../admin/middleware.js'
-import { page } from '../admin/views.js'
+import { authPage } from '../admin/views.js'
 
 /** Everything the setup handlers close over. Built once in createSetupRouter. */
 interface SetupDeps {
@@ -116,7 +116,7 @@ export function createSetupRouter(opts: CreateSetupRouterOptions): Router {
         notFound(res)
         return
       }
-      page(res, 'setup_wizard', { token }, 'Setup')
+      authPage(res, 'setup_wizard', { token }, 'Setup')
     }, deps),
   )
 
@@ -135,7 +135,7 @@ export function createSetupRouter(opts: CreateSetupRouterOptions): Router {
       const password = req.body.password
       const confirm = req.body.confirm
       if (typeof email !== 'string' || email === '' || typeof password !== 'string' || password === '') {
-        page(
+        authPage(
           res,
           'setup_wizard',
           { token, email: typeof email === 'string' ? email : '', error: 'Email and password are required.' },
@@ -144,7 +144,7 @@ export function createSetupRouter(opts: CreateSetupRouterOptions): Router {
         return
       }
       if (typeof confirm === 'string' && confirm !== password) {
-        page(res, 'setup_wizard', { token, email, error: 'Passwords do not match.' }, 'Setup')
+        authPage(res, 'setup_wizard', { token, email, error: 'Passwords do not match.' }, 'Setup')
         return
       }
       // Atomically consume the token: only the winner of a concurrent race proceeds,
@@ -168,7 +168,7 @@ export function createSetupRouter(opts: CreateSetupRouterOptions): Router {
         // too-short password, etc.) into the DOM.
         await d.tokenRepo.ensure(token)
         logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'setup wizard createUser failed')
-        page(
+        authPage(
           res,
           'setup_wizard',
           { token, email, error: 'Could not create the admin — check the email and password and try again.' },

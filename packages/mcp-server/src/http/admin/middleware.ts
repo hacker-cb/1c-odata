@@ -89,9 +89,10 @@ export function adminCsrf(publicUrl: string): RequestHandler {
  * CSP for every admin response. `script-src 'self'` (no `unsafe-inline`) — htmx
  * is vendored and served same-origin, so no inline `<script>` is ever needed and
  * a stored-XSS injection cannot execute script. `style-src` DOES allow
- * `'unsafe-inline'` intentionally: the layout inlines a small trusted `<style>`
- * block (ADMIN_CSS, a static constant — never request data), and inline styles
- * carry no script-execution risk. The script vector, which does, stays locked.
+ * `'unsafe-inline'` intentionally: the shell inlines a trusted `<style>` block
+ * (BASE_CSS in ../../ui/shell.ts, a static constant — never request data), and
+ * inline styles carry no script-execution risk. The script vector, which does,
+ * stays locked.
  */
 export const adminCsp: RequestHandler = (_req, res, next) => {
   res.setHeader(

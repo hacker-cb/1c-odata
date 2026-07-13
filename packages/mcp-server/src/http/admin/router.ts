@@ -90,7 +90,7 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
       const withSecret = await Promise.all(
         bases.map(async (b) => ({ ...b, hasSecret: await d.secretRepo.has(b.name) })),
       )
-      page(res, 'bases_list', { bases: withSecret }, 'Bases')
+      page(res, 'bases_list', { bases: withSecret }, 'Bases', 'bases')
     }, deps),
   )
   router.get('/bases/new', (_req, res) => partial(res, '_base_form', {}))
