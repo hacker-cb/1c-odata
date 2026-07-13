@@ -17,7 +17,7 @@ export async function grantsPage(req: Request, res: Response, deps: AdminDeps): 
   // N+1 resolve() per user (up to 200 sequential queries for a 200-user list).
   const matrix: Record<string, GrantScope> = {}
   for (const g of await deps.grantRepo.listAll()) matrix[`${g.sub}|${g.baseName}`] = g.scope
-  page(res, 'grants_editor', { users, bases, matrix }, 'Grants')
+  page(res, 'grants_editor', { users, bases, matrix }, 'Grants', 'grants')
 }
 
 /** POST /admin/grants/toggle — set/revoke one cell, return the swapped cell. */

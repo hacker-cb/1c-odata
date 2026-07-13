@@ -1,7 +1,8 @@
 // src/http/admin/views.ts
 import { Eta } from 'eta'
 import type { Response } from 'express'
-import { ADMIN_CSS, LAYOUT, TEMPLATES } from './templates.js'
+import { type AppSection, appShell, authShell } from '../../ui/shell.js'
+import { TEMPLATES } from './templates.js'
 
 /**
  * One process-wide Eta instance in string mode (autoEscape ON — base labels,
@@ -18,7 +19,7 @@ const compiled = new Map<string, RenderFn>()
 function get(name: string): RenderFn {
   let fn = compiled.get(name)
   if (fn === undefined) {
-    const src = name === '_layout' ? LAYOUT : TEMPLATES[name]
+    const src = TEMPLATES[name]
     if (src === undefined) throw new Error(`unknown admin template "${name}"`)
     // Eta.compile → a render fn bound to this Eta instance (autoescape + config).
     fn = eta.compile(src).bind(eta) as RenderFn
@@ -32,10 +33,20 @@ export function render(name: string, data: Record<string, unknown> = {}): string
   return get(name)({ ...data, _r: render })
 }
 
-/** Full page: fragment wrapped in the shared layout. For top-level GETs. */
-export function page(res: Response, view: string, data: Record<string, unknown>, title: string): void {
-  const body = render(view, data)
-  res.type('html').send(render('_layout', { body, title, css: ADMIN_CSS }))
+/** Full admin page: fragment wrapped in the app shell (top-bar nav). `active` highlights the current section. */
+export function page(
+  res: Response,
+  view: string,
+  data: Record<string, unknown>,
+  title: string,
+  active?: AppSection,
+): void {
+  res.type('html').send(appShell({ title, active, body: render(view, data) }))
+}
+
+/** Pre-auth page (e.g. the setup wizard): fragment wrapped in the centered-card shell — no nav. */
+export function authPage(res: Response, view: string, data: Record<string, unknown>, title: string): void {
+  res.type('html').send(authShell({ title, body: render(view, data) }))
 }
 
 /** Bare fragment — htmx swaps this into a target; no layout. */

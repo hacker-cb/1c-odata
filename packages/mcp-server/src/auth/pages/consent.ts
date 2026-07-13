@@ -1,5 +1,6 @@
 // src/auth/pages/consent.ts
 import type { Request, Response } from 'express'
+import { authShell } from '../../ui/shell.js'
 
 /**
  * Minimal /consent page fulfilling the oauthProvider `consentPage` contract. The
@@ -18,27 +19,29 @@ import type { Request, Response } from 'express'
 export function consentPage(req: Request, res: Response): void {
   const clientId = typeof req.query.client_id === 'string' ? req.query.client_id : ''
   const scope = typeof req.query.scope === 'string' ? req.query.scope : ''
+  const scopes = scope
+    .split(' ')
+    .filter(Boolean)
+    .map((s) => `<li><code>${escapeHtml(s)}</code></li>`)
+    .join('')
+  const body = `<h1>Authorize access</h1>
+<p class="hint"><span class="clientid">${escapeHtml(clientId)}</span> is requesting access to:</p>
+<ul class="scopes">${scopes}</ul>
+<div class="btn-row">
+  <button id="deny">Deny</button>
+  <button id="allow" class="btn-primary">Allow</button>
+</div>
+<p id="err" class="err"></p>`
   res
     .status(200)
     .type('html')
-    .send(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Authorize — 1C OData MCP</title>
-<meta name="viewport" content="width=device-width, initial-scale=1"></head>
-<body>
-<h1>Authorize access</h1>
-<p>Client <code>${escapeHtml(clientId)}</code> is requesting:</p>
-<ul>${scope
-      .split(' ')
-      .filter(Boolean)
-      .map((s) => `<li><code>${escapeHtml(s)}</code></li>`)
-      .join('')}</ul>
-<button id="allow">Allow</button>
-<button id="deny">Deny</button>
-<p id="err" style="color:#c00"></p>
-<script>
+    .send(authShell({ title: 'Authorize', body, scripts: CONSENT_SCRIPT }))
+}
+
+// Client-side accept/deny. Reads the verbatim signed query from window.location at
+// runtime (never interpolated into markup), so a crafted query cannot inject.
+const CONSENT_SCRIPT = `
 async function decide(accept) {
-  // Forward the verbatim signed query the plugin appended so the endpoint can
-  // re-verify the signature and resolve the pending authorization request.
   const oauthQuery = window.location.search.replace(/^\\?/, '');
   const r = await fetch('/api/auth/oauth2/consent', {
     method: 'POST',
@@ -46,7 +49,6 @@ async function decide(accept) {
     credentials: 'same-origin',
     body: JSON.stringify({ accept, oauth_query: oauthQuery }),
   });
-  // On accept the endpoint answers with a redirect back to the client.
   if (r.redirected) { window.location.href = r.url; return; }
   const data = await r.json().catch(() => ({}));
   const url = data.url || data.redirect_uri || data.redirectURI;
@@ -55,10 +57,7 @@ async function decide(accept) {
   document.getElementById('err').textContent = 'Consent failed';
 }
 document.getElementById('allow').addEventListener('click', () => decide(true));
-document.getElementById('deny').addEventListener('click', () => decide(false));
-</script>
-</body></html>`)
-}
+document.getElementById('deny').addEventListener('click', () => decide(false));`
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c)

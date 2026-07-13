@@ -1,5 +1,6 @@
 // src/auth/pages/sign-in.ts
 import type { Request, Response } from 'express'
+import { authShell } from '../../ui/shell.js'
 
 /**
  * Optional first-run probe. When present and it resolves true (no admin exists
@@ -55,31 +56,12 @@ export function signInPage(req: Request, res: Response): void {
 // The first-run hint is STATIC markup — it names no token and interpolates no
 // request data, so it carries no injection risk. It points the operator at the
 // server log, which is where the `/setup?token=…` URL was printed at boot.
-const FIRST_RUN_HINT = `<p style="padding:.6rem .8rem;background:#fef9c3;border:1px solid #eab308;border-radius:.4rem">
-<strong>First-run setup pending.</strong> No administrator exists yet. Open the
-one-time setup URL printed in the server logs (<code>…/setup?token=…</code>) to
-create the first admin.</p>`
+const FIRST_RUN_HINT = `<p class="notice"><strong>First-run setup pending.</strong> No administrator exists yet. Open the
+one-time setup URL printed in the server logs (<code>…/setup?token=…</code>) to create the first admin.</p>`
 
-function signInHtml(hint: string): string {
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Sign in — 1C OData MCP</title>
-<meta name="viewport" content="width=device-width, initial-scale=1"></head>
-<body>
-<h1>Sign in</h1>
-${hint}
-<form id="f">
-  <label>Email <input name="email" type="email" autocomplete="username" required></label><br>
-  <label>Password <input name="password" type="password" autocomplete="current-password" required></label><br>
-  <button type="submit">Sign in</button>
-  <p id="err" style="color:#c00"></p>
-</form>
-<script>
-// Decide where to land after a successful sign-in, client-side so no request data
-// is ever interpolated into the server-rendered markup.
-//   - a SAFE same-origin ?next (relative path: one leading '/', not '//') → go there
-//     (the admin gate sets ?next=/admin);
-//   - otherwise resume the OAuth flow by replaying the authorize params the plugin
-//     appended to this page's query.
+// Client-side submit handler. No request data is interpolated here — the resume
+// target is read from window.location at runtime, so a crafted query cannot inject.
+const SIGN_IN_SCRIPT = `
 function resumeTarget() {
   const next = new URLSearchParams(window.location.search).get('next');
   if (next && next[0] === '/' && next[1] !== '/') return next;
@@ -96,9 +78,19 @@ document.getElementById('f').addEventListener('submit', async (e) => {
   });
   if (r.ok) { window.location.href = resumeTarget(); }
   else { document.getElementById('err').textContent = 'Sign-in failed'; }
-});
-</script>
-</body></html>`
+});`
+
+function signInHtml(hint: string): string {
+  const body = `<h1>Sign in</h1>
+<p class="hint">Sign in to the admin panel and the 1С bases you've been granted.</p>
+${hint}
+<form id="f">
+  <label>Email <input name="email" type="email" autocomplete="username" required></label>
+  <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+  <button type="submit" class="btn-primary btn-wide">Sign in</button>
+  <p id="err" class="err"></p>
+</form>`
+  return authShell({ title: 'Sign in', body, scripts: SIGN_IN_SCRIPT })
 }
 
 const SIGN_IN_HTML = signInHtml('')

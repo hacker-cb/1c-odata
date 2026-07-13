@@ -10,7 +10,7 @@ export async function usersPage(req: Request, res: Response, deps: AdminDeps): P
     headers: fromNodeHeaders(req.headers),
     query: { limit: 200, sortBy: 'email', sortDirection: 'asc' },
   })
-  page(res, 'users_list', { users }, 'Users')
+  page(res, 'users_list', { users }, 'Users', 'users')
 }
 
 /** POST /admin/users — create (admin session authorizes; role defaults to 'user'). */
