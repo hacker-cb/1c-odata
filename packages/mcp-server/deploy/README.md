@@ -194,6 +194,71 @@ volumes:
   - ./key.pem:/etc/caddy/key.pem:ro
 ```
 
+## Behind your own reverse proxy
+
+The bundled Caddy is optional — front the server with **any** reverse proxy
+(nginx, HAProxy, a corporate load balancer, a cloud ingress). The app only ever
+speaks **plain HTTP** and never terminates TLS. Crucially, it does **not** trust
+or read `X-Forwarded-*` headers and needs no `trust proxy` setting: its external
+identity — the OAuth `iss`/`aud`, the Protected Resource Metadata, and the
+`/admin` CSRF origin — comes from the single `ONEC_MCP_PUBLIC_URL` you set, so
+spoofed forwarding headers can't shift its origin. (The DNS-rebinding allowlist
+is separate: it auto-*includes* that public host on top of the bind address and
+loopback aliases, and `ONEC_MCP_ALLOWED_HOSTS` overrides it — see requirement 2.)
+To swap Caddy out, point your proxy at the `mcp` service (or run the bin
+directly) on its HTTP port and drop the `caddy` service.
+
+Your proxy must satisfy four things:
+
+1. **Set `ONEC_MCP_PUBLIC_URL`** to the exact external HTTPS origin clients use
+   (e.g. `https://1c-mcp.example.com`) — this is the connector URL and the OAuth
+   issuer.
+2. **Forward the original `Host`** — the DNS-rebinding guard auto-allows the
+   `ONEC_MCP_PUBLIC_URL` host, so a proxy that preserves `Host` needs no extra
+   config. If the proxy rewrites `Host` to an internal upstream name, set
+   `ONEC_MCP_ALLOWED_HOSTS` to the raw `Host` value it actually sends
+   (comma-separated for several).
+3. **Don't buffer the response stream.** Streamable HTTP streams server→client
+   over SSE on `GET /mcp`; a proxy that buffers responses or applies a short read
+   timeout will stall or cut the stream. Disable response buffering and allow
+   long-lived connections.
+4. **Give it the origin root, not a sub-path.** OAuth discovery
+   (`/.well-known/oauth-*`) and the app's routes (`/mcp`, `/api/auth/*`,
+   `/sign-in`, `/consent`, `/admin`, `/setup`) are all origin-rooted, so serve it
+   on its own hostname — mounting under a path prefix
+   (`https://host/1c-mcp/…`) breaks Dynamic Client Registration and discovery.
+
+Keep the **single-instance** rule (session state, the `$metadata` cache and the
+health job are per-process) — the proxy fronts one upstream, not a pool.
+
+An nginx server block covering all four:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name 1c-mcp.example.com;   # == ONEC_MCP_PUBLIC_URL host
+
+    ssl_certificate     /etc/ssl/certs/1c-mcp.pem;
+    ssl_certificate_key /etc/ssl/private/1c-mcp.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;    # the mcp bin's HTTP port
+        proxy_set_header Host $http_host;     # forward the client's raw Host verbatim (req. 2)
+
+        # SSE stream on GET /mcp — never buffer it, allow long connections (req. 3):
+        proxy_buffering off;
+        proxy_http_version 1.1;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+```
+
+> `/admin` is served on the same origin (its CSRF check is bound to
+> `ONEC_MCP_PUBLIC_URL`) and gated by the better-auth `admin` role. To narrow that
+> surface, add an IP allow-list or extra auth in front of `location /admin` in
+> your proxy.
+
 ## Operations
 
 - **Update:** `git pull && docker compose up -d --build` (migrations re-run idempotently on boot).
@@ -221,7 +286,10 @@ invocation and the auth modes). Whatever you pick, a deploy must satisfy:
   per-process; do not run more than one replica.
 - **A persistent Postgres** (`DATABASE_URL`); migrations run on boot.
 - **TLS terminated by a proxy that forwards the original `Host`** — else set
-  `ONEC_MCP_ALLOWED_HOSTS` on the server to the public host.
+  `ONEC_MCP_ALLOWED_HOSTS` to the raw `Host` the proxy actually forwards (an
+  internal upstream name if it rewrites `Host`, not necessarily the public host).
+  See [Behind your own reverse proxy](#behind-your-own-reverse-proxy) for the full
+  proxy contract (Host, SSE buffering, origin root) and an nginx example.
 - The three secrets kept out of the image and backed up (losing `ONEC_MCP_ENC_KEY`
   makes stored 1С passwords unrecoverable).
 
@@ -233,6 +301,7 @@ Concretely:
   so you can drop the `caddy` service. Pin the app to a single machine/replica.
 - **Bare VPS (systemd):** `npm i -g @1c-odata/mcp-server`, run `1c-odata-mcp-server
   serve --host 0.0.0.0 --port 3000` under a `systemd` unit, front it with your own
-  TLS proxy (nginx/Caddy), and point `DATABASE_URL` at a system Postgres.
+  TLS proxy (nginx/Caddy — see [Behind your own reverse proxy](#behind-your-own-reverse-proxy)),
+  and point `DATABASE_URL` at a system Postgres.
 - **Kubernetes:** a 1-replica `Deployment` + a Postgres (managed or in-cluster) +
   an Ingress with TLS. Single replica only until horizontal scaling lands.
