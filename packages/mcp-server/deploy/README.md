@@ -117,17 +117,20 @@ this is what `.env.example` + the shipped `Caddyfile` do.
 For a host on a private ("grey") IP — clients on the LAN or over VPN, nothing
 exposed to the internet — HTTP-01 can't work (the CA can't reach port 80). The
 **DNS-01** challenge proves domain ownership with a DNS `TXT` record instead, so
-the host never needs to be publicly reachable: the `A` record may point at an
-RFC1918 address (`10.x` / `192.168.x`) and you still get a real, publicly-trusted
-Let's Encrypt certificate — **nothing to install on any client**.
+the host never needs to be publicly reachable. The CA validates purely through
+the `TXT` record and **never queries your `A` record**, so the `A` record may
+resolve to an RFC1918 address (`10.x` / `192.168.x`) and you still get a real,
+publicly-trusted Let's Encrypt certificate — **nothing to install on any client**.
 
 Requirements:
 
 - The domain's zone is hosted at a DNS provider with an **API** (Cloudflare,
   Route53, DigitalOcean, …).
 - The `_acme-challenge.<domain>` `TXT` record must resolve in the **public**
-  authoritative DNS (that's what the CA reads). The `A` record can stay
-  split-horizon — internal-only — so the private IP is never published.
+  authoritative DNS (that's what the CA reads). Because the CA never looks at the
+  `A` record, you're free where it lives: publish it (pointing at the private IP)
+  for simplicity, or keep it split-horizon / internal-only so the private IP is
+  never exposed in public DNS.
 
 The stock `caddy:2` image has no DNS-provider plugins, so build a small custom
 image with [`xcaddy`](https://github.com/caddyserver/xcaddy) (Cloudflare shown;
@@ -135,7 +138,7 @@ swap in your provider's [`caddy-dns/*`](https://github.com/orgs/caddy-dns/reposi
 module):
 
 ```dockerfile
-# deploy/Caddyfile.dns.Dockerfile
+# Caddyfile.dns.Dockerfile — add it here in packages/mcp-server/deploy/
 FROM caddy:2-builder AS builder
 RUN xcaddy build --with github.com/caddy-dns/cloudflare
 FROM caddy:2
