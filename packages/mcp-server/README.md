@@ -15,9 +15,9 @@ surface. The MCP endpoint is `POST/GET/DELETE /mcp` (stateful, per-session);
 
 ## Running the CLI
 
-`serve` and `admin-create` are subcommands of the `1c-odata-mcp-server` bin. How
-you invoke it depends on context — pick one and read the examples below as the
-command that follows:
+`serve`, `admin-create`, and `set-password` are subcommands of the
+`1c-odata-mcp-server` bin. How you invoke it depends on context — pick one and read
+the examples below as the command that follows:
 
 - **Installed / published** — `npx @1c-odata/mcp-server serve …`, or after a
   global install simply `1c-odata-mcp-server serve …`. Runs the compiled `dist/`
@@ -97,7 +97,7 @@ Break-glass alternatives, both requiring a PERSISTENT store:
 
 ```bash
 # Non-interactive first-admin seed (equivalent to the wizard, for automation):
-BETTER_AUTH_SECRET=... ONEC_MCP_ENC_KEY=... \
+BETTER_AUTH_SECRET=... \
 1c-odata-mcp-server admin-create --email admin@example.com --password '…' \
   --pg-url postgres://…
 
@@ -147,4 +147,5 @@ server.listen(3000)
   token belongs to a different user is rejected. 1С passwords are write-only in
   the admin UI and never returned in any response.
 - The public surface is `/mcp`, `/.well-known/*`, `/api/auth/*`, `/sign-in`,
-  `/consent`; keep `/admin` and the database internal.
+  `/consent`, and the token-gated `/setup` (first-run only); keep `/admin` and the
+  database internal.

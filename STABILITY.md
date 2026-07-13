@@ -4,7 +4,7 @@ What is and isn't covered by semver across the `@1c-odata/*` monorepo.
 
 ## Public API surface
 
-Public surface = every symbol reachable via a package's `package.json#exports` entrypoints (including subpaths like `@1c-odata/client/filter` and `@1c-odata/cli/codegen`), minus symbols tagged `@internal` in JSDoc. This covers the three library packages: `@1c-odata/client`, `@1c-odata/metadata`, `@1c-odata/cli`. The fourth package, `@1c-odata/mcp`, is a CLI + MCP server (an application) whose contract is operational — see [`@1c-odata/mcp` surface](#1c-odatamcp-surface-cli--mcp-server) below.
+Public surface = every symbol reachable via a package's `package.json#exports` entrypoints (including subpaths like `@1c-odata/client/filter` and `@1c-odata/cli/codegen`), minus symbols tagged `@internal` in JSDoc. This covers the three library packages: `@1c-odata/client`, `@1c-odata/metadata`, `@1c-odata/cli`. The two application packages — `@1c-odata/mcp` (local CLI + stdio MCP server) and `@1c-odata/mcp-server` (remote Streamable-HTTP MCP server) — have operational contracts instead; see [`@1c-odata/mcp` surface](#1c-odatamcp-surface-cli--mcp-server) and [`@1c-odata/mcp-server` surface](#1c-odatamcp-server-surface-remote-mcp-server) below.
 
 Semver-applicable:
 
@@ -30,7 +30,7 @@ NOT covered:
 - **v0.x (current)** — API is unstable. Minor versions MAY contain breaking changes. Every break is documented in [GitHub Releases](https://github.com/hacker-cb/1c-odata/releases) with a migration example. Patch versions are NEVER breaking.
 - **v1.0+ (future)** — strict semver.
 
-Workspace deps use `workspace:*`. All four `@1c-odata/*` packages are one changesets `fixed` group, so they always release together at the same version. In v0.x a breaking change therefore ships as a **minor** bump across all four at once (a major bump is reserved for v1.0) — never as a major in 0.x.
+Workspace deps use `workspace:*`. All five `@1c-odata/*` packages are one changesets `fixed` group, so they always release together at the same version. In v0.x a breaking change therefore ships as a **minor** bump across all five at once (a major bump is reserved for v1.0) — never as a major in 0.x.
 
 ## Error contract
 
@@ -98,3 +98,20 @@ NOT covered:
 - Tool / CLI output text and error-message wording.
 
 The per-data-dir keychain namespacing is a **behavioral break with no migration**: a secret stored under the previous flat `1c-odata` keychain service is not found after the upgrade — re-add the password (`1c-odata-mcp add <name>`) or set `ONEC_<NAME>_PASSWORD`. `config.json`, the `credentials.json` file backend, and env-var passwords are unaffected.
+
+## `@1c-odata/mcp-server` surface (remote MCP server)
+
+`@1c-odata/mcp-server` is an application — the `1c-odata-mcp-server` bin plus a Docker/Compose deploy — versioned under the same [Versioning](#versioning) policy (a break ships as a minor in v0.x, documented in the release).
+
+Semver-applicable:
+
+- The CLI command set and primary flags: `serve`, `admin-create`, `set-password`; `--public-url`, `--pg-url`, `--auth-data-dir`, `--enc-key`, `--data-dir`, `--host`, `--port`, and the env vars they read (`ONEC_MCP_PUBLIC_URL`, `BETTER_AUTH_SECRET`, `ONEC_MCP_ENC_KEY`, `DATABASE_URL`, `ONEC_MCP_ALLOWED_HOSTS`).
+- The HTTP surface a client depends on: the MCP endpoint (`POST`/`GET`/`DELETE /mcp`, Streamable HTTP), `GET /healthz`, and the OAuth discovery documents (`/.well-known/oauth-*`, `/api/auth/*`) — OAuth 2.1 with RFC 8707 resource + PKCE. The read-only MCP tool set is `@1c-odata/mcp`'s (above); management/write tools are never exposed over HTTP.
+- The deploy env contract: `BETTER_AUTH_SECRET`, `ONEC_MCP_ENC_KEY`, `DATABASE_URL`, `ONEC_MCP_PUBLIC_URL` (see [`deploy/README.md`](./packages/mcp-server/deploy/README.md)).
+
+NOT covered:
+
+- The `/admin` panel and the `/sign-in` / `/consent` / `/setup` pages — their markup, routes, and styling are operational UI and MAY change freely.
+- The OAuth authorization-server internals (better-auth), the database schema, and the shipped `drizzle/` migrations — implementation details (migrations run automatically on boot; the store is not a public API).
+- The deploy artifacts (`deploy/Dockerfile`, `compose.yml`, `compose.prod.yml`, `Caddyfile`) and the published `ghcr.io/hacker-cb/1c-odata-mcp-server` image beyond the promise that each release publishes the `X.Y.Z` / `X.Y` / `latest` tags.
+- The `.` programmatic export (`createHttpServer`) — a convenience for embedding, MAY change. There is no `@1c-odata/mcp-server/internal`.

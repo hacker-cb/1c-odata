@@ -35,11 +35,11 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 
 ```console
 $ npx @1c-odata/mcp add my-base
-Connection name: my-base
 Base URL: https://your-1c-host/base/odata/standard.odata/
 Login: your-user
 Password: ********            # typed with no echo — never stored in shell history or argv
 Server timezone [Europe/Moscow]: Europe/Moscow
+Label (optional, shown in lists):
 Verifying connection… OK
 ✓ Connection "my-base" saved.
   config:   ~/.config/1c-odata/config.json
@@ -123,7 +123,7 @@ relative `--data-dir` / `ONEC_MCP_DATA_DIR` is a hard error, not a silent fallba
   - **`ONEC_<NAME>_PASSWORD`** always wins — use it for CI / secret managers / agent configs. The name is the
     connection name upper-cased with every run of non-`[A-Z0-9]` characters collapsed to a single `_`
     (leading/trailing `_` stripped): `my-base` → `ONEC_MY_BASE_PASSWORD`, `tvip-trade` →
-    `ONEC_TVIP_TRADE_PASSWORD`, `bp.v3` → `ONEC_BP_V3_PASSWORD`.
+    `ONEC_TVIP_TRADE_PASSWORD`, `bp_v3` → `ONEC_BP_V3_PASSWORD`.
   - **OS keychain** (`@napi-rs/keyring`, an optional dependency) — the entry is namespaced **per data
     directory**: service `1c-odata:<data-dir basename>:<first 8 hex of sha256(canonical data dir)>`, with the
     connection name as the account (e.g. service `1c-odata:1c-odata:7149e725`, account `trade`). *Canonical* =
