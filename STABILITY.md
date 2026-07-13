@@ -105,7 +105,7 @@ The per-data-dir keychain namespacing is a **behavioral break with no migration*
 
 Semver-applicable:
 
-- The CLI command set and primary flags: `serve`, `admin-create`, `set-password`; `--public-url`, `--pg-url`, `--auth-data-dir`, `--enc-key`, `--data-dir`, `--host`, `--port`, and the env vars they read (`ONEC_MCP_PUBLIC_URL`, `BETTER_AUTH_SECRET`, `ONEC_MCP_ENC_KEY`, `DATABASE_URL`, `ONEC_MCP_ALLOWED_HOSTS`).
+- The CLI command set and primary flags: `serve`, `admin-create`, `set-password`; `--public-url`, `--pg-url`, `--auth-data-dir`, `--enc-key`, `--data-dir`, `--host`, `--port`, and the env vars they read (`ONEC_MCP_PUBLIC_URL`, `BETTER_AUTH_SECRET` (or its `AUTH_SECRET` alias), `ONEC_MCP_ENC_KEY`, `DATABASE_URL`, `ONEC_MCP_AUTH_DATA_DIR`, `ONEC_MCP_ALLOWED_HOSTS`).
 - The HTTP surface a client depends on: the MCP endpoint (`POST`/`GET`/`DELETE /mcp`, Streamable HTTP), `GET /healthz`, and the OAuth discovery documents (`/.well-known/oauth-*`, `/api/auth/*`) — OAuth 2.1 with RFC 8707 resource + PKCE. The read-only MCP tool set is `@1c-odata/mcp`'s (above); management/write tools are never exposed over HTTP.
 - The deploy env contract: `BETTER_AUTH_SECRET`, `ONEC_MCP_ENC_KEY`, `DATABASE_URL`, `ONEC_MCP_PUBLIC_URL` (see [`deploy/README.md`](./packages/mcp-server/deploy/README.md)).
 

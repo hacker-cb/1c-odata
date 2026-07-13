@@ -42,7 +42,7 @@ pnpm turbo build                       # workspace build (tsdown)
 pnpm turbo typecheck                   # tsc --noEmit, all packages
 pnpm turbo test:unit                   # vitest, fast, deterministic
 pnpm turbo test:integration:offline    # codegen + parser against snapshots/*.xml
-pnpm turbo test:e2e                    # CLI + mcp-server e2e (MSW-stubbed)
+pnpm turbo test:e2e                    # CLI + mcp-server e2e (real loopback server; MSW-stubbed 1С upstreams)
 pnpm turbo test:integration:live       # gated on .env.local; skips cleanly without it
 pnpm turbo test:integration:write      # gated on ONEC_TESTS_ALLOW_WRITES=true
 pnpm turbo package:lint                # publint + arethetypeswrong
