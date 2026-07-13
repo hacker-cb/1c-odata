@@ -5,6 +5,10 @@
 	# expiry notices — optional, certs work without it:
 	#   { email you@example.com }
 	#
+	# This default (HTTP-01) needs public 80/443. For an internal / grey-IP host use
+	# DNS-01, or mount a cert you already hold — see the README "TLS certificate
+	# options" section.
+	#
 	# reverse_proxy PRESERVES the original Host header upstream by default — so the
 	# server's DNS-rebinding allowlist (auto-derived from ONEC_MCP_PUBLIC_URL) matches
 	# without any ONEC_MCP_ALLOWED_HOSTS. TLS terminates here; the app speaks plain

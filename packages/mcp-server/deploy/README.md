@@ -11,7 +11,7 @@ A single-command, self-contained production stack for `@1c-odata/mcp-server`:
 ## Prerequisites
 
 - Docker + Docker Compose v2 on the host.
-- A domain (`MCP_PUBLIC_DOMAIN`) with a DNS record pointing at the host, and inbound **80/443** open — Caddy needs both to solve the ACME challenge and serve HTTPS.
+- A domain (`MCP_PUBLIC_DOMAIN`) with a DNS record pointing at the host, and inbound **80/443** open — Caddy needs both to solve the default ACME (HTTP-01) challenge and serve HTTPS. Serving an **internal-only host** (LAN/VPN clients, no public 80/443) or bringing **your own certificate**? See [TLS certificate options](#tls-certificate-options).
 
 ## 1. Configure
 
@@ -98,6 +98,102 @@ docker compose run --rm mcp set-password \
 
 Add a **custom connector** in Claude with the URL `MCP_PUBLIC_URL` (e.g. `https://mcp.example.com`). Claude self-registers (DCR), you log in on `/sign-in`, consent, and its queries then hit `/mcp` with a verified token — scoped to the bases you granted that user.
 
+## TLS certificate options
+
+Caddy terminates TLS; the app only ever speaks plain HTTP on the internal
+network. How Caddy gets the certificate is up to you — three paths, pick by how
+the host is reachable.
+
+### Default — automatic HTTP-01 (public host)
+
+The out-of-the-box behaviour described above: on the first HTTPS hit Caddy
+provisions a Let's Encrypt certificate via the **HTTP-01** challenge and renews
+it before expiry. Needs the domain to resolve to this host **and inbound 80/443
+reachable from the internet** (80 carries the challenge). Nothing to configure —
+this is what `.env.example` + the shipped `Caddyfile` do.
+
+### Internal / grey-IP host — DNS-01
+
+For a host on a private ("grey") IP — clients on the LAN or over VPN, nothing
+exposed to the internet — HTTP-01 can't work (the CA can't reach port 80). The
+**DNS-01** challenge proves domain ownership with a DNS `TXT` record instead, so
+the host never needs to be publicly reachable. The CA validates purely through
+the `TXT` record and **never queries your `A` record**, so the `A` record may
+resolve to an RFC1918 address (`10.x` / `192.168.x`) and you still get a real,
+publicly-trusted Let's Encrypt certificate — **nothing to install on any client**.
+
+Requirements:
+
+- The domain's zone is hosted at a DNS provider with an **API** (Cloudflare,
+  Route53, DigitalOcean, …).
+- The `_acme-challenge.<domain>` `TXT` record must resolve in the **public**
+  authoritative DNS (that's what the CA reads). Because the CA never looks at the
+  `A` record, you're free where it lives: publish it (pointing at the private IP)
+  for simplicity, or keep it split-horizon / internal-only so the private IP is
+  never exposed in public DNS.
+
+The stock `caddy:2` image has no DNS-provider plugins, so build a small custom
+image with [`xcaddy`](https://github.com/caddyserver/xcaddy) (Cloudflare shown;
+swap in your provider's [`caddy-dns/*`](https://github.com/orgs/caddy-dns/repositories)
+module):
+
+```dockerfile
+# Caddyfile.dns.Dockerfile — add it here in packages/mcp-server/deploy/
+FROM caddy:2-builder AS builder
+RUN xcaddy build --with github.com/caddy-dns/cloudflare
+FROM caddy:2
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+```
+
+Point the `caddy` service at it (`build:` instead of `image: caddy:2`), tell
+Caddy to use DNS-01 globally, and pass the provider token:
+
+```caddyfile
+# Caddyfile — add a global-options block above the site block
+{
+	acme_dns cloudflare {env.CF_API_TOKEN}
+}
+
+{$MCP_PUBLIC_DOMAIN} {
+	reverse_proxy mcp:3000
+}
+```
+
+Set `CF_API_TOKEN` in the `caddy` service's environment. With DNS-01 you no
+longer need port **80** at all — only **443**, and only reachable from your
+LAN/VPN clients.
+
+> **Client reachability, not TLS, is the real constraint here.** An internal-only
+> host works with MCP clients that run *inside* the network — **Claude Code** /
+> **Claude Desktop** on a machine on the LAN or VPN make the `/mcp` calls
+> themselves. The **hosted claude.ai** connector calls `/mcp` from Anthropic's
+> servers over the public internet, so it can't reach a grey IP no matter the
+> certificate — that path needs a publicly-exposed host.
+
+### Bring your own / wildcard certificate — no ACME
+
+If you already hold a certificate for the domain — e.g. a corporate wildcard
+`*.example.com` — skip ACME entirely: mount the cert + key and point Caddy at
+them. Works fully offline / air-gapped (no CA round-trip).
+
+```caddyfile
+# Caddyfile
+{$MCP_PUBLIC_DOMAIN} {
+	tls /etc/caddy/cert.pem /etc/caddy/key.pem
+	reverse_proxy mcp:3000
+}
+```
+
+Mount the files into the `caddy` service (read-only) and keep them current
+yourself — Caddy won't renew a cert it didn't provision:
+
+```yaml
+# compose.yml — caddy service
+volumes:
+  - ./cert.pem:/etc/caddy/cert.pem:ro
+  - ./key.pem:/etc/caddy/key.pem:ro
+```
+
 ## Operations
 
 - **Update:** `git pull && docker compose up -d --build` (migrations re-run idempotently on boot).
@@ -110,7 +206,7 @@ Add a **custom connector** in Claude with the URL `MCP_PUBLIC_URL` (e.g. `https:
 - Only Caddy publishes host ports; Postgres and the direct `mcp:3000` port stay on the internal compose network. **`/admin` _is_ reachable** through Caddy at `https://$MCP_PUBLIC_DOMAIN/admin` — it has to be, since its CSRF check is bound to the public origin — but it is gated by the better-auth `admin` role (login + same-origin). To narrow that surface, add an IP allow-list or extra auth in front of `/admin` in the `Caddyfile`.
 - Caddy preserves the original `Host` header, which the server's DNS-rebinding guard auto-allows from `ONEC_MCP_PUBLIC_URL` — no `ONEC_MCP_ALLOWED_HOSTS` needed. If you front this with a *different* proxy that rewrites `Host`, set `ONEC_MCP_ALLOWED_HOSTS` on the `mcp` service.
 - **Local trial without a public domain:** set `MCP_PUBLIC_DOMAIN=localhost` and `MCP_PUBLIC_URL=https://localhost` — Caddy serves a local self-signed cert (your client must trust Caddy's local CA). Real connector use needs a real domain.
-- **TLS is automatic** — on the first HTTPS request Caddy obtains a certificate from its default ACME CA (**Let's Encrypt**) and renews it before expiry; no certbot, cron, or manual step. It just needs the domain to resolve to this host and ports **80 + 443** open (80 for the ACME challenge). Keep the `caddy-data` volume — it holds the cert + ACME account, so wiping it forces re-issuance and can run into the CA's issuance rate limits. Optionally set an ACME email for expiry notices (see the `Caddyfile`).
+- **TLS is automatic** — on the first HTTPS request Caddy obtains a certificate from its default ACME CA (**Let's Encrypt**) and renews it before expiry; no certbot, cron, or manual step. It just needs the domain to resolve to this host and ports **80 + 443** open (80 for the ACME challenge). Keep the `caddy-data` volume — it holds the cert + ACME account, so wiping it forces re-issuance and can run into the CA's issuance rate limits. Optionally set an ACME email for expiry notices (see the `Caddyfile`). For an **internal host** that can't expose 80/443, or to use a certificate you already hold, see [TLS certificate options](#tls-certificate-options).
 
 ## Other deployment targets
 
