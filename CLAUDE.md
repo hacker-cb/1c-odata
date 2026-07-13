@@ -4,13 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-TypeScript library for the 1С:Enterprise REST/OData V3 interface. Three-package pnpm + turbo monorepo:
+TypeScript library for the 1С:Enterprise REST/OData V3 interface. Five-package pnpm + turbo monorepo:
 
 | Package | Role |
 |---|---|
 | [`@1c-odata/client`](./packages/client/src) | Runtime — `ODataV3Client`, query builder, filter DSL, value-storage, errors, register helpers. Zero dependencies |
 | [`@1c-odata/metadata`](./packages/metadata/src) | Schema toolkit — EDMX (`$metadata`) parser, `buildMetadataIndex`, `fetchMetadataIndex`, `createDynamicClient`, entity-kind classification. Deps: client + fast-xml-parser |
 | [`@1c-odata/cli`](./packages/cli/src) | `1c-odata fetch` + `1c-odata generate` binaries; codegen library at [`@1c-odata/cli/codegen`](./packages/cli/src/codegen). Consumes `@1c-odata/metadata` |
+| [`@1c-odata/mcp`](./packages/mcp/src) | Local (stdio) MCP server — `1c-odata-mcp` bin: read-only schema + query tools for AI agents against any base via live `$metadata`, plus a connection-manager CLI (keychain-backed secrets). Adds a `/internal` seam. Deps: client + metadata + `@modelcontextprotocol/sdk` |
+| [`@1c-odata/mcp-server`](./packages/mcp-server/src) | Remote Streamable-HTTP MCP server — `1c-odata-mcp-server` bin exposing mcp's read-only tools over HTTP (`/mcp`) for Claude custom connectors. Three modes: no-auth, better-auth OAuth 2.1 (DCR+PKCE), Postgres-backed multi-tenancy (per-user grants, AES-256-GCM secrets, `/admin` panel). Docker/Caddy deploy. Deps: mcp + better-auth, drizzle, express, pg |
 
 Server-side only. Pure ESM. Node ≥ 22.21.0, pnpm ≥ 10.
 
@@ -23,12 +25,15 @@ Server-side only. Pure ESM. Node ≥ 22.21.0, pnpm ≥ 10.
 
 **Codegen is the DX layer.** The user writes `1c-odata.config.ts` (via `defineCodegenConfig` from `@1c-odata/cli`) declaring codegen targets — each a `{ connection, include? }` wrapping a runtime `Connection`; the CLI fetches each base's `$metadata` (EDMX XML) into `metadata/<target>.xml`, then emits per-target TS in `generated/<target>/<kind>/<Name>.ts` (or only `__metadata.json` with `--metadata-only`). The runtime `ODataV3Client` is generic over the user's emitted `Functions` type — full IDE completion against the live schema. **Build vs runtime split:** `1c-odata.config.ts` is build-only (CLI); the app runtime builds its own `Connection` (via `defineConnection` from `@1c-odata/client`) and never imports the config file.
 
+**MCP surface (read-only).** `@1c-odata/mcp` wraps client+metadata as a local (stdio) MCP server (`1c-odata-mcp` bin) — schema + query tools for AI agents against any base via live `$metadata`, plus a connection-manager CLI whose passwords go to the OS keychain, never argv. `@1c-odata/mcp-server` re-exposes that same tool set over Streamable HTTP (`/mcp`) for remote clients (Claude custom connectors), in three progressively-secure modes: no-auth (loopback only), embedded better-auth OAuth 2.1 (DCR + PKCE, JWT verified locally against JWKS), and Postgres-backed multi-tenancy (bases in DB, 1С passwords AES-256-GCM-encrypted at rest, per-user grants, a server-rendered `/admin` panel, first admin bootstrapped via a one-time `/setup` token). Write/management tools are never exposed over HTTP. Turnkey self-host (server + Postgres + Caddy auto-HTTPS) in [`packages/mcp-server/deploy`](./packages/mcp-server/deploy).
+
 **Three-tier API boundary** (enforced by `package.json#exports`):
 - `@1c-odata/client` — stable surface (semver-protected per STABILITY.md)
 - `@1c-odata/client/filter` — separate entrypoint for the filter DSL (`and`, `or`, `any`, `all`, `not`, `raw`)
 - `@1c-odata/client/internal` — escape hatch consumed by `@1c-odata/cli`, `@1c-odata/metadata`, and integration tests; MAY break in minor versions (safe: all packages are a changesets-`fixed` group and release in lock-step)
+- `@1c-odata/mcp` mirrors this — a public `.` plus `@1c-odata/mcp/internal` (the `ConnectionSource` seam + read-only tool registrators) consumed by `@1c-odata/mcp-server`; `@1c-odata/mcp-server` ships a single public `.` (no `/internal`). All five packages are one `fixed` group, so these `/internal` seams break safely in minors.
 
-**Workspace deps via `workspace:*`.** `prepare` hook on `pnpm install` builds all packages' `dist/` automatically (topological order client → metadata → cli) — running tests / typecheck on a fresh clone "just works" without an explicit build step. Don't manually run `pnpm build` unless investigating dist output.
+**Workspace deps via `workspace:*`.** `prepare` hook on `pnpm install` builds all packages' `dist/` automatically (topological order client → metadata → {cli, mcp} → mcp-server) — running tests / typecheck on a fresh clone "just works" without an explicit build step. Don't manually run `pnpm build` unless investigating dist output.
 
 ## Commands
 
@@ -37,7 +42,7 @@ pnpm turbo build                       # workspace build (tsdown)
 pnpm turbo typecheck                   # tsc --noEmit, all packages
 pnpm turbo test:unit                   # vitest, fast, deterministic
 pnpm turbo test:integration:offline    # codegen + parser against snapshots/*.xml
-pnpm turbo test:e2e                    # CLI e2e (MSW-stubbed)
+pnpm turbo test:e2e                    # CLI + mcp-server e2e (real loopback server; MSW-stubbed 1С upstreams)
 pnpm turbo test:integration:live       # gated on .env.local; skips cleanly without it
 pnpm turbo test:integration:write      # gated on ONEC_TESTS_ALLOW_WRITES=true
 pnpm turbo package:lint                # publint + arethetypeswrong
@@ -48,7 +53,9 @@ pnpm snapshots:refresh                 # refresh snapshots/*.xml against live ba
 pnpm changeset                         # add a release note (consumer-facing)
 ```
 
-**Single test**: `pnpm -F @1c-odata/client vitest run test/unit/filter.test.ts` (or any path glob). `-F` is the pnpm filter for workspace packages; replace with `@1c-odata/cli` as needed.
+**Single test**: `pnpm -F @1c-odata/client vitest run test/unit/filter.test.ts` (or any path glob). `-F` is the pnpm filter for workspace packages; replace with `@1c-odata/cli`, `@1c-odata/mcp`, or `@1c-odata/mcp-server` as needed.
+
+**mcp-server dev**: `pnpm -F @1c-odata/mcp-server dev serve …` runs `src/cli.ts` via tsx; `… start serve …` runs the built `dist/`. After editing `src/store/schema.ts`, run `pnpm -F @1c-odata/mcp-server auth:schema` and commit `packages/mcp-server/drizzle/` — a CI gate fails if the migrations drift from the schema.
 
 **Live/write tests** need `.env.local` at repo root with `ONEC_TRADE_V11_5_URL`, `ONEC_BP_V3_0_URL`, and optionally `ONEC_TESTS_ALLOW_WRITES=true` — see [`snapshots/README.md`](./snapshots/README.md) for the full env contract. Without `.env.local` they skip cleanly.
 
@@ -59,6 +66,8 @@ pnpm changeset                         # add a release note (consumer-facing)
 [.github/workflows/ci.yml](./.github/workflows/ci.yml) runs Ubuntu + Windows matrices. Live/write/example jobs are owner-only via `repository_owner == 'hacker-cb'` gate + `head.repo.full_name` check (skips fork PRs while keeping owner-internal PRs covered). Required secrets feed `detect-secrets` upfront — missing secret fails loudly instead of silent-skipping.
 
 Windows runner is materially slower than Linux/Mac for `tsc --noEmit` over thousands of generated `.ts` files (NTFS overhead). Tsc-validate timeouts reflect this: 90s for `trade_v11.5` (always-on), 60s for `bp_v3.0` (`CI=true || CI_RUN_BIG_FIXTURES=1`).
+
+**mcp-server CI:** `deploy-pg-smoke` (the shipped `--prod` tree against a real Postgres — migrator, single-use setup token under concurrency, Host guard, SIGTERM) and `deploy-package-smoke` (pack tarballs → install → boot the bin) are required, secret-free, fork-safe. `lint-and-typecheck` adds a drizzle-migrations-in-sync gate; `test-and-build` boots the mcp-server bin on Windows. Two workflows outside `ci.yml`: [`deploy-compose.yml`](.github/workflows/deploy-compose.yml) brings up the full Compose stack (db + mcp + Caddy) over internal-CA TLS — path-scoped + nightly + manual, **not** a required check; [`release-image.yml`](.github/workflows/release-image.yml) builds/pushes the multi-arch `ghcr.io/<owner>/1c-odata-mcp-server` image, invoked by `release.yml` right after the npm publish so image `X.Y.Z` == npm `X.Y.Z` == tag `vX.Y.Z`.
 
 ## Conventions
 
@@ -73,3 +82,6 @@ Windows runner is materially slower than Linux/Mac for `tsc --noEmit` over thous
 - [`snapshots/README.md`](./snapshots/README.md) — test-fixture EDMX bases, refresh workflow
 - [`examples/basic/README.md`](./examples/basic/README.md) — runnable end-to-end codegen consumer
 - [`examples/dynamic/README.md`](./examples/dynamic/README.md) — runnable zero-codegen `createDynamicClient` consumer
+- [`packages/mcp/README.md`](./packages/mcp/README.md) — local MCP server: tool catalogue, CLI, keychain-backed secrets
+- [`packages/mcp-server/README.md`](./packages/mcp-server/README.md) — remote MCP server: run modes, OAuth, multi-tenancy
+- [`packages/mcp-server/deploy/README.md`](./packages/mcp-server/deploy/README.md) — turnkey Docker Compose self-host (server + Postgres + Caddy auto-HTTPS)
