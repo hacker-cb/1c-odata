@@ -1,6 +1,6 @@
 // src/auth/pages/consent.ts
 import type { Request, Response } from 'express'
-import { authShell } from '../../ui/shell.js'
+import { authShell, esc } from '../../ui/shell.js'
 
 /**
  * Minimal /consent page fulfilling the oauthProvider `consentPage` contract. The
@@ -22,10 +22,10 @@ export function consentPage(req: Request, res: Response): void {
   const scopes = scope
     .split(' ')
     .filter(Boolean)
-    .map((s) => `<li><code>${escapeHtml(s)}</code></li>`)
+    .map((s) => `<li><code>${esc(s)}</code></li>`)
     .join('')
   const body = `<h1>Authorize access</h1>
-<p class="hint"><span class="clientid">${escapeHtml(clientId)}</span> is requesting access to:</p>
+<p class="hint"><span class="clientid">${esc(clientId)}</span> is requesting access to:</p>
 <ul class="scopes">${scopes}</ul>
 <div class="btn-row">
   <button id="deny">Deny</button>
@@ -58,7 +58,3 @@ async function decide(accept) {
 }
 document.getElementById('allow').addEventListener('click', () => decide(true));
 document.getElementById('deny').addEventListener('click', () => decide(false));`
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c)
-}

@@ -33,7 +33,7 @@ export const TEMPLATES: Record<string, string> = {
 <button class="btn-danger btn-sm" hx-delete="/admin/bases/<%= it.base.name %>" hx-target="#base-<%= it.base.name %>" hx-swap="outerHTML" hx-confirm="Delete base <%= it.base.name %>? Cascades to its secret, grants and health.">Delete</button>
 </td></tr>`,
 
-  _base_form: `<form <%= it.name ? 'hx-put=/admin/bases/'+it.name : 'hx-post=/admin/bases' %> hx-target="#bases-tbody" hx-swap="<%= it.name ? 'none' : 'beforeend' %>">
+  _base_form: `<form <% if (it.name) { %>hx-put="/admin/bases/<%= it.name %>"<% } else { %>hx-post="/admin/bases"<% } %> hx-target="#bases-tbody" hx-swap="<%= it.name ? 'none' : 'beforeend' %>">
 <fieldset><legend><%= it.name ? 'Edit '+it.name : 'New base' %></legend>
 <% if (it.error) { %><p class="err"><%= it.error %></p><% } %>
 <label>Name <input name="name" value="<%= it.name || '' %>" <%= it.name ? 'readonly' : '' %> required></label>

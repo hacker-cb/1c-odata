@@ -15,7 +15,7 @@
 //     inline `scripts` string to `authShell` for their client-side submit handlers.
 
 /** Direction: "Enterprise calm" — light-first, humanist sans, soft cards, indigo accent. */
-export const BASE_CSS = `
+const BASE_CSS = `
 *,*::before,*::after{box-sizing:border-box}
 :root{
   color-scheme:light dark;
@@ -90,6 +90,11 @@ tbody td{padding:10px 14px;border-bottom:1px solid var(--bd);vertical-align:midd
 tbody tr:last-child td{border-bottom:0}
 tbody tr:hover td{background:var(--s2)}
 td select,td input{padding:4px 8px;font-size:12.5px}
+.mono{font-family:var(--mono);font-size:12.5px}
+
+/* ── inline status text (defined BEFORE the badge block so a .badge.ok keeps the badge size) ── */
+.err{color:var(--dg);font-size:12.5px}
+.ok{color:var(--ok);font-size:12.5px}
 
 /* ── status badges (class == health status: ok / auth_failed / unreachable) ── */
 .badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11.5px;font-weight:500;padding:3px 9px;border-radius:20px}
@@ -100,10 +105,6 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 .badge.ok::before{animation:pulse 1.8s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @media (prefers-reduced-motion:reduce){.badge.ok::before{animation:none}}
-
-/* ── inline status text ── */
-.err{color:var(--dg);font-size:12.5px}
-.ok{color:var(--ok);font-size:12.5px}
 
 /* ── pre-auth surfaces: centered card, no nav ── */
 .authwrap{min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:56px 20px;
@@ -126,7 +127,7 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 const HTMX_SRC = '/admin/assets/htmx.min.js'
 
 /** Escape the few characters that could break out of an HTML text/attribute context. */
-function esc(s: string): string {
+export function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c)
 }
 
