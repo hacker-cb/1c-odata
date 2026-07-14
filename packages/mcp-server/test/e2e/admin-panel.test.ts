@@ -132,6 +132,15 @@ describe('admin panel over HTTP', () => {
     expect(html).not.toContain('name="serverTimezone" value=') // no free-text field
   })
 
+  it('the NEW base form forces an explicit timezone choice (no default pre-selected)', async () => {
+    session.value = { user: { role: 'admin' }, session: {} }
+    const html = await (await fetch(`${origin}/admin/bases/new`)).text()
+    // A disabled placeholder is selected + the select is `required`, so submit is
+    // blocked until the admin actively picks — serverTimezone has no default (CLAUDE.md).
+    expect(html).toContain('<option value="" disabled selected>Select a timezone')
+    expect(html).not.toMatch(/<option selected>Europe\/Moscow<\/option>/) // no pre-selected zone
+  })
+
   it("the edit form preselects the base's stored timezone", async () => {
     session.value = { user: { role: 'admin' }, session: {} }
     const html = await (await fetch(`${origin}/admin/bases/trade/edit`)).text()

@@ -61,8 +61,9 @@ export const TEMPLATES: Record<string, string> = {
 <label>Base URL <input name="baseUrl" value="<%= it.baseUrl || '' %>" required></label>
 <label>Login <input name="login" value="<%= it.login || '' %>" required></label>
 <label>Password <input name="password" type="password" placeholder="<%= it.edit ? '(unchanged)' : '' %>"></label>
-<% const tz = it.serverTimezone || 'Europe/Moscow' %>
+<% const tz = it.serverTimezone || '' %>
 <label>Server timezone <select name="serverTimezone" required>
+<% if (!tz) { %><option value="" disabled selected>Select a timezone…</option><% } %>
 <% if (tz && !it.timezones.includes(tz)) { %><option value="<%= tz %>" selected><%= tz %> (stored)</option><% } %>
 <% for (const z of it.timezones) { %><option<%= z===tz ? ' selected' : '' %>><%= z %></option><% } %>
 </select></label>
