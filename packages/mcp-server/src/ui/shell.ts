@@ -80,6 +80,12 @@ main form br{display:none}
 .fieldrow input{flex:1;margin-top:0}
 /* small "(you)" identity chip in the users table */
 .you{display:inline-block;margin-left:7px;padding:1px 7px;border-radius:10px;background:var(--ac-bg);color:var(--ac-tx);font-size:11px;font-weight:500}
+/* form action row (Save / Verify / Cancel + inline verify result) */
+.formactions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:4px}
+/* empty-table placeholder cell */
+td.empty{text-align:center;color:var(--mut);padding:22px 14px}
+/* small print under a section (e.g. the grants write-scope note) */
+.subtle{color:var(--faint);font-size:12px;margin:-8px 0 16px}
 
 /* ── buttons ── */
 button{font:inherit;font-size:13.5px;font-weight:500;padding:8px 14px;border-radius:var(--radius);cursor:pointer;border:1px solid var(--bd);background:var(--s1);color:var(--tx);display:inline-flex;align-items:center;gap:7px;transition:background .12s,border-color .12s,filter .12s}
@@ -124,6 +130,7 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 .badge.unreachable{background:var(--dg-bg);color:var(--dg)}
 .badge.banned{background:var(--dg-bg);color:var(--dg)}
 .badge.banned::before{animation:none}
+.badge.unknown{background:var(--s2);color:var(--mut)}
 .badge.ok::before{animation:pulse 1.8s ease-in-out infinite}
 .badge.static::before{animation:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
@@ -165,10 +172,17 @@ export function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c)
 }
 
+// Inline SVG favicon (data URI — no extra request, CSP-safe): the indigo "1c"
+// brand mark, matching the nav glyph. `#6d5cf0` is --ac's light value.
+const FAVICON = `<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#6d5cf0"/><text x="16" y="22" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#fff" text-anchor="middle">1c</text></svg>',
+)}">`
+
 function head(title: string, extraHead = ''): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)} — 1C OData MCP</title>${extraHead}
+<title>${esc(title)} — 1C OData MCP</title>
+${FAVICON}${extraHead}
 <style>${BASE_CSS}</style></head>`
 }
 

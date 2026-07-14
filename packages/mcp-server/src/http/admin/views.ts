@@ -12,6 +12,15 @@ import { TEMPLATES } from './templates.js'
  */
 const eta = new Eta({ autoEscape: true })
 
+/**
+ * The IANA zone list for the base form's timezone <select>, computed once. A
+ * server-rendered dropdown guarantees a valid `serverTimezone` (CLAUDE.md: it is
+ * required with no default and a wrong value silently shifts DateTime parsing),
+ * replacing the free-text input where a typo persisted a broken base. `Intl.
+ * supportedValuesOf` is available on Node ≥ 22 (the package floor).
+ */
+const TIMEZONES: readonly string[] = Intl.supportedValuesOf('timeZone')
+
 type RenderFn = (data: Record<string, unknown>) => string
 
 const compiled = new Map<string, RenderFn>()
@@ -28,9 +37,13 @@ function get(name: string): RenderFn {
   return fn
 }
 
-/** Render a named fragment to an HTML string (partials can `include` other fragments via `it._r`). */
+/**
+ * Render a named fragment to an HTML string. Every fragment receives `_r` (to
+ * include sub-fragments) and `timezones` (the base form's <select> options) —
+ * both harmless where unused, so call sites don't thread them through.
+ */
 export function render(name: string, data: Record<string, unknown> = {}): string {
-  return get(name)({ ...data, _r: render })
+  return get(name)({ timezones: TIMEZONES, ...data, _r: render })
 }
 
 /**
@@ -58,6 +71,15 @@ export function authPage(res: Response, view: string, data: Record<string, unkno
 /** Bare fragment — htmx swaps this into a target; no layout. */
 export function partial(res: Response, view: string, data: Record<string, unknown>): void {
   res.type('html').send(render(view, data))
+}
+
+/**
+ * A newly-created row appended via `beforeend`, plus an OOB that deletes the
+ * table's empty-state placeholder (`#<emptyId>`) if it's still there. The OOB is a
+ * no-op once the placeholder is gone, so create handlers can always send it.
+ */
+export function createdRow(res: Response, view: string, data: Record<string, unknown>, emptyId: string): void {
+  res.type('html').send(render(view, data) + render('_clear_empty', { emptyId }))
 }
 
 /**

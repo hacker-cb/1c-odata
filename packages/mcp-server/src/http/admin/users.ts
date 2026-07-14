@@ -4,7 +4,7 @@ import type { Request, Response } from 'express'
 import type { AdminUser } from '../../auth/better-auth.js'
 import { countActiveAdmins, getUserById, hasAdminRole, type UserRow } from '../../store/repos.js'
 import type { AdminDeps } from './router.js'
-import { flash, okFlashOob, page, partial, render } from './views.js'
+import { createdRow, flash, okFlashOob, page, partial, render } from './views.js'
 
 /** YYYY-MM-DD from better-auth's createdAt (Date on live objects, string off JSON). */
 function fmtCreated(v: Date | string | undefined): string {
@@ -109,7 +109,7 @@ export async function createUser(req: Request, res: Response, deps: AdminDeps): 
       role: req.body.role === 'admin' ? 'admin' : 'user',
     },
   })
-  partial(res, '_user_row', rowData(user, actorId(res)))
+  createdRow(res, '_user_row', rowData(user, actorId(res)), 'users-empty')
 }
 
 /** POST /admin/users/:id/role — set role (last-admin demotion refused). */
