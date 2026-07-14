@@ -25,14 +25,17 @@ export type FirstRunCheck = () => Promise<boolean>
  * The page markup is therefore fully static (the only server-side branch is the
  * first-run hint, which is likewise static and token-free).
  *
- * Two arrival paths:
- *   - OAuth login: the plugin appends the authorize query → after sign-in we
- *     resume `/api/auth/oauth2/authorize?<same query>`.
+ * Three arrival paths:
+ *   - OAuth login: the plugin appends the authorize query (carrying `client_id`)
+ *     → after sign-in we resume `/api/auth/oauth2/authorize?<same query>`.
  *   - Admin gate: an anonymous `/admin` visit redirects to `/sign-in?next=/admin`
  *     → after sign-in we go to that `next`. Only a SAFE same-origin relative path
  *     (starts with a single `/`, not `//` — which is a protocol-relative URL to
- *     another host) is honored client-side; anything else falls back to the OAuth
- *     resume. This blocks an open-redirect via a crafted `next`.
+ *     another host) is honored client-side. This blocks an open-redirect via a
+ *     crafted `next`.
+ *   - Direct visit (no `next`, no authorize query): we land on `/admin`, the human
+ *     home. We must NOT fall back to `/oauth2/authorize` with no params — that
+ *     endpoint then dumps a raw "client_id required" validation error at the user.
  */
 export function makeSignInPage(firstRunCheck?: FirstRunCheck) {
   return async (_req: Request, res: Response): Promise<void> => {
@@ -63,9 +66,14 @@ one-time setup URL printed in the server logs (<code>…/setup?token=…</code>)
 // target is read from window.location at runtime, so a crafted query cannot inject.
 const SIGN_IN_SCRIPT = `
 function resumeTarget() {
-  const next = new URLSearchParams(window.location.search).get('next');
+  const q = new URLSearchParams(window.location.search);
+  const next = q.get('next');
   if (next && next[0] === '/' && next[1] !== '/') return next;
-  return '/api/auth/oauth2/authorize' + window.location.search;
+  // Only resume the OAuth authorize flow when one is actually in progress
+  // (client_id present); a bare /sign-in visit otherwise hits /oauth2/authorize
+  // with no params and gets a raw validation error. Land on /admin instead.
+  if (q.get('client_id')) return '/api/auth/oauth2/authorize' + window.location.search;
+  return '/admin';
 }
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
