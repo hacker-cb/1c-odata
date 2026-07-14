@@ -25,14 +25,18 @@ export type FirstRunCheck = () => Promise<boolean>
  * The page markup is therefore fully static (the only server-side branch is the
  * first-run hint, which is likewise static and token-free).
  *
- * Two arrival paths:
- *   - OAuth login: the plugin appends the authorize query → after sign-in we
- *     resume `/api/auth/oauth2/authorize?<same query>`.
+ * Three arrival paths:
+ *   - OAuth login: the plugin appends the authorize query (carrying `client_id`)
+ *     → after sign-in we resume `/api/auth/oauth2/authorize?<same query>`.
  *   - Admin gate: an anonymous `/admin` visit redirects to `/sign-in?next=/admin`
- *     → after sign-in we go to that `next`. Only a SAFE same-origin relative path
- *     (starts with a single `/`, not `//` — which is a protocol-relative URL to
- *     another host) is honored client-side; anything else falls back to the OAuth
- *     resume. This blocks an open-redirect via a crafted `next`.
+ *     → after sign-in we go to that `next`, but ONLY when it resolves to a
+ *     same-origin absolute path (see `RESUME_TARGET_FN` — the guard resolves it
+ *     with the URL parser and re-checks the origin, so `//host`, its backslash
+ *     form, and scheme URIs are all rejected). This blocks an open-redirect via a
+ *     crafted `next`.
+ *   - Direct visit (no `next`, no authorize query): we land on `/admin`, the human
+ *     home. We must NOT fall back to `/api/auth/oauth2/authorize` with no params —
+ *     that endpoint then dumps a raw "client_id required" validation error at the user.
  */
 export function makeSignInPage(firstRunCheck?: FirstRunCheck) {
   return async (_req: Request, res: Response): Promise<void> => {
@@ -59,14 +63,40 @@ export function signInPage(req: Request, res: Response): void {
 const FIRST_RUN_HINT = `<p class="notice"><strong>First-run setup pending.</strong> No administrator exists yet. Open the
 one-time setup URL printed in the server logs (<code>…/setup?token=…</code>) to create the first admin.</p>`
 
+/**
+ * The resume-target resolver, kept as a source STRING so the EXACT same code is
+ * both embedded in the inline sign-in script AND compiled + behavior-tested in
+ * Node (test/unit/sign-in-page.test.ts) — one source of truth, no drift. Pure:
+ * takes the URL query string (incl. any leading `?`), returns a same-origin
+ * relative path. `URLSearchParams` is a global in both the browser and Node.
+ */
+export const RESUME_TARGET_FN = `function resumeTarget(search, origin) {
+  const q = new URLSearchParams(search);
+  const next = q.get('next');
+  // Honor next only if it resolves to a SAME-ORIGIN absolute path. The leading '/'
+  // rejects scheme URIs (javascript:, https://other-host); resolving against the
+  // origin and re-checking the result origin rejects protocol-relative '//', its
+  // backslash variant, and tab/newline tricks that browsers normalize on
+  // navigation. A character test alone is bypassable; this is not. Blocks open
+  // redirects via a crafted next.
+  if (next && next[0] === '/') {
+    try {
+      const u = new URL(next, origin);
+      if (u.origin === origin) return u.pathname + u.search + u.hash;
+    } catch (e) { /* malformed next — fall through to the default */ }
+  }
+  // Resume the OAuth authorize flow only when one is actually in progress
+  // (client_id present); a bare /sign-in visit would otherwise hit
+  // /api/auth/oauth2/authorize with no params and get a raw validation error.
+  if (q.get('client_id')) return '/api/auth/oauth2/authorize' + search;
+  // Direct visit: the admin panel is the human home.
+  return '/admin';
+}`
+
 // Client-side submit handler. No request data is interpolated here — the resume
-// target is read from window.location at runtime, so a crafted query cannot inject.
+// target is derived from window.location at runtime, so a crafted query cannot inject.
 const SIGN_IN_SCRIPT = `
-function resumeTarget() {
-  const next = new URLSearchParams(window.location.search).get('next');
-  if (next && next[0] === '/' && next[1] !== '/') return next;
-  return '/api/auth/oauth2/authorize' + window.location.search;
-}
+${RESUME_TARGET_FN}
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
@@ -76,7 +106,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
     credentials: 'same-origin',
     body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }),
   });
-  if (r.ok) { window.location.href = resumeTarget(); }
+  if (r.ok) { window.location.href = resumeTarget(window.location.search, window.location.origin); }
   else { document.getElementById('err').textContent = 'Sign-in failed'; }
 });`
 
