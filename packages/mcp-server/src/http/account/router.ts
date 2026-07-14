@@ -13,8 +13,7 @@ import { fromNodeHeaders } from 'better-auth/node'
 import express, { type ErrorRequestHandler, type Request, type Response, type Router } from 'express'
 import type { Auth } from '../../auth/better-auth.js'
 import { logger } from '../../logger.js'
-import { hasAdminRole } from '../../store/repos.js'
-import { adminCsp, adminCsrf, isHtmx } from '../admin/middleware.js'
+import { adminCsp, adminCsrf, isHtmx, resolveSessionOr401 } from '../admin/middleware.js'
 import { flash, page } from '../admin/views.js'
 
 export interface CreateAccountRouterOptions {
@@ -55,22 +54,13 @@ export function createAccountRouter(opts: CreateAccountRouterOptions): Router {
   )
 
   // Gate: ANY authenticated user (no role check — this is the self-service page).
+  // The SAME resolver /admin uses, so the 401/redirect + locals behavior can't
+  // drift between the two surfaces. Stash the role for the page's own render.
   router.use((req, res, next) => {
-    auth.api
-      .getSession({ headers: fromNodeHeaders(req.headers) })
-      .then((result) => {
-        if (!result) {
-          if (isHtmx(req)) {
-            res.status(401).setHeader('HX-Redirect', '/sign-in?next=%2Faccount').type('html').send('')
-            return
-          }
-          res.redirect(`/sign-in?next=${encodeURIComponent(req.originalUrl)}`)
-          return
-        }
-        const u = result.user as { id?: string; email?: string; role?: string | null }
-        res.locals.actorId = u.id ?? ''
-        res.locals.navUser = { email: u.email ?? '', admin: hasAdminRole(u.role) }
-        res.locals.actorRole = u.role ?? 'user'
+    resolveSessionOr401(auth, req, res)
+      .then((session) => {
+        if (session === null) return // unauthenticated response already sent
+        res.locals.actorRole = session.role ?? 'user'
         next()
       })
       .catch(next)
@@ -92,10 +82,17 @@ export function createAccountRouter(opts: CreateAccountRouterOptions): Router {
         return
       }
       try {
-        await auth.api.changePassword({
+        // revokeOtherSessions rotates the CURRENT session too: better-auth issues a
+        // fresh session cookie and invalidates the old token. We MUST forward that
+        // Set-Cookie, or the browser keeps the now-dead cookie and is bounced to
+        // sign-in on its next request. Same header-forwarding contract as sign-out.
+        const out = await auth.api.changePassword({
           headers: fromNodeHeaders(req.headers),
           body: { currentPassword: current, newPassword: password, revokeOtherSessions: true },
+          returnHeaders: true,
         })
+        const cookies = out.headers.getSetCookie()
+        if (cookies.length > 0) res.setHeader('Set-Cookie', cookies)
       } catch (err) {
         // Wrong current password / policy refusal — redacted, never echo details.
         logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'account password change failed')

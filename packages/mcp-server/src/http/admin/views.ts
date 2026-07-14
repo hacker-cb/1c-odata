@@ -70,3 +70,15 @@ export function partial(res: Response, view: string, data: Record<string, unknow
 export function flash(res: Response, status: number, message: string, kind: 'err' | 'ok' = 'err'): void {
   res.status(status).setHeader('HX-Reswap', 'none').type('html').send(render('_flash', { kind, message }))
 }
+
+/**
+ * Success response for a mutation whose target should swap to EMPTY (a set-password
+ * form closing, a deleted row disappearing): the body is ONLY the OOB `#flash`
+ * toast, so htmx strips the OOB node and the request's own swap (`innerHTML` /
+ * `outerHTML`) receives '' — the form/row is removed AND the toast shows. Unlike
+ * {@link flash} this sends NO `HX-Reswap: none` (200; the swap-to-empty is intended)
+ * and always renders the `ok` kind.
+ */
+export function okFlashOob(res: Response, message: string): void {
+  res.type('html').send(render('_flash', { kind: 'ok', message }))
+}

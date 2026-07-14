@@ -117,6 +117,30 @@ describe('admin user management guards', () => {
     expect(api.setRole).toHaveBeenCalledTimes(1)
   })
 
+  it('does NOT count a BANNED admin as a usable fallback (self-demote refused → no lockout)', async () => {
+    // a1 active, a2 an admin but banned (cannot sign in). Demoting a1 would strip
+    // the only sign-in-capable admin — the guard must refuse despite two admin rows.
+    await seedUser(handle, 'a1', 'one@x', 'admin')
+    await seedUser(handle, 'a2', 'two@x', 'admin', true)
+    const d = deps(handle)
+    const r = res('a1')
+    await setUserRole(req({ id: 'a1' }, { role: 'user' }), r as unknown as Response, d)
+    expect(r.statusCode).toBe(200)
+    expect(r.body).toContain('last admin')
+    expect(api.setRole).not.toHaveBeenCalled()
+  })
+
+  it('refuses to ban the last ACTIVE admin when the only other admin is already banned', async () => {
+    await seedUser(handle, 'a1', 'one@x', 'admin')
+    await seedUser(handle, 'a2', 'two@x', 'admin', true)
+    const d = deps(handle)
+    const r = res('a2') // actor irrelevant to the count; target is the active admin a1
+    await banUser(req({ id: 'a1' }), r as unknown as Response, d)
+    expect(r.statusCode).toBe(400)
+    expect(r.body).toContain('last admin')
+    expect(api.banUser).not.toHaveBeenCalled()
+  })
+
   it('refuses self-ban and self-delete outright', async () => {
     await seedUser(handle, 'a1', 'one@x', 'admin')
     await seedUser(handle, 'a2', 'two@x', 'admin')

@@ -13,7 +13,13 @@ import { createAccountRouter } from '../../src/http/account/router.js'
 let server: Server
 let origin: string
 const session = { value: null as unknown }
-const changePassword = vi.fn(async (_arg?: unknown) => ({}))
+// revokeOtherSessions rotates the current session → better-auth returns a fresh
+// Set-Cookie the handler must forward. Model that with returnHeaders.
+const changePassword = vi.fn(async (_arg?: unknown) => {
+  const headers = new Headers()
+  headers.append('set-cookie', 'better-auth.session_token=rotated; Path=/; HttpOnly')
+  return { headers, response: {} }
+})
 const signOut = vi.fn(async (_arg?: unknown) => {
   const headers = new Headers()
   headers.append('set-cookie', 'better-auth.session_token=; Max-Age=0; Path=/')
@@ -79,8 +85,12 @@ describe('/account over HTTP', () => {
     expect(changePassword).toHaveBeenCalledWith(
       expect.objectContaining({
         body: { currentPassword: 'old-pass-1', newPassword: 'new-pass-123', revokeOtherSessions: true },
+        returnHeaders: true,
       }),
     )
+    // The rotated session cookie must be forwarded, or the browser keeps the dead
+    // token and is bounced to sign-in on its next request.
+    expect(res.headers.get('set-cookie')).toContain('rotated')
   })
 
   it('a wrong current password flashes a redacted 400', async () => {

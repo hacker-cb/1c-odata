@@ -2,9 +2,9 @@
 import { fromNodeHeaders } from 'better-auth/node'
 import type { Request, Response } from 'express'
 import type { AdminUser } from '../../auth/better-auth.js'
-import { countAdmins, getUserById, hasAdminRole } from '../../store/repos.js'
+import { countActiveAdmins, getUserById, hasAdminRole, type UserRow } from '../../store/repos.js'
 import type { AdminDeps } from './router.js'
-import { flash, page, partial, render } from './views.js'
+import { flash, okFlashOob, page, partial, render } from './views.js'
 
 /** YYYY-MM-DD from better-auth's createdAt (Date on live objects, string off JSON). */
 function fmtCreated(v: Date | string | undefined): string {
@@ -14,7 +14,7 @@ function fmtCreated(v: Date | string | undefined): string {
 }
 
 /** The `_user_row` template's data bag. `self` drives the "(you)" marker + hides self-Ban/Delete. */
-function rowData(user: AdminUser, actorId: string): Record<string, unknown> {
+function rowData(user: AdminUser | UserRow, actorId: string): Record<string, unknown> {
   return { user, self: user.id === actorId, created: fmtCreated(user.createdAt) }
 }
 
@@ -23,14 +23,47 @@ function actorId(res: Response): string {
 }
 
 /**
- * Last-admin lockout guard: demoting, banning or deleting the ONLY admin would
- * leave the panel with no one able to sign in (self-service sign-up is off).
- * Returns the refusal message, or null when the mutation is safe.
+ * The precondition result for a destructive mutation. `ok:false` carries the
+ * refusal the caller renders (each handler chooses flash vs row-snap-back); the
+ * loaded `target` rides along on the last-admin case so the demote handler can
+ * re-render the row without a second query. Nothing is sent from here — the guard
+ * only decides, so a caller can never double-send.
  */
-async function lastAdminGuard(deps: AdminDeps, targetRole: string | null, action: string): Promise<string | null> {
-  if (!hasAdminRole(targetRole)) return null
-  if ((await countAdmins(deps.db)) > 1) return null
-  return `Cannot ${action} the last admin — the panel would be locked out.`
+type Guard = { ok: true; target: UserRow } | { ok: false; status: number; message: string; target?: UserRow }
+
+/**
+ * Resolve the precondition for a destructive mutation on user `id`, run by every
+ * ban/delete/demote handler so the "protect the acting user and the last usable
+ * admin" invariant lives in ONE place. `blockSelf` is off for role changes:
+ * self-demotion is legitimate (the UI keeps the role select enabled) and is
+ * caught only by the last-admin count.
+ */
+async function guardTarget(
+  deps: AdminDeps,
+  actorId: string,
+  id: string,
+  action: string,
+  opts: { blockSelf: boolean },
+): Promise<Guard> {
+  if (opts.blockSelf && id === actorId) {
+    return { ok: false, status: 400, message: `You cannot ${action} your own account.` }
+  }
+  const target = await getUserById(deps.db, id)
+  if (target === undefined) {
+    return { ok: false, status: 404, message: 'No such user — reload the page.' }
+  }
+  // Last-admin lockout: this action strips the ONLY sign-in-capable admin. Count
+  // ACTIVE (non-banned) admins — a banned admin can't log in, so it is not a
+  // usable fallback. Fires only when the target itself is an active admin.
+  if (hasAdminRole(target.role) && target.banned !== true && (await countActiveAdmins(deps.db)) <= 1) {
+    return {
+      ok: false,
+      status: 400,
+      message: `Cannot ${action} the last admin — the panel would be locked out.`,
+      target,
+    }
+  }
+  return { ok: true, target }
 }
 
 /** GET /admin/users — list + create form. */
@@ -71,22 +104,22 @@ export async function setUserRole(req: Request, res: Response, deps: AdminDeps):
   const id = String(req.params.id)
   const role = req.body.role === 'admin' ? 'admin' : 'user'
   if (role !== 'admin') {
-    const target = await getUserById(deps.db, id)
-    if (target === undefined) {
-      flash(res, 404, 'No such user — reload the page.')
-      return
-    }
-    const guard = await lastAdminGuard(deps, target.role, 'demote')
-    if (guard !== null) {
-      // 200 + the CURRENT row + an OOB error toast: the select must snap back to
-      // the server-side truth (a bare 4xx flash would leave it showing the
-      // refused value).
-      res
-        .type('html')
-        .send(
-          render('_user_row', rowData(toAdminUser(target), actorId(res))) +
-            render('_flash', { kind: 'err', message: guard }),
-        )
+    const g = await guardTarget(deps, actorId(res), id, 'demote', { blockSelf: false })
+    if (!g.ok) {
+      // The role <select> is showing the refused value; it must snap back to
+      // server truth. When we have the target row (last-admin refusal), re-render
+      // it (200) plus an OOB error toast — every cell is accurate (getUserById
+      // selects them all). A 404 has no row to restore, so just flash.
+      if (g.target !== undefined) {
+        res
+          .type('html')
+          .send(
+            render('_user_row', rowData(g.target, actorId(res))) +
+              render('_flash', { kind: 'err', message: g.message }),
+          )
+      } else {
+        flash(res, g.status, g.message)
+      }
       return
     }
   }
@@ -126,26 +159,15 @@ export async function setUserPassword(req: Request, res: Response, deps: AdminDe
   // A password reset must invalidate whoever held the old credential's sessions.
   await deps.auth.api.revokeUserSessions({ headers, body: { userId: id } })
   // OOB-only body: the slot's innerHTML swap receives '' (form closes), the toast shows.
-  res
-    .type('html')
-    .send(render('_flash', { kind: 'ok', message: `Password for ${target.email} set — their sessions were revoked.` }))
+  okFlashOob(res, `Password for ${target.email} set — their sessions were revoked.`)
 }
 
 /** POST /admin/users/:id/ban — refuse self and the last admin; sessions are revoked. */
 export async function banUser(req: Request, res: Response, deps: AdminDeps): Promise<void> {
   const id = String(req.params.id)
-  if (id === actorId(res)) {
-    flash(res, 400, 'You cannot ban your own account.')
-    return
-  }
-  const target = await getUserById(deps.db, id)
-  if (target === undefined) {
-    flash(res, 404, 'No such user — reload the page.')
-    return
-  }
-  const guard = await lastAdminGuard(deps, target.role, 'ban')
-  if (guard !== null) {
-    flash(res, 400, guard)
+  const g = await guardTarget(deps, actorId(res), id, 'ban', { blockSelf: true })
+  if (!g.ok) {
+    flash(res, g.status, g.message)
     return
   }
   const headers = fromNodeHeaders(req.headers)
@@ -169,43 +191,18 @@ export async function unbanUser(req: Request, res: Response, deps: AdminDeps): P
 /** DELETE /admin/users/:id — refuse self and the last admin; grants are cleaned up. */
 export async function deleteUser(req: Request, res: Response, deps: AdminDeps): Promise<void> {
   const id = String(req.params.id)
-  if (id === actorId(res)) {
-    flash(res, 400, 'You cannot delete your own account.')
+  const g = await guardTarget(deps, actorId(res), id, 'delete', { blockSelf: true })
+  if (!g.ok) {
+    flash(res, g.status, g.message)
     return
   }
-  const target = await getUserById(deps.db, id)
-  if (target === undefined) {
-    flash(res, 404, 'No such user — reload the page.')
-    return
-  }
-  const guard = await lastAdminGuard(deps, target.role, 'delete')
-  if (guard !== null) {
-    flash(res, 400, guard)
-    return
-  }
-  await deps.auth.api.removeUser({ headers: fromNodeHeaders(req.headers), body: { userId: id } })
-  // The grants table has no FK into better-auth's user table — clean up explicitly
-  // so a future user with a recycled sub can't inherit orphaned grants.
+  const target = g.target
+  // Clear grants BEFORE removing the user: if removeUser then fails, we've only
+  // cleared an existing user's grants (retryable), not orphaned grant rows whose
+  // owning user is already gone. The grants table has no FK into better-auth's
+  // user table, so nothing cascades on its own.
   await deps.grantRepo.revokeAll(id)
+  await deps.auth.api.removeUser({ headers: fromNodeHeaders(req.headers), body: { userId: id } })
   // OOB-only body: the row's outerHTML swap receives '' (row removed), the toast shows.
-  res.type('html').send(render('_flash', { kind: 'ok', message: `User ${target.email} deleted.` }))
-}
-
-/** Widen a users-table DB row to the template's AdminUser shape. */
-function toAdminUser(row: {
-  id: string
-  email: string
-  name?: string | null
-  role: string | null
-  banned?: boolean | null
-  createdAt?: Date | string
-}): AdminUser {
-  return {
-    id: row.id,
-    email: row.email,
-    name: row.name ?? '',
-    role: row.role,
-    banned: row.banned ?? null,
-    ...(row.createdAt !== undefined ? { createdAt: row.createdAt } : {}),
-  }
+  okFlashOob(res, `User ${target.email} deleted.`)
 }
