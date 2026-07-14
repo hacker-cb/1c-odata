@@ -2,9 +2,10 @@
 import { fromNodeHeaders } from 'better-auth/node'
 import type { Request, Response } from 'express'
 import type { AdminUser } from '../../auth/better-auth.js'
+import { logger } from '../../logger.js'
 import { countActiveAdmins, getUserById, hasAdminRole, type UserRow } from '../../store/repos.js'
 import type { AdminDeps } from './router.js'
-import { flash, okFlashOob, page, partial, render } from './views.js'
+import { closeDrawer, drawerFormError, flash, okFlashOob, page, partial, render } from './views.js'
 
 /** YYYY-MM-DD from better-auth's createdAt (Date on live objects, string off JSON). */
 function fmtCreated(v: Date | string | undefined): string {
@@ -27,6 +28,28 @@ function rowData(user: AdminUser | UserRow, actorId: string): Record<string, unk
 
 function actorId(res: Response): string {
   return String((res.locals as { actorId?: string }).actorId ?? '')
+}
+
+/** OOB drawer-close + ok-toast appended after a create/edit row fragment. */
+function savedChrome(message: string): string {
+  return render('_drawer_close') + render('_flash', { kind: 'ok', message })
+}
+
+/**
+ * Allowlist for a user id before it is hand-spliced into an HTML attribute / CSS
+ * selector. better-auth generates plain [A-Za-z0-9] ids; the schema column is
+ * free-form `text`, so we don't trust that locally — the caller checks this first.
+ */
+const SAFE_USER_ID = /^[A-Za-z0-9_-]+$/
+
+/**
+ * A `_user_row` rewritten to replace the live row by id (edit success; form swaps
+ * none). The caller validates `id` with {@link SAFE_USER_ID} first, so splicing it
+ * into the hx-swap-oob selector/attribute is injection-safe (Eta's escaping doesn't
+ * reach this hand-built attribute).
+ */
+function userRowOob(id: string, row: Record<string, unknown>): string {
+  return render('_user_row', row).replace('<tr ', `<tr hx-swap-oob="outerHTML:#user-${id}" `)
 }
 
 /**
@@ -83,35 +106,130 @@ export async function usersPage(req: Request, res: Response, deps: AdminDeps): P
   page(res, 'users_list', { users: users.map((u) => rowData(u, actor)) }, 'Users', 'users')
 }
 
+/** GET /admin/users/new — the create-user form (into the drawer's #drawer-body). */
+export function newUserForm(_req: Request, res: Response): void {
+  partial(res, '_user_create_form', {})
+}
+
+/**
+ * Re-render the create-user form OOB into the drawer with an inline error, echoing
+ * the typed identity (never the password — it lives client-side only). Used instead
+ * of a #flash toast because the drawer's top layer would hide the toast.
+ */
+function recreate(res: Response, req: Request, error: string): void {
+  drawerFormError(res, '_user_create_form', {
+    // Echo the TRIMMED email so a whitespace-only value re-renders as empty,
+    // consistent with the trim-then-required check (not a spaces-filled field).
+    email: typeof req.body.email === 'string' ? req.body.email.trim() : '',
+    name: String(req.body.name ?? ''),
+    role: req.body.role === 'admin' ? 'admin' : 'user',
+    error,
+  })
+}
+
 /** POST /admin/users — create (admin session authorizes; role defaults to 'user'). */
 export async function createUser(req: Request, res: Response, deps: AdminDeps): Promise<void> {
   // Validate explicitly: `String(undefined)` would coerce a missing field to the
   // literal "undefined" and create a bogus user. Enforce the 8-char minimum here
   // too (the form's minlength + set-password's server check), else a short
   // password falls through to better-auth and surfaces as a 500 from the error
-  // middleware instead of a clean 400 toast.
-  const email = req.body.email
+  // middleware instead of a clean inline error.
+  // Trim before the emptiness check (parity with updateUser): a whitespace-only
+  // email must fail here with a clear "required", not slip through to better-auth.
+  const email = typeof req.body.email === 'string' ? req.body.email.trim() : ''
   const password = req.body.password
-  if (typeof email !== 'string' || email === '') {
-    flash(res, 400, 'Email is required.')
+  if (email === '') {
+    recreate(res, req, 'Email is required.')
     return
   }
   if (typeof password !== 'string' || password.length < 8) {
-    flash(res, 400, 'Password must be at least 8 characters.')
+    recreate(res, req, 'Password must be at least 8 characters.')
     return
   }
-  const { user } = await deps.auth.api.createUser({
-    headers: fromNodeHeaders(req.headers),
-    body: {
-      email,
-      password,
-      name: String(req.body.name ?? ''),
-      role: req.body.role === 'admin' ? 'admin' : 'user',
-    },
-  })
-  // Appended via beforeend; the empty-state placeholder hides itself via CSS
-  // (:only-child) once a real row exists, so no OOB placeholder juggling.
-  partial(res, '_user_row', rowData(user, actorId(res)))
+  let created: { user: AdminUser }
+  try {
+    created = await deps.auth.api.createUser({
+      headers: fromNodeHeaders(req.headers),
+      body: {
+        email,
+        password,
+        name: String(req.body.name ?? ''),
+        role: req.body.role === 'admin' ? 'admin' : 'user',
+      },
+    })
+  } catch (err) {
+    // Passed the local checks but better-auth rejected it (most often a duplicate
+    // email). Re-render the form inline in the drawer rather than letting the
+    // rejection hit the router's OOB #flash, which renders behind the open dialog's
+    // top layer — the drawer would sit open with no visible error.
+    logger.warn({ err: err instanceof Error ? err.message : String(err), email }, 'admin createUser failed')
+    recreate(res, req, 'Could not create — the email may already be in use, or was rejected.')
+    return
+  }
+  // Row appended via beforeend (the empty-state placeholder hides itself via CSS
+  // :only-child once a real row exists), then OOB drawer-close + ok-toast.
+  res
+    .type('html')
+    .send(render('_user_row', rowData(created.user, actorId(res))) + savedChrome(`User ${created.user.email} created.`))
+}
+
+/** GET /admin/users/:id/edit — the identity (email + name) form (into the drawer). */
+export async function editUserForm(req: Request, res: Response, deps: AdminDeps): Promise<void> {
+  const id = String(req.params.id)
+  const target = await getUserById(deps.db, id)
+  if (target === undefined) {
+    flash(res, 404, 'No such user — reload the page.')
+    return
+  }
+  partial(res, '_user_edit_form', { id, email: target.email, name: target.name })
+}
+
+/** POST /admin/users/:id — update the user's email/name (role is edited inline). */
+export async function updateUser(req: Request, res: Response, deps: AdminDeps): Promise<void> {
+  const id = String(req.params.id)
+  const email = typeof req.body.email === 'string' ? req.body.email.trim() : ''
+  const name = String(req.body.name ?? '')
+  const reform = (error: string): void => {
+    // Echo the already-trimmed `email` (what we validate + send), so a whitespace-
+    // only value re-renders as empty rather than as a spaces-filled field.
+    drawerFormError(res, '_user_edit_form', { id, email, name, error })
+  }
+  const target = await getUserById(deps.db, id)
+  if (target === undefined) {
+    // Submitted from the OPEN drawer — a plain flash would hide behind the dialog's
+    // top layer, so close the drawer (OOB) and show the error as the surfacing toast.
+    res.status(404)
+    closeDrawer(res, 'No such user — reload the page.', 'err')
+    return
+  }
+  if (email === '') {
+    reform('Email is required.')
+    return
+  }
+  try {
+    await deps.auth.api.adminUpdateUser({
+      headers: fromNodeHeaders(req.headers),
+      body: { userId: id, data: { email, name } },
+    })
+  } catch (err) {
+    // The likely failure is a duplicate email (unique constraint) or a rejected
+    // format. Surface it as a clean inline error in the drawer instead of letting
+    // it bubble to the router's opaque 500 flash — mirroring the create path.
+    logger.warn({ err: err instanceof Error ? err.message : String(err), userId: id }, 'admin updateUser failed')
+    reform('Could not save — the email may already be in use, or is invalid.')
+    return
+  }
+  // Re-read the row (adminUpdateUser's return shape isn't relied upon) and replace
+  // it OOB, then close the drawer + toast.
+  const fresh = (await getUserById(deps.db, id)) ?? { ...target, email, name }
+  if (!SAFE_USER_ID.test(id)) {
+    // A row exists for this id, so a real better-auth id is always a plain token —
+    // this is a can't-happen guard against splicing an unexpected id into the OOB
+    // attribute. Degrade to a reload hint instead of hand-building an unsafe target.
+    closeDrawer(res, `User ${email} updated — reload to see the row.`)
+    return
+  }
+  res.type('html').send(userRowOob(id, rowData(fresh, actorId(res))) + savedChrome(`User ${email} updated.`))
 }
 
 /** POST /admin/users/:id/role — set role (last-admin demotion refused). */
@@ -145,7 +263,7 @@ export async function setUserRole(req: Request, res: Response, deps: AdminDeps):
   partial(res, '_user_row', rowData(user, actorId(res)))
 }
 
-/** GET /admin/users/:id/password — the set-password form (into #user-form-slot). */
+/** GET /admin/users/:id/password — the set-password form (into the drawer). */
 export async function passwordForm(req: Request, res: Response, deps: AdminDeps): Promise<void> {
   const id = String(req.params.id)
   const target = await getUserById(deps.db, id)
@@ -161,20 +279,29 @@ export async function setUserPassword(req: Request, res: Response, deps: AdminDe
   const id = String(req.params.id)
   const target = await getUserById(deps.db, id)
   if (target === undefined) {
-    flash(res, 404, 'No such user — reload the page.')
+    // Submitted from the OPEN drawer — close it (OOB) so the error toast is visible
+    // rather than hidden behind the dialog's top layer.
+    res.status(404)
+    closeDrawer(res, 'No such user — reload the page.', 'err')
     return
   }
   const password = req.body.password
   if (typeof password !== 'string' || password.length < 8) {
-    partial(res, '_user_password_form', { id, email: target.email, error: 'Password must be at least 8 characters.' })
+    // Re-render the form OOB into the drawer with the inline error (the form swaps
+    // #users-tbody with none, so a plain body would be dropped).
+    drawerFormError(res, '_user_password_form', {
+      id,
+      email: target.email,
+      error: 'Password must be at least 8 characters.',
+    })
     return
   }
   const headers = fromNodeHeaders(req.headers)
   await deps.auth.api.setUserPassword({ headers, body: { userId: id, newPassword: password } })
   // A password reset must invalidate whoever held the old credential's sessions.
   await deps.auth.api.revokeUserSessions({ headers, body: { userId: id } })
-  // OOB-only body: the slot's innerHTML swap receives '' (form closes), the toast shows.
-  okFlashOob(res, `Password for ${target.email} set — their sessions were revoked.`)
+  // No row changes — just close the drawer (OOB) and toast.
+  closeDrawer(res, `Password for ${target.email} set — their sessions were revoked.`)
 }
 
 /** POST /admin/users/:id/ban — refuse self and the last admin; sessions are revoked. */

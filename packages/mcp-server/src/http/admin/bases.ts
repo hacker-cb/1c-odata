@@ -6,7 +6,7 @@ import type { Request, Response } from 'express'
 import { decrypt, encrypt } from '../../store/crypto.js'
 import { BaseRepo, SecretRepo } from '../../store/repos.js'
 import type { AdminDeps } from './router.js'
-import { partial, render } from './views.js'
+import { drawerFormError, partial, render } from './views.js'
 
 /** Sentinel: a CREATE lost the uniqueness race inside the save transaction (rolled back). */
 class DuplicateBaseError extends Error {
@@ -34,15 +34,16 @@ export function classifyProbe(err: unknown): { status: 'auth_failed' | 'unreacha
 
 /**
  * Re-render the form with an error. Never echoes the password back into the DOM.
- * ALWAYS renders through the OOB wrapper targeting the stable #base-form-slot:
- * neither form's own swap target can host an error re-render (the edit form
- * submits hx-swap="none", the create form appends into #bases-tbody). The mode
- * flag is explicit — a create error must re-render a CREATE form even though the
- * typed `name` is present (see the _base_form template note).
+ * ALWAYS renders through the OOB wrapper targeting the stable #drawer-body: neither
+ * form's own swap target can host an error re-render (the edit form submits
+ * hx-swap="none", the create form appends into #bases-tbody), and the error must
+ * show INSIDE the open drawer (a #flash toast is hidden behind the dialog's top
+ * layer). The mode flag is explicit — a create error must re-render a CREATE form
+ * even though the typed `name` is present (see the _base_form template note).
  */
 function reform(res: Response, body: Record<string, unknown>, error: string, editName?: string): void {
   const { password: _pw, ...safe } = body
-  partial(res, '_base_form_oob', {
+  drawerFormError(res, '_base_form', {
     ...safe,
     // The mode flag is derived from the ROUTE, never from the body: `...safe`
     // would otherwise let a tampered `edit` field in a create POST flip the
@@ -203,8 +204,8 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
   // loading the stored secret above — no extra query needed. health is 'ok': we
   // only reach persistence after verifyConnectivity resolved, and we just seeded it.
   const base = { name, baseUrl, login, serverTimezone, label, hasSecret: true, health: 'ok' }
-  // On success the form closes (OOB) and a toast shows, for BOTH new and edit.
-  const chrome = render('_close_base_form') + render('_flash', { kind: 'ok', message: `Base "${name}" saved.` })
+  // On success the drawer closes (OOB) and a toast shows, for BOTH new and edit.
+  const chrome = render('_drawer_close') + render('_flash', { kind: 'ok', message: `Base "${name}" saved.` })
   if (editName !== undefined) {
     // Edit form submits hx-swap="none" — the row updates via an OOB fragment.
     res.type('html').send(renderOob(name, base) + chrome)

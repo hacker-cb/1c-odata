@@ -101,3 +101,30 @@ export function flash(res: Response, status: number, message: string, kind: 'err
 export function okFlashOob(res: Response, message: string): void {
   res.type('html').send(render('_flash', { kind: 'ok', message }))
 }
+
+/**
+ * Response for a drawer form whose own swap target is a table (not the drawer):
+ * send an OOB empty `#drawer-body` (admin.js then closes the drawer) plus an OOB
+ * toast. Used for success (set-password; create/edit add their row fragment ahead
+ * of this chrome) AND for an error that fires while the drawer is open — a plain
+ * {@link flash} would render the toast behind the dialog's top layer, invisible, so
+ * the drawer must be closed first for the message to show. `kind` defaults to `ok`.
+ */
+export function closeDrawer(res: Response, message: string, kind: 'ok' | 'err' = 'ok'): void {
+  res.type('html').send(render('_drawer_close') + render('_flash', { kind, message }))
+}
+
+/**
+ * Validation-error response for an OPEN drawer form: re-render the form (named by
+ * `form`) OOB into `#drawer-body` with its inline `error`, at 400. The error must
+ * show INSIDE the drawer — a #flash toast sits behind the dialog's top layer and
+ * would be invisible. The body is OOB-only, so htmx strips it and the form's own
+ * swap target (a table with beforeend/none) receives '' — the table is never
+ * touched. `data` echoes the typed fields back (never a password).
+ */
+export function drawerFormError(res: Response, form: string, data: Record<string, unknown>): void {
+  res
+    .status(400)
+    .type('html')
+    .send(render('_drawer_form_oob', { ...data, _form: form }))
+}

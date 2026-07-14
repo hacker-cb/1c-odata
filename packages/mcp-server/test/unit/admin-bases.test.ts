@@ -110,7 +110,7 @@ describe('admin base CRUD', () => {
     // a success toast — the empty-state placeholder hides itself via CSS, no OOB.
     expect(r.body).toContain('id="base-trade"')
     expect(r.body).toContain('badge ok')
-    expect(r.body).toContain('id="base-form-slot" hx-swap-oob="innerHTML"></div>') // form closed
+    expect(r.body).toContain('id="drawer-body" hx-swap-oob="innerHTML"></div>') // drawer closed
     expect(r.body).toContain('flash-msg ok')
     expect(r.body).not.toContain('hx-swap-oob="delete"') // no placeholder OOB juggling
   })
@@ -179,11 +179,11 @@ describe('admin base CRUD', () => {
     const r = res()
     await createBase(d)(req, r as unknown as Response)
     expect(r.body).toContain('already exists')
-    // The error re-renders into the stable form slot (OOB) and MUST stay a CREATE
-    // form: inferring edit mode from the typed name would hand the user an hx-put
-    // that overwrites the very base whose existence caused the error.
+    // The error re-renders into the drawer (OOB) and MUST stay a CREATE form:
+    // inferring edit mode from the typed name would hand the user an hx-put that
+    // overwrites the very base whose existence caused the error.
     expect(r.body).toContain('hx-swap-oob')
-    expect(r.body).toContain('base-form-slot')
+    expect(r.body).toContain('drawer-body')
     expect(r.body).toContain('hx-post="/admin/bases"')
     expect(r.body).not.toContain('hx-put')
     // the existing descriptor is untouched — createBase must never upsert over it
@@ -334,9 +334,9 @@ describe('admin base CRUD', () => {
       } as unknown as Request
       const r = res()
       await updateBase(d)(req, r as unknown as Response)
-      // OOB wrapper so the error is visible despite the edit form's hx-swap="none".
+      // OOB wrapper so the error is visible in the drawer despite hx-swap="none".
       expect(r.body).toContain('hx-swap-oob')
-      expect(r.body).toContain('base-form-slot')
+      expect(r.body).toContain('drawer-body')
       expect(r.body).toContain('Verification failed')
     })
   })

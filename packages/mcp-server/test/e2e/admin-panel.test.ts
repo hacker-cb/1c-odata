@@ -123,35 +123,36 @@ describe('admin panel over HTTP', () => {
     expect(html).toContain('data:image/svg+xml')
   })
 
-  it('the base form is a timezone <select>, not a free-text input, with a Cancel', async () => {
+  it('the base form timezone is a searchable datalist combobox, with a drawer Cancel', async () => {
     session.value = { user: { role: 'admin' }, session: {} }
     const html = await (await fetch(`${origin}/admin/bases/new`)).text()
-    expect(html).toContain('<select name="serverTimezone"')
-    expect(html).toContain('Europe/Moscow') // an IANA option is rendered
-    expect(html).toContain('/admin/ui/close') // Cancel clears the form slot
-    expect(html).not.toContain('name="serverTimezone" value=') // no free-text field
+    expect(html).toContain('<input name="serverTimezone" list="tzlist"') // native typeahead
+    expect(html).toContain('<datalist id="tzlist">')
+    expect(html).toContain('<option value="Europe/Moscow">') // an IANA zone is offered
+    expect(html).toContain('data-dialog-close="#drawer"') // Cancel closes the drawer
+    expect(html).not.toContain('<select name="serverTimezone"') // no plain dropdown anymore
+    expect(html).toMatch(/name="password"[^>]*required/) // create password is required (matches server validation)
   })
 
-  it('the NEW base form forces an explicit timezone choice (no default pre-selected)', async () => {
+  it('the NEW base form leaves the timezone empty (no default) + required', async () => {
     session.value = { user: { role: 'admin' }, session: {} }
     const html = await (await fetch(`${origin}/admin/bases/new`)).text()
-    // A disabled placeholder is selected + the select is `required`, so submit is
-    // blocked until the admin actively picks — serverTimezone has no default (CLAUDE.md).
-    expect(html).toContain('<option value="" disabled selected>Select a timezone')
-    expect(html).not.toMatch(/<option selected>Europe\/Moscow<\/option>/) // no pre-selected zone
+    // Empty value + `required`: submit is blocked until the admin types/picks a zone —
+    // serverTimezone has no default (CLAUDE.md); a non-IANA typo is rejected server-side.
+    expect(html).toMatch(/<input name="serverTimezone" list="tzlist" value="" [^>]*required/)
   })
 
-  it("the edit form preselects the base's stored timezone", async () => {
+  it("the edit form prefills the base's stored timezone", async () => {
     session.value = { user: { role: 'admin' }, session: {} }
     const html = await (await fetch(`${origin}/admin/bases/trade/edit`)).text()
-    // trade was seeded with Europe/Moscow — its option must carry selected.
-    expect(html).toMatch(/<option selected>Europe\/Moscow<\/option>/)
+    // trade was seeded with Europe/Moscow — the input value must carry it.
+    expect(html).toContain('name="serverTimezone" list="tzlist" value="Europe/Moscow"')
   })
 
-  it('the timezone select offers UTC (which Intl.supportedValuesOf omits)', async () => {
+  it('the timezone datalist offers UTC (which Intl.supportedValuesOf omits)', async () => {
     session.value = { user: { role: 'admin' }, session: {} }
     const html = await (await fetch(`${origin}/admin/bases/new`)).text()
-    expect(html).toMatch(/<option[^>]*>UTC<\/option>/)
+    expect(html).toContain('<option value="UTC">')
   })
 
   it('renders a CSS-controlled empty-state placeholder row (shown only when it is the sole row)', async () => {
@@ -226,6 +227,18 @@ describe('admin panel over HTTP', () => {
       expect(await res.text()).toContain('at least 8 characters')
       expect(createUserApi).not.toHaveBeenCalled()
     })
+
+    it('a whitespace-only email is rejected as required (trimmed, createUser not called)', async () => {
+      session.value = { user: { role: 'admin' }, session: {} }
+      const res = await fetch(`${origin}/admin/users`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://127.0.0.1' },
+        body: 'email=%20%20%20&password=valid-pass-1&role=user', // "   " → trims to empty
+      })
+      expect(res.status).toBe(400)
+      expect(await res.text()).toContain('Email is required')
+      expect(createUserApi).not.toHaveBeenCalled()
+    })
   })
 
   it('a multi-role "admin,user" user shows the admin option selected, not the first', async () => {
@@ -274,7 +287,16 @@ describe('admin panel over HTTP', () => {
       expect(html).toContain('/admin/users/u2/unban') // banned row offers Unban
       expect(html).not.toContain('/admin/users/a1/ban') // no self-ban/delete affordances
       expect(html).not.toContain(`hx-delete="/admin/users/a1"`)
-      expect(html).toContain('data-gen-password="#create-user-pw"') // generator on the create form
+      expect(html).toContain('hx-get="/admin/users/new"') // New user opens the create drawer
+      expect(html).toContain('/admin/users/u2/edit') // per-row Edit affordance (identity)
+    })
+
+    it('serves the create-user form into the drawer, with the password generator', async () => {
+      session.value = { user: { role: 'admin' }, session: {} }
+      const html = await (await fetch(`${origin}/admin/users/new`)).text()
+      expect(html).toContain('hx-post="/admin/users"')
+      expect(html).toContain('data-gen-password="#create-user-pw"')
+      expect(html).toContain('Create user')
     })
 
     it('the nav carries the account chip + sign-out for the signed-in admin', async () => {
@@ -319,7 +341,7 @@ describe('admin panel over HTTP', () => {
       expect(html).toContain('id="flash"')
     })
 
-    it('a validation 400 renders an OOB flash and suppresses the target swap', async () => {
+    it('a create validation error re-renders the form OOB into the drawer (never the table)', async () => {
       session.value = { user: { role: 'admin' }, session: {} }
       const res = await fetch(`${origin}/admin/users`, {
         method: 'POST',
@@ -327,15 +349,32 @@ describe('admin panel over HTTP', () => {
         body: 'email=e@x&role=user', // password omitted
       })
       expect(res.status).toBe(400)
-      // The request's own target must NOT swap (an error <p> appended into a
-      // <tbody>, or an outerHTML row delete for a failed DELETE) — only the toast.
-      expect(res.headers.get('hx-reswap')).toBe('none')
       const body = await res.text()
+      // The error re-renders the create form OOB into #drawer-body (shown inside the
+      // open drawer, where a #flash toast would be hidden behind the dialog's top
+      // layer). The OOB-only body carries no <tr>, so the users table is never touched.
+      expect(body).toContain('id="drawer-body"')
       expect(body).toContain('hx-swap-oob')
-      expect(body).toContain('id="flash"')
+      expect(body).toContain('hx-post="/admin/users"') // the re-rendered create form
+      expect(body).toContain('Password must be at least 8 characters')
+      expect(body).not.toContain('<tr') // nothing lands in the table
     })
 
     it('a 500 on an htmx request renders an OOB flash (not a bare unswapped fragment)', async () => {
+      // Use a rejecting listUsers on GET /users: an UNEXPECTED handler failure that
+      // legitimately reaches the router's error middleware (unlike createUser's
+      // duplicate-email rejection, which the handler now catches into an inline error).
+      session.value = { user: { role: 'admin' }, session: {} }
+      listUsers.mockRejectedValueOnce(new Error('db exploded'))
+      const res = await fetch(`${origin}/admin/users`, { headers: { 'HX-Request': 'true' } })
+      expect(res.status).toBe(500)
+      expect(res.headers.get('hx-reswap')).toBe('none')
+      const body = await res.text()
+      expect(body).toContain('hx-swap-oob')
+      expect(body).not.toContain('db exploded') // raw error never leaks to the DOM
+    })
+
+    it('a createUser rejection (e.g. duplicate email) re-renders the form inline, not a 500 behind the drawer', async () => {
       session.value = { user: { role: 'admin' }, session: {} }
       createUserApi.mockRejectedValueOnce(new Error('duplicate email'))
       const res = await fetch(`${origin}/admin/users`, {
@@ -347,11 +386,11 @@ describe('admin panel over HTTP', () => {
         },
         body: 'email=e@x&password=valid-pass-1&role=user',
       })
-      expect(res.status).toBe(500)
-      expect(res.headers.get('hx-reswap')).toBe('none')
+      expect(res.status).toBe(400) // clean inline error in the open drawer, not an opaque 500
       const body = await res.text()
-      expect(body).toContain('hx-swap-oob')
-      expect(body).not.toContain('duplicate email') // raw error never leaks to the DOM
+      expect(body).toContain('id="drawer-body"') // re-rendered form, not a #flash toast
+      expect(body).toContain('already be in use')
+      expect(body).not.toContain('duplicate email') // raw plugin error never leaks
     })
 
     it('an expired session on an htmx request sends HX-Redirect with the DOCUMENT url as next', async () => {
@@ -408,17 +447,15 @@ describe('admin panel over HTTP', () => {
 
   describe('error middleware', () => {
     it('a rejecting handler yields a 500, not a crash/hang', async () => {
+      // An unexpected failure (rejecting listUsers) must reach the error middleware
+      // as a clean 500, not crash the process or hang the request.
       session.value = { user: { role: 'admin' }, session: {} }
-      createUserApi.mockRejectedValueOnce(new Error('duplicate email'))
-      const res = await fetch(`${origin}/admin/users`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://127.0.0.1' },
-        body: 'email=e@x&password=valid-pass-1&role=user',
-      })
+      listUsers.mockRejectedValueOnce(new Error('db exploded'))
+      const res = await fetch(`${origin}/admin/users`)
       expect(res.status).toBe(500)
       const body = await res.text()
       expect(body).toContain('Internal error')
-      expect(body).not.toContain('duplicate email') // raw error never leaks to the DOM
+      expect(body).not.toContain('db exploded') // raw error never leaks to the DOM
     })
   })
 })

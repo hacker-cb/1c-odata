@@ -4,11 +4,19 @@
 // user table (countAdmins/getUserById read it directly) with the better-auth
 // admin API stubbed — the plugin's own behavior is not under test here.
 import type { ReadPool } from '@1c-odata/mcp/internal'
+import { eq } from 'drizzle-orm'
 import type { Request, Response } from 'express'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { user } from '../../auth-schema.js'
 import type { AdminDeps } from '../../src/http/admin/router.js'
-import { banUser, deleteUser, setUserPassword, setUserRole } from '../../src/http/admin/users.js'
+import {
+  banUser,
+  deleteUser,
+  editUserForm,
+  setUserPassword,
+  setUserRole,
+  updateUser,
+} from '../../src/http/admin/users.js'
 import { loadKeyring } from '../../src/store/crypto.js'
 import { createDb, type DbHandle } from '../../src/store/db.js'
 import { runAuthMigrations } from '../../src/store/migrate.js'
@@ -57,6 +65,7 @@ const api = {
   banUser: vi.fn(),
   unbanUser: vi.fn(),
   removeUser: vi.fn(),
+  adminUpdateUser: vi.fn(),
 }
 
 function deps(handle: DbHandle): AdminDeps {
@@ -96,6 +105,7 @@ describe('admin user management guards', () => {
     api.setUserPassword.mockResolvedValue({})
     api.revokeUserSessions.mockResolvedValue({})
     api.removeUser.mockResolvedValue({})
+    api.adminUpdateUser.mockResolvedValue({})
   })
 
   it('refuses to demote the LAST admin (select snaps back via a 200 row + error toast)', async () => {
@@ -221,5 +231,82 @@ describe('admin user management guards', () => {
     await banUser(req({ id: 'ghost' }), r as unknown as Response, d)
     expect(r.statusCode).toBe(404)
     expect(api.banUser).not.toHaveBeenCalled()
+  })
+
+  it('editUserForm renders the identity form prefilled with the current email/name', async () => {
+    await seedUser(handle, 'u2', 'old@x', 'user')
+    const d = deps(handle)
+    const r = res('a1')
+    await editUserForm(req({ id: 'u2' }), r as unknown as Response, d)
+    expect(r.body).toContain('hx-post="/admin/users/u2"')
+    expect(r.body).toContain('value="old@x"')
+  })
+
+  it('updateUser forwards email/name to adminUpdateUser, then re-reads + replaces the row OOB and closes the drawer', async () => {
+    await seedUser(handle, 'u2', 'old@x', 'user')
+    // Make the stub persist like the real plugin does, so the handler's re-read
+    // (getUserById after the update) is actually exercised, not the fallback.
+    api.adminUpdateUser.mockImplementation(
+      async (arg: { body: { userId: string; data: { email: string; name: string } } }) => {
+        await handle.db.update(user).set(arg.body.data).where(eq(user.id, arg.body.userId))
+        return {}
+      },
+    )
+    const d = deps(handle)
+    const r = res('a1')
+    await updateUser(req({ id: 'u2' }, { email: 'new@x', name: 'New Name' }), r as unknown as Response, d)
+    expect(api.adminUpdateUser).toHaveBeenCalledWith(
+      expect.objectContaining({ body: { userId: 'u2', data: { email: 'new@x', name: 'New Name' } } }),
+    )
+    // The form swaps none → the re-read row rides in as an OOB replace (reflecting
+    // the persisted new email), then the drawer is emptied (closes) + a toast shows.
+    expect(r.body).toContain('hx-swap-oob="outerHTML:#user-u2"')
+    expect(r.body).toContain('new@x')
+    expect(r.body).toContain('id="drawer-body" hx-swap-oob="innerHTML"></div>')
+    expect(r.body).toContain('flash-msg ok')
+  })
+
+  it('updateUser surfaces a plugin failure (e.g. duplicate email) as a clean inline drawer error', async () => {
+    await seedUser(handle, 'u2', 'old@x', 'user')
+    api.adminUpdateUser.mockRejectedValueOnce(new Error('user_email_unique violation'))
+    const d = deps(handle)
+    const r = res('a1')
+    await updateUser(req({ id: 'u2' }, { email: 'taken@x', name: 'X' }), r as unknown as Response, d)
+    expect(r.statusCode).toBe(400)
+    expect(r.body).toContain('already be in use')
+    expect(r.body).toContain('drawer-body') // inline form re-render, not an opaque 500
+  })
+
+  it('updateUser rejects a blank email inline (400 form re-render, plugin not called)', async () => {
+    await seedUser(handle, 'u2', 'old@x', 'user')
+    const d = deps(handle)
+    const r = res('a1')
+    await updateUser(req({ id: 'u2' }, { email: '   ', name: 'X' }), r as unknown as Response, d)
+    expect(r.statusCode).toBe(400)
+    expect(r.body).toContain('Email is required')
+    expect(r.body).toContain('drawer-body')
+    expect(api.adminUpdateUser).not.toHaveBeenCalled()
+  })
+
+  it('updateUser on a vanished user closes the drawer with a 404 error toast (plugin not called)', async () => {
+    const d = deps(handle)
+    const r = res('a1')
+    await updateUser(req({ id: 'ghost' }, { email: 'x@x' }), r as unknown as Response, d)
+    expect(r.statusCode).toBe(404)
+    // Submitted from the open drawer → close it (OOB) so the error toast is visible,
+    // not a plain flash hidden behind the dialog's top layer.
+    expect(r.body).toContain('id="drawer-body" hx-swap-oob="innerHTML"></div>')
+    expect(r.body).toContain('flash-msg err')
+    expect(api.adminUpdateUser).not.toHaveBeenCalled()
+  })
+
+  it('setUserPassword on a vanished user closes the drawer with a 404 error toast (plugin not called)', async () => {
+    const d = deps(handle)
+    const r = res('a1')
+    await setUserPassword(req({ id: 'ghost' }, { password: 'longenough-1' }), r as unknown as Response, d)
+    expect(r.statusCode).toBe(404)
+    expect(r.body).toContain('id="drawer-body" hx-swap-oob="innerHTML"></div>')
+    expect(r.body).toContain('flash-msg err')
+    expect(api.setUserPassword).not.toHaveBeenCalled()
   })
 })

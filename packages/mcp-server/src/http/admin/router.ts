@@ -16,10 +16,13 @@ import {
   banUser,
   createUser,
   deleteUser,
+  editUserForm,
+  newUserForm,
   passwordForm,
   setUserPassword,
   setUserRole,
   unbanUser,
+  updateUser,
   usersPage,
 } from './users.js'
 import { flash, page, partial } from './views.js'
@@ -145,20 +148,19 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
   router.get('/grants', wrap(grantsPage, deps))
   router.post('/grants/toggle', wrap(toggleGrant, deps))
 
-  // Users
+  // Users. `/users/new` is a literal path — it precedes the `/users/:id/*` params
+  // but wouldn't be shadowed by them anyway (distinct segments).
   router.get('/users', wrap(usersPage, deps))
+  router.get('/users/new', (_req, res) => newUserForm(_req, res))
   router.post('/users', wrap(createUser, deps))
+  router.get('/users/:id/edit', wrap(editUserForm, deps))
+  router.post('/users/:id', wrap(updateUser, deps))
   router.post('/users/:id/role', wrap(setUserRole, deps))
   router.get('/users/:id/password', wrap(passwordForm, deps))
   router.post('/users/:id/password', wrap(setUserPassword, deps))
   router.post('/users/:id/ban', wrap(banUser, deps))
   router.post('/users/:id/unban', wrap(unbanUser, deps))
   router.delete('/users/:id', wrap(deleteUser, deps))
-
-  // Generic "close an inline form slot": swaps '' into the caller's hx-target.
-  router.get('/ui/close', (_req, res) => {
-    res.type('html').send('')
-  })
 
   // Terminal 404 for unmatched /admin/* paths (behind the gate): without it,
   // Express's default "Cannot GET …" page would be the response body — and with
