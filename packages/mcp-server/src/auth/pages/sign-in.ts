@@ -29,9 +29,10 @@ export type FirstRunCheck = () => Promise<boolean>
  *   - OAuth login: the plugin appends the authorize query (carrying `client_id`)
  *     → after sign-in we resume `/api/auth/oauth2/authorize?<same query>`.
  *   - Admin gate: an anonymous `/admin` visit redirects to `/sign-in?next=/admin`
- *     → after sign-in we go to that `next`. Only a SAFE same-origin relative path
- *     (starts with a single `/`, not `//` — which is a protocol-relative URL to
- *     another host) is honored client-side. This blocks an open-redirect via a
+ *     → after sign-in we go to that `next`, but ONLY when it resolves to a
+ *     same-origin absolute path (see `RESUME_TARGET_FN` — the guard resolves it
+ *     with the URL parser and re-checks the origin, so `//host`, its backslash
+ *     form, and scheme URIs are all rejected). This blocks an open-redirect via a
  *     crafted `next`.
  *   - Direct visit (no `next`, no authorize query): we land on `/admin`, the human
  *     home. We must NOT fall back to `/api/auth/oauth2/authorize` with no params —
@@ -69,12 +70,21 @@ one-time setup URL printed in the server logs (<code>…/setup?token=…</code>)
  * takes the URL query string (incl. any leading `?`), returns a same-origin
  * relative path. `URLSearchParams` is a global in both the browser and Node.
  */
-export const RESUME_TARGET_FN = `function resumeTarget(search) {
+export const RESUME_TARGET_FN = `function resumeTarget(search, origin) {
   const q = new URLSearchParams(search);
   const next = q.get('next');
-  // Honor only a SAFE same-origin relative path (single leading '/', not the
-  // protocol-relative '//' that points at another host) — blocks open redirects.
-  if (next && next[0] === '/' && next[1] !== '/') return next;
+  // Honor next only if it resolves to a SAME-ORIGIN absolute path. The leading '/'
+  // rejects scheme URIs (javascript:, https://other-host); resolving against the
+  // origin and re-checking the result origin rejects protocol-relative '//', its
+  // backslash variant, and tab/newline tricks that browsers normalize on
+  // navigation. A character test alone is bypassable; this is not. Blocks open
+  // redirects via a crafted next.
+  if (next && next[0] === '/') {
+    try {
+      const u = new URL(next, origin);
+      if (u.origin === origin) return u.pathname + u.search + u.hash;
+    } catch (e) { /* malformed next — fall through to the default */ }
+  }
   // Resume the OAuth authorize flow only when one is actually in progress
   // (client_id present); a bare /sign-in visit would otherwise hit
   // /api/auth/oauth2/authorize with no params and get a raw validation error.
@@ -96,7 +106,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
     credentials: 'same-origin',
     body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }),
   });
-  if (r.ok) { window.location.href = resumeTarget(window.location.search); }
+  if (r.ok) { window.location.href = resumeTarget(window.location.search, window.location.origin); }
   else { document.getElementById('err').textContent = 'Sign-in failed'; }
 });`
 
