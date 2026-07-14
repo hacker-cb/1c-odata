@@ -44,9 +44,13 @@ export async function resolveSessionOr401(auth: Auth, req: Request, res: Respons
   const result = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) })
   if (!result) {
     if (isHtmx(req)) {
+      // Fall back to THIS router's mount path (req.baseUrl: /admin or /account),
+      // not a hard-coded /admin — else an expired /account htmx request would
+      // resume a non-admin at /admin and 403 after sign-in.
+      const fallback = req.baseUrl || '/admin'
       res
         .status(401)
-        .setHeader('HX-Redirect', `/sign-in?next=${encodeURIComponent(docPath(req.get('HX-Current-URL')))}`)
+        .setHeader('HX-Redirect', `/sign-in?next=${encodeURIComponent(docPath(req.get('HX-Current-URL'), fallback))}`)
         .type('html')
         .send('') // htmx navigates on HX-Redirect before any swap — body never renders
       return null
@@ -104,13 +108,13 @@ export function adminGate(auth: Auth): RequestHandler {
   }
 }
 
-/** Path+query of the document URL a client header reports, or /admin when absent/malformed. */
-function docPath(currentUrl: string | undefined): string {
+/** Path+query of the document URL a client header reports, or `fallback` when absent/malformed. */
+function docPath(currentUrl: string | undefined, fallback = '/admin'): string {
   try {
     const u = new URL(currentUrl ?? '')
     return u.pathname + u.search
   } catch {
-    return '/admin' // header absent or malformed — the panel home is the safe default
+    return fallback // header absent or malformed — resume on the requesting surface
   }
 }
 

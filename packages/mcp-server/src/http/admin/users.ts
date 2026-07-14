@@ -13,9 +13,16 @@ function fmtCreated(v: Date | string | undefined): string {
   return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10)
 }
 
-/** The `_user_row` template's data bag. `self` drives the "(you)" marker + hides self-Ban/Delete. */
+/**
+ * The `_user_row` template's data bag. `self` drives the "(you)" marker + hides
+ * self-Ban/Delete; `roleAdmin` selects the role dropdown the SAME way the rest of
+ * the codebase reads roles (a comma/space list containing "admin"), so a
+ * multi-role user like "admin,user" shows the right option instead of defaulting
+ * to the first — which would misrepresent the server truth and invite an
+ * accidental demotion.
+ */
 function rowData(user: AdminUser | UserRow, actorId: string): Record<string, unknown> {
-  return { user, self: user.id === actorId, created: fmtCreated(user.createdAt) }
+  return { user, self: user.id === actorId, created: fmtCreated(user.createdAt), roleAdmin: hasAdminRole(user.role) }
 }
 
 function actorId(res: Response): string {
@@ -78,13 +85,19 @@ export async function usersPage(req: Request, res: Response, deps: AdminDeps): P
 
 /** POST /admin/users — create (admin session authorizes; role defaults to 'user'). */
 export async function createUser(req: Request, res: Response, deps: AdminDeps): Promise<void> {
-  // Validate presence explicitly: `String(undefined)` would coerce a missing field
-  // to the literal "undefined" and create a bogus user (or surface as a 500 from
-  // the admin error middleware). Mirror toggleGrant's 400 + flash-toast contract.
+  // Validate explicitly: `String(undefined)` would coerce a missing field to the
+  // literal "undefined" and create a bogus user. Enforce the 8-char minimum here
+  // too (the form's minlength + set-password's server check), else a short
+  // password falls through to better-auth and surfaces as a 500 from the error
+  // middleware instead of a clean 400 toast.
   const email = req.body.email
   const password = req.body.password
-  if (typeof email !== 'string' || email === '' || typeof password !== 'string' || password === '') {
-    flash(res, 400, 'Missing email or password.')
+  if (typeof email !== 'string' || email === '') {
+    flash(res, 400, 'Email is required.')
+    return
+  }
+  if (typeof password !== 'string' || password.length < 8) {
+    flash(res, 400, 'Password must be at least 8 characters.')
     return
   }
   const { user } = await deps.auth.api.createUser({

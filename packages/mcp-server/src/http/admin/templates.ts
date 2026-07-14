@@ -110,8 +110,8 @@ export const TEMPLATES: Record<string, string> = {
 <td class="mono"><%= it.user.email %><% if (it.self) { %> <span class="you">you</span><% } %></td>
 <td><%= it.user.name %></td>
 <td><select hx-post="/admin/users/<%= it.user.id %>/role" hx-target="#user-<%= it.user.id %>" hx-swap="outerHTML" name="role" aria-label="Role for <%= it.user.email %>">
-<option value="user" <%= (it.user.role || 'user')==='user' ? 'selected' : '' %>>user</option>
-<option value="admin" <%= it.user.role==='admin' ? 'selected' : '' %>>admin</option>
+<option value="user" <%= it.roleAdmin ? '' : 'selected' %>>user</option>
+<option value="admin" <%= it.roleAdmin ? 'selected' : '' %>>admin</option>
 </select></td>
 <td><% if (it.user.banned) { %><span class="badge banned">banned</span><% } else { %><span class="badge ok static">active</span><% } %></td>
 <td class="mono"><%= it.created %></td>
