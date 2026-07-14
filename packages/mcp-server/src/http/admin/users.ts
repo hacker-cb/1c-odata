@@ -2,7 +2,7 @@
 import { fromNodeHeaders } from 'better-auth/node'
 import type { Request, Response } from 'express'
 import type { AdminDeps } from './router.js'
-import { page, partial } from './views.js'
+import { flash, page, partial } from './views.js'
 
 /** GET /admin/users — list + create form. */
 export async function usersPage(req: Request, res: Response, deps: AdminDeps): Promise<void> {
@@ -17,11 +17,11 @@ export async function usersPage(req: Request, res: Response, deps: AdminDeps): P
 export async function createUser(req: Request, res: Response, deps: AdminDeps): Promise<void> {
   // Validate presence explicitly: `String(undefined)` would coerce a missing field
   // to the literal "undefined" and create a bogus user (or surface as a 500 from
-  // the admin error middleware). Mirror toggleGrant's 400 + HTML-fragment contract.
+  // the admin error middleware). Mirror toggleGrant's 400 + flash-toast contract.
   const email = req.body.email
   const password = req.body.password
   if (typeof email !== 'string' || email === '' || typeof password !== 'string' || password === '') {
-    res.status(400).type('html').send('<p class="err">Missing email or password.</p>')
+    flash(res, 400, 'Missing email or password.')
     return
   }
   const { user } = await deps.auth.api.createUser({

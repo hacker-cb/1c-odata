@@ -155,6 +155,31 @@ describe('admin base CRUD', () => {
     expect(d.sharedPool.refresh).not.toHaveBeenCalled()
   })
 
+  it('a CREATE with an existing name is rejected — no silent overwrite', async () => {
+    vi.mocked(verifyConnectivity).mockResolvedValue()
+    const d = deps(handle, keyring)
+    await d.baseRepo.upsert('trade', { baseUrl: 'http://old/odata', login: 'old', serverTimezone: 'Europe/Moscow' })
+    const req = {
+      body: {
+        name: 'trade',
+        baseUrl: 'http://new/odata',
+        login: 'new',
+        password: 'p',
+        serverTimezone: 'Europe/Moscow',
+      },
+      params: {},
+    } as unknown as Request
+    const r = res()
+    await createBase(d)(req, r as unknown as Response)
+    expect(r.body).toContain('already exists')
+    // the existing descriptor is untouched — createBase must never upsert over it
+    const stored = await d.baseRepo.get('trade')
+    expect(stored?.baseUrl).toBe('http://old/odata')
+    expect(stored?.login).toBe('old')
+    expect(verifyConnectivity).not.toHaveBeenCalled()
+    expect(d.sharedPool.refresh).not.toHaveBeenCalled()
+  })
+
   it('rejects a blank / non-IANA server timezone before any persistence', async () => {
     vi.mocked(verifyConnectivity).mockResolvedValue()
     const d = deps(handle, keyring)

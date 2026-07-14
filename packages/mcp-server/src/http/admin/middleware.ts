@@ -23,9 +23,20 @@ export function adminGate(auth: Auth): RequestHandler {
   return async (req, res, next) => {
     const result = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) })
     if (!result) {
-      // Browsers get redirected to sign-in; programmatic (htmx) callers see 401.
+      // Browsers get redirected to sign-in. htmx callers can't follow a 302 (the
+      // fetch would transparently follow it and swap the sign-in PAGE into the
+      // fragment target) — send `HX-Redirect` instead, which htmx honors with a
+      // full browser navigation regardless of the 401 status. `next` is the
+      // DOCUMENT url (HX-Current-URL), not the fragment url — resuming on
+      // e.g. /admin/health/table would render a bare <tr> dump. The sign-in page
+      // re-validates `next` as same-origin, so the client header can't smuggle an
+      // open redirect; we still reduce it to path+query here.
       if ((req.get('HX-Request') ?? '') === 'true') {
-        res.status(401).type('html').send('<p>Session expired — reload.</p>')
+        res
+          .status(401)
+          .setHeader('HX-Redirect', `/sign-in?next=${encodeURIComponent(docPath(req.get('HX-Current-URL')))}`)
+          .type('html')
+          .send('<p>Session expired — redirecting to sign-in.</p>')
         return
       }
       res.redirect(`/sign-in?next=${encodeURIComponent(req.originalUrl)}`)
@@ -39,6 +50,19 @@ export function adminGate(auth: Auth): RequestHandler {
     }
     next()
   }
+}
+
+/** Path+query of the document URL a client header reports, or /admin when absent/malformed. */
+function docPath(currentUrl: string | undefined): string {
+  if (currentUrl !== undefined && currentUrl !== '') {
+    try {
+      const u = new URL(currentUrl)
+      return u.pathname + u.search
+    } catch {
+      /* malformed header — fall through to the default */
+    }
+  }
+  return '/admin'
 }
 
 /** Methods that never change server state — exempt from the CSRF origin check. */

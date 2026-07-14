@@ -6,6 +6,12 @@
  * for request data. Cyrillic labels live safely in this UTF-8 `.ts`. */
 
 export const TEMPLATES: Record<string, string> = {
+  // ---- Flash toast ----
+  // OOB fragment targeting the app shell's fixed `#flash` region. Error responses
+  // send ONLY this (with `HX-Reswap: none`), so the failure surfaces as a toast
+  // while the request's own swap target stays untouched. `kind` ∈ err | ok.
+  _flash: `<div id="flash" hx-swap-oob="innerHTML"><p class="flash-msg <%= it.kind %>"><%= it.message %></p></div>`,
+
   // ---- Dashboard ----
   dashboard: `<h1>Dashboard</h1>
 <p class="meta"><%= it.serverInfo %></p>

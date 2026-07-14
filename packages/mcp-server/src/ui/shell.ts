@@ -100,6 +100,15 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 .err{color:var(--dg);font-size:12.5px}
 .ok{color:var(--ok);font-size:12.5px}
 
+/* ── flash toasts (fixed OOB target #flash in the app shell; error fragments land
+   here instead of the request's swap target, so a failure is always visible) ── */
+#flash{position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:50;display:flex;flex-direction:column;gap:8px;pointer-events:none;width:max-content;max-width:min(92vw,480px)}
+#flash .flash-msg{margin:0;padding:10px 14px;border-radius:var(--radius);font-size:13px;box-shadow:var(--shadow);border:1px solid;animation:flash-out .35s ease 6s forwards}
+#flash .flash-msg.err{background:var(--dg-bg);border-color:color-mix(in srgb,var(--dg) 30%,transparent)}
+#flash .flash-msg.ok{background:var(--ok-bg);border-color:color-mix(in srgb,var(--ok) 30%,transparent)}
+@keyframes flash-out{to{opacity:0;visibility:hidden}}
+@media (prefers-reduced-motion:reduce){#flash .flash-msg{animation:none}}
+
 /* ── status badges (class == health status: ok / auth_failed / unreachable) ── */
 .badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11.5px;font-weight:500;padding:3px 9px;border-radius:20px}
 .badge::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
@@ -129,6 +138,16 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 `
 
 const HTMX_SRC = '/admin/assets/htmx.min.js'
+
+/**
+ * htmx 2.x by default does NOT swap 4xx/5xx responses — every error fragment the
+ * admin handlers render (400 validation, 401 session-expired, 500 from the error
+ * middleware) would vanish silently. Override `responseHandling` so error bodies
+ * ARE processed; error responses then carry `HX-Reswap: none` + an OOB `#flash`
+ * fragment (see views.flash), so only the toast updates — the request's own swap
+ * target is left untouched (an empty-body outerHTML swap would delete it).
+ */
+const HTMX_CONFIG = `<meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"[45]..","swap":true,"error":true}]}'>`
 
 /** Escape the few characters that could break out of an HTML text/attribute context. */
 export function esc(s: string): string {
@@ -170,9 +189,10 @@ export function appShell(opts: AppShellOptions): string {
   const links = NAV.map(
     (n) => `<a class="link${n.key === opts.active ? ' on' : ''}" href="${n.href}">${n.label}</a>`,
   ).join('')
-  return `${head(opts.title, `\n<script src="${HTMX_SRC}"></script>`)}
+  return `${head(opts.title, `\n${HTMX_CONFIG}\n<script src="${HTMX_SRC}"></script>`)}
 <body><div class="app">
 <nav class="nav"><a class="brand" href="/admin">${BRAND}</a>${links}</nav>
+<div id="flash" aria-live="polite"></div>
 <main class="content" id="main">${opts.body}</main>
 </div></body></html>`
 }

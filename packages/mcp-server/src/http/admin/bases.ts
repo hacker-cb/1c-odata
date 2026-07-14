@@ -99,6 +99,14 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
     return
   }
 
+  // A CREATE must never silently overwrite an existing base: upsert() would
+  // replace its URL/login/secret and the swap would append a DUPLICATE row (same
+  // DOM id) to the table. Only the explicit edit path may update in place.
+  if (editName === undefined && (await deps.baseRepo.get(name)) !== undefined) {
+    reform(res, req.body, `Base "${name}" already exists — use Edit on its row instead.`)
+    return
+  }
+
   // serverTimezone is REQUIRED with no default (CLAUDE.md): a wrong/blank zone
   // silently shifts DateTime parsing. Reject a blank or non-IANA value before any
   // persistence, mirroring the connection-name gate above.
