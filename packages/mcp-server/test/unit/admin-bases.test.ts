@@ -187,6 +187,29 @@ describe('admin base CRUD', () => {
     expect(d.sharedPool.refresh).not.toHaveBeenCalled()
   })
 
+  it('a tampered `edit` field in a create POST cannot flip the error re-render into edit mode', async () => {
+    vi.mocked(verifyConnectivity).mockResolvedValue()
+    const d = deps(handle, keyring)
+    await d.baseRepo.upsert('trade', { baseUrl: 'http://old/odata', login: 'old', serverTimezone: 'Europe/Moscow' })
+    const req = {
+      // `edit` is attacker/stale-form-supplied body data — the mode must come from the route.
+      body: {
+        name: 'trade',
+        edit: '1',
+        baseUrl: 'http://new/odata',
+        login: 'n',
+        password: 'p',
+        serverTimezone: 'Europe/Moscow',
+      },
+      params: {},
+    } as unknown as Request
+    const r = res()
+    await createBase(d)(req, r as unknown as Response)
+    expect(r.body).toContain('already exists')
+    expect(r.body).toContain('hx-post="/admin/bases"')
+    expect(r.body).not.toContain('hx-put')
+  })
+
   it('BaseRepo.create is insert-only: the uniqueness race loser writes nothing', async () => {
     // The atomic primitive behind the no-silent-overwrite invariant: the handler's
     // pre-check is advisory (two concurrent creates both pass it); the transaction

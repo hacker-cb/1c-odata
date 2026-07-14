@@ -126,6 +126,18 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
   router.post('/users', wrap(createUser, deps))
   router.post('/users/:id/role', wrap(setUserRole, deps))
 
+  // Terminal 404 for unmatched /admin/* paths (behind the gate): without it,
+  // Express's default "Cannot GET …" page would be the response body — and with
+  // 4xx swapping enabled, an htmx caller (e.g. a poll left running across a
+  // deploy that renamed a fragment route) would swap that page into its target.
+  router.use((req, res) => {
+    if (isHtmx(req)) {
+      flash(res, 404, 'Not found — reload the page.')
+      return
+    }
+    res.status(404).type('html').send('<h1>404 — Not found</h1>')
+  })
+
   // Error middleware (4-arg): logs and surfaces the failure — as a flash toast
   // for htmx callers (a bare 500 body would not be swapped and the failure would
   // be invisible), a plain fragment otherwise. Placed LAST so it catches every

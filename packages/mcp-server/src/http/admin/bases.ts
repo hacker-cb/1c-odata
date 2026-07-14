@@ -44,7 +44,11 @@ function reform(res: Response, body: Record<string, unknown>, error: string, edi
   const { password: _pw, ...safe } = body
   partial(res, '_base_form_oob', {
     ...safe,
-    ...(editName !== undefined ? { name: editName, edit: true } : {}),
+    // The mode flag is derived from the ROUTE, never from the body: `...safe`
+    // would otherwise let a tampered `edit` field in a create POST flip the
+    // re-render into an hx-put edit form aimed at the existing base.
+    edit: editName !== undefined,
+    ...(editName !== undefined ? { name: editName } : {}),
     error,
   })
 }

@@ -275,6 +275,17 @@ describe('admin panel over HTTP', () => {
       expect(res.headers.get('hx-reswap')).toBe('none')
       expect(await res.text()).toContain('hx-swap-oob')
     })
+
+    it("an unmatched /admin path 404s via the flash contract for htmx (never Express's default page)", async () => {
+      session.value = { user: { role: 'admin' }, session: {} }
+      const htmx = await fetch(`${origin}/admin/no/such/route`, { headers: { 'HX-Request': 'true' } })
+      expect(htmx.status).toBe(404)
+      expect(htmx.headers.get('hx-reswap')).toBe('none')
+      expect(await htmx.text()).toContain('hx-swap-oob')
+      const page = await fetch(`${origin}/admin/no/such/route`)
+      expect(page.status).toBe(404)
+      expect(await page.text()).toContain('404')
+    })
   })
 
   describe('error middleware', () => {
