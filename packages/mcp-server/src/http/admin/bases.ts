@@ -200,14 +200,19 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
 
   // A secret necessarily exists here: create (and edit-with-password) just stored
   // one, and the edit-with-blank path only passed the verify gate by successfully
-  // loading the stored secret above — no extra query needed.
-  const hasSecret = true
+  // loading the stored secret above — no extra query needed. health is 'ok': we
+  // only reach persistence after verifyConnectivity resolved, and we just seeded it.
+  const base = { name, baseUrl, login, serverTimezone, label, hasSecret: true, health: 'ok' }
+  // On success the form closes (OOB) and a toast shows, for BOTH new and edit.
+  const chrome = render('_close_base_form') + render('_flash', { kind: 'ok', message: `Base "${name}" saved.` })
   if (editName !== undefined) {
-    // htmx PUT swaps the row by id via an OOB fragment (hx-swap=none on the form).
-    res.type('html').send(renderOob(name, { name, baseUrl, login, serverTimezone, hasSecret }))
+    // Edit form submits hx-swap="none" — the row updates via an OOB fragment.
+    res.type('html').send(renderOob(name, base) + chrome)
     return
   }
-  partial(res, '_base_row', { base: { name, baseUrl, login, serverTimezone, hasSecret } })
+  // Create form appends the row (beforeend); the empty-state placeholder hides
+  // itself via CSS (:only-child) once a real row exists.
+  res.type('html').send(render('_base_row', { base }) + chrome)
 }
 
 /** Out-of-band row replacement for edits (the form target is #bases-tbody with hx-swap=none). */

@@ -106,6 +106,13 @@ describe('admin base CRUD', () => {
     expect(verifyConnectivity).toHaveBeenCalledWith(
       expect.objectContaining({ baseUrl: 'http://1c/odata', login: 'u', password: 'p@ss' }),
     )
+    // success response: the new row (health seeded ok), the form closed (OOB), and
+    // a success toast — the empty-state placeholder hides itself via CSS, no OOB.
+    expect(r.body).toContain('id="base-trade"')
+    expect(r.body).toContain('badge ok')
+    expect(r.body).toContain('id="base-form-slot" hx-swap-oob="innerHTML"></div>') // form closed
+    expect(r.body).toContain('flash-msg ok')
+    expect(r.body).not.toContain('hx-swap-oob="delete"') // no placeholder OOB juggling
   })
 
   it('does NOT persist when verify rejects', async () => {

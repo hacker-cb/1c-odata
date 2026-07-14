@@ -15,25 +15,31 @@ export const TEMPLATES: Record<string, string> = {
   // ---- Dashboard ----
   dashboard: `<h1>Dashboard</h1>
 <p class="meta"><%= it.serverInfo %></p>
-<div class="tablecard"><table><thead><tr><th>Base</th><th>Status</th><th>Last check</th><th>Error</th></tr></thead>
+<div class="tablecard"><table><thead><tr><th>Base</th><th>Status</th><th>Last check (UTC)</th><th>Error</th></tr></thead>
 <tbody id="health-tbody" hx-get="/admin/health/table" hx-trigger="load, every 10s" hx-swap="innerHTML"><%~ it._r('_health_rows', { rows: it.rows }) %></tbody></table></div>`,
 
-  _health_rows: `<% for (const h of it.rows) { %><tr>
+  _health_rows: `<% if (it.rows.length === 0) { %><tr><td colspan="4" class="empty">No bases configured yet.</td></tr><% } %><% for (const h of it.rows) { %><tr>
 <td class="mono"><%= h.baseName %></td>
 <td><span class="badge <%= h.status %>"><%= h.status.replace('_',' ') %></span></td>
 <td class="mono"><%= h.lastCheck %></td>
 <td class="err"><%= h.error || '' %></td></tr><% } %>`,
 
   // ---- Bases ----
+  // Each row bag is { base } where base carries name/baseUrl/login/serverTimezone/
+  // label/hasSecret/health (health defaults to 'unknown' when the job hasn't probed).
   bases_list: `<div class="pagehead"><h1>Bases</h1>
 <button class="btn-primary btn-sm" hx-get="/admin/bases/new" hx-target="#base-form-slot" hx-swap="innerHTML">New base</button></div>
 <div id="base-form-slot"></div>
-<div class="tablecard"><table><thead><tr><th>Name</th><th>URL</th><th>Login</th><th>TZ</th><th>Secret</th><th></th></tr></thead>
-<tbody id="bases-tbody"><% for (const b of it.bases) { %><%~ it._r('_base_row', { base: b }) %><% } %></tbody></table></div>`,
+<div class="tablecard"><table><thead><tr><th>Name</th><th>Label</th><th>URL</th><th>Login</th><th>TZ</th><th>Health</th><th>Secret</th><th></th></tr></thead>
+<tbody id="bases-tbody"><tr class="emptyrow"><td colspan="8" class="empty">No bases yet — add one with <strong>New base</strong>.</td></tr><% for (const b of it.bases) { %><%~ it._r('_base_row', { base: b }) %><% } %></tbody></table></div>`,
 
   _base_row: `<tr id="base-<%= it.base.name %>">
-<td class="mono"><%= it.base.name %></td><td class="mono"><%= it.base.baseUrl %></td><td class="mono"><%= it.base.login %></td>
-<td class="mono"><%= it.base.serverTimezone %></td><td><%= it.base.hasSecret ? '✓' : '—' %></td>
+<td class="mono"><%= it.base.name %></td>
+<td><%= it.base.label || '' %></td>
+<td class="mono"><%= it.base.baseUrl %></td><td class="mono"><%= it.base.login %></td>
+<td class="mono"><%= it.base.serverTimezone %></td>
+<td><span class="badge <%= it.base.health || 'unknown' %> static"><%= (it.base.health || 'unknown').replace('_',' ') %></span></td>
+<td><% if (it.base.hasSecret) { %><span class="ok">✓ sealed</span><% } else { %><span class="err">— none</span><% } %></td>
 <td>
 <button class="btn-sm" hx-get="/admin/bases/<%= it.base.name %>/edit" hx-target="#base-form-slot" hx-swap="innerHTML">Edit</button>
 <button class="btn-danger btn-sm" hx-delete="/admin/bases/<%= it.base.name %>" hx-target="#base-<%= it.base.name %>" hx-swap="outerHTML" hx-confirm="Delete base <%= it.base.name %>? Cascades to its secret, grants and health.">Delete</button>
@@ -43,6 +49,11 @@ export const TEMPLATES: Record<string, string> = {
   // error re-render of the CREATE form carries the typed name, and inferring the
   // mode from it would flip that re-render into an hx-put edit form — one click
   // away from overwriting the very base whose existence caused the error.
+  // The timezone is a server-rendered <select> over Intl.supportedValuesOf (injected
+  // as it.timezones by views.render) — a free-text field let a typo persist a base
+  // whose DateTime parsing is silently wrong. The current value is preselected; if a
+  // stored base somehow carries a zone the runtime's IANA db no longer lists, it is
+  // prepended so the edit form can't silently drop it.
   _base_form: `<form <% if (it.edit) { %>hx-put="/admin/bases/<%= it.name %>"<% } else { %>hx-post="/admin/bases"<% } %> hx-target="#bases-tbody" hx-swap="<%= it.edit ? 'none' : 'beforeend' %>">
 <fieldset><legend><%= it.edit ? 'Edit '+it.name : 'New base' %></legend>
 <% if (it.error) { %><p class="err"><%= it.error %></p><% } %>
@@ -50,11 +61,19 @@ export const TEMPLATES: Record<string, string> = {
 <label>Base URL <input name="baseUrl" value="<%= it.baseUrl || '' %>" required></label>
 <label>Login <input name="login" value="<%= it.login || '' %>" required></label>
 <label>Password <input name="password" type="password" placeholder="<%= it.edit ? '(unchanged)' : '' %>"></label>
-<label>Server timezone <input name="serverTimezone" value="<%= it.serverTimezone || 'Europe/Moscow' %>" required></label>
+<% const tz = it.serverTimezone || '' %>
+<label>Server timezone <select name="serverTimezone" required>
+<% if (!tz) { %><option value="" disabled selected>Select a timezone…</option><% } %>
+<% if (tz && !it.timezones.includes(tz)) { %><option value="<%= tz %>" selected><%= tz %> (stored)</option><% } %>
+<% for (const z of it.timezones) { %><option<%= z===tz ? ' selected' : '' %>><%= z %></option><% } %>
+</select></label>
 <label>Label <input name="label" value="<%= it.label || '' %>"></label>
-<button type="button" class="btn-sm" hx-post="/admin/bases/verify" hx-target="#verify-result" hx-swap="innerHTML" hx-include="closest form">Verify</button>
+<div class="formactions">
 <button type="submit" class="btn-primary btn-sm">Save</button>
+<button type="button" class="btn-sm" hx-post="/admin/bases/verify" hx-target="#verify-result" hx-swap="innerHTML" hx-include="closest form">Verify</button>
+<button type="button" class="btn-sm" hx-get="/admin/ui/close" hx-target="#base-form-slot" hx-swap="innerHTML">Cancel</button>
 <span id="verify-result"></span>
+</div>
 </fieldset></form>`,
 
   // Out-of-band re-render of the edit/new form into its stable slot, used for EVERY
@@ -65,21 +84,31 @@ export const TEMPLATES: Record<string, string> = {
   // so the create form's beforeend swap gets nothing and only the slot re-renders.
   _base_form_oob: `<div id="base-form-slot" hx-swap-oob="innerHTML"><%~ it._r('_base_form', it) %></div>`,
 
+  // OOB: empty the base form slot (used on a successful save to close the New/Edit form).
+  _close_base_form: `<div id="base-form-slot" hx-swap-oob="innerHTML"></div>`,
+
   _verify_result: `<% if (it.ok) { %><span class="ok">✓ verified</span><% } else { %><span class="err">✗ <%= it.error %></span><% } %>`,
 
   // ---- Grants ----
   grants_editor: `<h1>Grants</h1>
 <p>Toggle a base for a user, then pick read or write scope.</p>
-<div class="tablecard"><table><thead><tr><th>User</th><% for (const b of it.bases) { %><th><%= b %></th><% } %></tr></thead>
-<tbody><% for (const u of it.users) { %><tr><td class="mono"><%= u.email %></td>
+<p class="subtle">The remote MCP surface is read-only, so <code>write</code> is reserved — it is stored but grants no extra capability over HTTP today.</p>
+<% if (it.users.length === 0 || it.bases.length === 0) { %><div class="tablecard"><table><tbody><tr><td class="empty"><% if (it.bases.length === 0) { %>No bases to grant — add one under Bases.<% } else { %>No users to grant — add one under Users.<% } %></td></tr></tbody></table></div><% } else { %>
+<div class="tablecard"><table><thead><tr><th scope="col">User</th><% for (const b of it.bases) { %><th scope="col"><%= b %></th><% } %></tr></thead>
+<tbody><% for (const u of it.users) { %><tr><th scope="row" class="mono"><%= u.email %></th>
 <% for (const b of it.bases) { %><%~ it._r('_grant_cell', { sub: u.id, base: b, granted: it.matrix[u.id+'|'+b] !== undefined, scope: it.matrix[u.id+'|'+b] || 'read' }) %><% } %>
-</tr><% } %></tbody></table></div>`,
+</tr><% } %></tbody></table></div><% } %>`,
 
+  // Screen readers get the USER from the row's <th scope="row"> and the BASE from
+  // the column's <th scope="col">, so the cell's own aria-label needs only the
+  // action — no email round-trip, which also keeps hx-vals free of any value that
+  // could break its hand-assembled JSON (sub is a UUID, base is a restricted
+  // ASCII connection name — both JSON-safe; an email with a quote is not).
   _grant_cell: `<td id="grant-<%= it.sub %>-<%= it.base %>">
-<input type="checkbox" <%= it.granted ? 'checked' : '' %>
+<input type="checkbox" <%= it.granted ? 'checked' : '' %> aria-label="Grant access to <%= it.base %>"
  hx-post="/admin/grants/toggle" hx-target="#grant-<%= it.sub %>-<%= it.base %>" hx-swap="outerHTML"
  hx-vals='{"sub":"<%= it.sub %>","base":"<%= it.base %>","granted":"<%= it.granted ? '' : 'on' %>","scope":"<%= it.scope %>"}'>
-<select <%= it.granted ? '' : 'disabled' %>
+<select <%= it.granted ? '' : 'disabled' %> aria-label="Scope for <%= it.base %>"
  hx-post="/admin/grants/toggle" hx-target="#grant-<%= it.sub %>-<%= it.base %>" hx-swap="outerHTML"
  hx-vals='{"sub":"<%= it.sub %>","base":"<%= it.base %>","granted":"on"}' name="scope">
 <option value="read" <%= it.scope==='read' ? 'selected' : '' %>>read</option>
@@ -101,7 +130,7 @@ export const TEMPLATES: Record<string, string> = {
 <label>Role <select name="role"><option value="user">user</option><option value="admin">admin</option></select></label>
 <button type="submit" class="btn-primary btn-sm">Create user</button></fieldset></form>
 <div class="tablecard"><table><thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr></thead>
-<tbody id="users-tbody"><% for (const row of it.users) { %><%~ it._r('_user_row', row) %><% } %></tbody></table></div>`,
+<tbody id="users-tbody"><tr class="emptyrow"><td colspan="6" class="empty">No users yet — create one above.</td></tr><% for (const row of it.users) { %><%~ it._r('_user_row', row) %><% } %></tbody></table></div>`,
 
   // Self-mutation is blocked in the UI (no Ban/Delete on your own row) AND
   // server-side; the role select stays enabled everywhere — demoting yourself is

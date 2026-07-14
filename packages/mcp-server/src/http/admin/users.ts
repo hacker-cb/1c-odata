@@ -109,6 +109,8 @@ export async function createUser(req: Request, res: Response, deps: AdminDeps): 
       role: req.body.role === 'admin' ? 'admin' : 'user',
     },
   })
+  // Appended via beforeend; the empty-state placeholder hides itself via CSS
+  // (:only-child) once a real row exists, so no OOB placeholder juggling.
   partial(res, '_user_row', rowData(user, actorId(res)))
 }
 

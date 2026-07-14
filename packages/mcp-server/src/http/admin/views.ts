@@ -12,6 +12,19 @@ import { TEMPLATES } from './templates.js'
  */
 const eta = new Eta({ autoEscape: true })
 
+/**
+ * The IANA zone list for the base form's timezone <select>, computed once. A
+ * server-rendered dropdown guarantees a valid `serverTimezone` (CLAUDE.md: it is
+ * required with no default and a wrong value silently shifts DateTime parsing),
+ * replacing the free-text input where a typo persisted a broken base. `Intl.
+ * supportedValuesOf` is available on Node ≥ 22 (the package floor).
+ *
+ * `UTC` is prepended explicitly: `supportedValuesOf('timeZone')` omits it (and
+ * `Etc/UTC`) on the runtimes we target, yet `saveBase`'s `isValidTimezone` accepts
+ * it and the codebase's own configs/tests use it — so the select must offer it.
+ */
+const TIMEZONES: readonly string[] = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((z) => z !== 'UTC')]
+
 type RenderFn = (data: Record<string, unknown>) => string
 
 const compiled = new Map<string, RenderFn>()
@@ -28,9 +41,15 @@ function get(name: string): RenderFn {
   return fn
 }
 
-/** Render a named fragment to an HTML string (partials can `include` other fragments via `it._r`). */
+/**
+ * Render a named fragment to an HTML string. Every fragment receives `_r` (to
+ * include sub-fragments) and `timezones` (the base form's <select> options) —
+ * both harmless where unused, so call sites don't thread them through.
+ */
 export function render(name: string, data: Record<string, unknown> = {}): string {
-  return get(name)({ ...data, _r: render })
+  // `data` spreads FIRST so the injected `timezones`/`_r` are fixed and a caller's
+  // stray same-named field can't shadow them.
+  return get(name)({ ...data, timezones: TIMEZONES, _r: render })
 }
 
 /**

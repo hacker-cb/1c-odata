@@ -118,6 +118,54 @@ describe('admin panel over HTTP', () => {
     const html = await res.text()
     expect(html).toContain('trade')
     expect(html).toContain('http://1c/odata')
+    expect(html).toContain('badge') // health badge column
+    expect(html).toContain('rel="icon"') // inline SVG favicon in the head
+    expect(html).toContain('data:image/svg+xml')
+  })
+
+  it('the base form is a timezone <select>, not a free-text input, with a Cancel', async () => {
+    session.value = { user: { role: 'admin' }, session: {} }
+    const html = await (await fetch(`${origin}/admin/bases/new`)).text()
+    expect(html).toContain('<select name="serverTimezone"')
+    expect(html).toContain('Europe/Moscow') // an IANA option is rendered
+    expect(html).toContain('/admin/ui/close') // Cancel clears the form slot
+    expect(html).not.toContain('name="serverTimezone" value=') // no free-text field
+  })
+
+  it('the NEW base form forces an explicit timezone choice (no default pre-selected)', async () => {
+    session.value = { user: { role: 'admin' }, session: {} }
+    const html = await (await fetch(`${origin}/admin/bases/new`)).text()
+    // A disabled placeholder is selected + the select is `required`, so submit is
+    // blocked until the admin actively picks — serverTimezone has no default (CLAUDE.md).
+    expect(html).toContain('<option value="" disabled selected>Select a timezone')
+    expect(html).not.toMatch(/<option selected>Europe\/Moscow<\/option>/) // no pre-selected zone
+  })
+
+  it("the edit form preselects the base's stored timezone", async () => {
+    session.value = { user: { role: 'admin' }, session: {} }
+    const html = await (await fetch(`${origin}/admin/bases/trade/edit`)).text()
+    // trade was seeded with Europe/Moscow — its option must carry selected.
+    expect(html).toMatch(/<option selected>Europe\/Moscow<\/option>/)
+  })
+
+  it('the timezone select offers UTC (which Intl.supportedValuesOf omits)', async () => {
+    session.value = { user: { role: 'admin' }, session: {} }
+    const html = await (await fetch(`${origin}/admin/bases/new`)).text()
+    expect(html).toMatch(/<option[^>]*>UTC<\/option>/)
+  })
+
+  it('renders a CSS-controlled empty-state placeholder row (shown only when it is the sole row)', async () => {
+    session.value = { user: { role: 'admin' }, session: {} }
+    listUsers.mockResolvedValueOnce({ users: [] })
+    const usersHtml = await (await fetch(`${origin}/admin/users`)).text()
+    // Always in the DOM with class emptyrow; CSS `:not(:only-child)` hides it once
+    // a real row exists and re-shows it when the last row is deleted — no OOB.
+    expect(usersHtml).toContain('class="emptyrow"')
+    expect(usersHtml).toContain('No users yet')
+    // The bases table (seeded with one base) carries the placeholder too, hidden by CSS.
+    const basesHtml = await (await fetch(`${origin}/admin/bases`)).text()
+    expect(basesHtml).toContain('class="emptyrow"')
+    expect(basesHtml).toContain('tr.emptyrow:not(:only-child)') // the hiding rule ships in the shell CSS
   })
 
   describe('CSRF same-origin guard', () => {

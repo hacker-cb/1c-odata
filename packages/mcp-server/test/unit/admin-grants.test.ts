@@ -62,4 +62,20 @@ describe('grant editor', () => {
     )
     expect((await grantRepo.resolve('alice')).has('trade')).toBe(false)
   })
+
+  it('the swapped cell carries a base-only aria-label and JSON-safe hx-vals (no user data)', async () => {
+    const deps = { grantRepo: new GrantRepo(handle.db) } as unknown as AdminDeps
+    const r = res()
+    await toggleGrant(
+      { body: { sub: 'alice', base: 'trade', granted: 'on', scope: 'read' } } as unknown as Request,
+      r as unknown as Response,
+      deps,
+    )
+    // The user comes from the row's <th scope="row">, so the cell needs only the
+    // base — and hx-vals then carries no email, whose quote could break the
+    // hand-assembled JSON. sub (uuid) + base (restricted charset) are JSON-safe.
+    expect(r.body).toContain('aria-label="Grant access to trade"')
+    expect(r.body).not.toContain('undefined')
+    expect(r.body).not.toContain('email')
+  })
 })

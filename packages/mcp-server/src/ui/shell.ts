@@ -80,6 +80,15 @@ main form br{display:none}
 .fieldrow input{flex:1;margin-top:0}
 /* small "(you)" identity chip in the users table */
 .you{display:inline-block;margin-left:7px;padding:1px 7px;border-radius:10px;background:var(--ac-bg);color:var(--ac-tx);font-size:11px;font-weight:500}
+/* form action row (Save / Verify / Cancel + inline verify result) */
+.formactions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:4px}
+/* empty-table placeholder row: always in the DOM, shown ONLY when it's the sole
+   row (so appending the first row hides it and deleting the last row re-shows it —
+   no htmx OOB juggling, and no console error on the populated happy path). */
+tbody tr.emptyrow:not(:only-child){display:none}
+td.empty{text-align:center;color:var(--mut);padding:22px 14px}
+/* small print under a section (e.g. the grants write-scope note) */
+.subtle{color:var(--faint);font-size:12px;margin:-8px 0 16px}
 
 /* ── buttons ── */
 button{font:inherit;font-size:13.5px;font-weight:500;padding:8px 14px;border-radius:var(--radius);cursor:pointer;border:1px solid var(--bd);background:var(--s1);color:var(--tx);display:inline-flex;align-items:center;gap:7px;transition:background .12s,border-color .12s,filter .12s}
@@ -97,9 +106,12 @@ form.inline{display:inline}
 .tablecard{background:var(--s1);border:1px solid var(--bd);border-radius:var(--card-r);overflow:auto;box-shadow:var(--shadow)}
 table{border-collapse:collapse;width:100%;font-size:13px}
 thead th{text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:10px 14px;background:var(--s2);border-bottom:1px solid var(--bd);white-space:nowrap}
-tbody td{padding:10px 14px;border-bottom:1px solid var(--bd);vertical-align:middle}
-tbody tr:last-child td{border-bottom:0}
-tbody tr:hover td{background:var(--s2)}
+/* tbody th is the grants matrix's row header (scope="row") — style it like a
+   normal body cell, not a bold centered header. */
+tbody td,tbody th{padding:10px 14px;border-bottom:1px solid var(--bd);vertical-align:middle}
+tbody th{text-align:left;font-weight:400}
+tbody tr:last-child td,tbody tr:last-child th{border-bottom:0}
+tbody tr:hover td,tbody tr:hover th{background:var(--s2)}
 td select,td input{padding:4px 8px;font-size:12.5px}
 .mono{font-family:var(--mono);font-size:12.5px}
 
@@ -116,7 +128,8 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 @keyframes flash-out{to{opacity:0;visibility:hidden}}
 @media (prefers-reduced-motion:reduce){#flash .flash-msg{animation:none}}
 
-/* ── status badges (class == health status: ok / auth_failed / unreachable) ── */
+/* ── status badges (class == health status: ok / auth_failed / unreachable /
+   unknown = not probed yet; also reused for the user 'banned' state) ── */
 .badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11.5px;font-weight:500;padding:3px 9px;border-radius:20px}
 .badge::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
 .badge.ok{background:var(--ok-bg);color:var(--ok)}
@@ -124,6 +137,7 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 .badge.unreachable{background:var(--dg-bg);color:var(--dg)}
 .badge.banned{background:var(--dg-bg);color:var(--dg)}
 .badge.banned::before{animation:none}
+.badge.unknown{background:var(--s2);color:var(--mut)}
 .badge.ok::before{animation:pulse 1.8s ease-in-out infinite}
 .badge.static::before{animation:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
@@ -165,10 +179,17 @@ export function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] ?? c)
 }
 
+// Inline SVG favicon (data URI — no extra request, CSP-safe): the indigo "1c"
+// brand mark, matching the nav glyph. `#6d5cf0` is --ac's light value.
+const FAVICON = `<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#6d5cf0"/><text x="16" y="22" font-family="ui-monospace,monospace" font-size="16" font-weight="700" fill="#fff" text-anchor="middle">1c</text></svg>',
+)}">`
+
 function head(title: string, extraHead = ''): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)} — 1C OData MCP</title>${extraHead}
+<title>${esc(title)} — 1C OData MCP</title>
+${FAVICON}${extraHead}
 <style>${BASE_CSS}</style></head>`
 }
 

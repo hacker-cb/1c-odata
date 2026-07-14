@@ -102,11 +102,19 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
   router.get(
     '/bases',
     wrap(async (_req, res, d) => {
-      const bases = await d.baseRepo.list()
-      const withSecret = await Promise.all(
-        bases.map(async (b) => ({ ...b, hasSecret: await d.secretRepo.has(b.name) })),
+      const [bases, health] = await Promise.all([d.baseRepo.list(), d.healthRepo.list()])
+      const healthByName = new Map(health.map((h) => [h.baseName, h.status]))
+      const rows = await Promise.all(
+        // ONE secret existence probe per base (no plaintext read); health from the
+        // single list() above — the job seeds a row on save, so a missing entry
+        // ('unknown') means "not probed yet", not an error.
+        bases.map(async (b) => ({
+          ...b,
+          hasSecret: await d.secretRepo.has(b.name),
+          health: healthByName.get(b.name) ?? 'unknown',
+        })),
       )
-      page(res, 'bases_list', { bases: withSecret }, 'Bases', 'bases')
+      page(res, 'bases_list', { bases: rows }, 'Bases', 'bases')
     }, deps),
   )
   router.get('/bases/new', (_req, res) => partial(res, '_base_form', {}))
