@@ -34,8 +34,8 @@ export type FirstRunCheck = () => Promise<boolean>
  *     another host) is honored client-side. This blocks an open-redirect via a
  *     crafted `next`.
  *   - Direct visit (no `next`, no authorize query): we land on `/admin`, the human
- *     home. We must NOT fall back to `/oauth2/authorize` with no params — that
- *     endpoint then dumps a raw "client_id required" validation error at the user.
+ *     home. We must NOT fall back to `/api/auth/oauth2/authorize` with no params —
+ *     that endpoint then dumps a raw "client_id required" validation error at the user.
  */
 export function makeSignInPage(firstRunCheck?: FirstRunCheck) {
   return async (_req: Request, res: Response): Promise<void> => {
@@ -62,19 +62,31 @@ export function signInPage(req: Request, res: Response): void {
 const FIRST_RUN_HINT = `<p class="notice"><strong>First-run setup pending.</strong> No administrator exists yet. Open the
 one-time setup URL printed in the server logs (<code>…/setup?token=…</code>) to create the first admin.</p>`
 
-// Client-side submit handler. No request data is interpolated here — the resume
-// target is read from window.location at runtime, so a crafted query cannot inject.
-const SIGN_IN_SCRIPT = `
-function resumeTarget() {
-  const q = new URLSearchParams(window.location.search);
+/**
+ * The resume-target resolver, kept as a source STRING so the EXACT same code is
+ * both embedded in the inline sign-in script AND compiled + behavior-tested in
+ * Node (test/unit/sign-in-page.test.ts) — one source of truth, no drift. Pure:
+ * takes the URL query string (incl. any leading `?`), returns a same-origin
+ * relative path. `URLSearchParams` is a global in both the browser and Node.
+ */
+export const RESUME_TARGET_FN = `function resumeTarget(search) {
+  const q = new URLSearchParams(search);
   const next = q.get('next');
+  // Honor only a SAFE same-origin relative path (single leading '/', not the
+  // protocol-relative '//' that points at another host) — blocks open redirects.
   if (next && next[0] === '/' && next[1] !== '/') return next;
-  // Only resume the OAuth authorize flow when one is actually in progress
-  // (client_id present); a bare /sign-in visit otherwise hits /oauth2/authorize
-  // with no params and gets a raw validation error. Land on /admin instead.
-  if (q.get('client_id')) return '/api/auth/oauth2/authorize' + window.location.search;
+  // Resume the OAuth authorize flow only when one is actually in progress
+  // (client_id present); a bare /sign-in visit would otherwise hit
+  // /api/auth/oauth2/authorize with no params and get a raw validation error.
+  if (q.get('client_id')) return '/api/auth/oauth2/authorize' + search;
+  // Direct visit: the admin panel is the human home.
   return '/admin';
-}
+}`
+
+// Client-side submit handler. No request data is interpolated here — the resume
+// target is derived from window.location at runtime, so a crafted query cannot inject.
+const SIGN_IN_SCRIPT = `
+${RESUME_TARGET_FN}
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
@@ -84,7 +96,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
     credentials: 'same-origin',
     body: JSON.stringify({ email: fd.get('email'), password: fd.get('password') }),
   });
-  if (r.ok) { window.location.href = resumeTarget(); }
+  if (r.ok) { window.location.href = resumeTarget(window.location.search); }
   else { document.getElementById('err').textContent = 'Sign-in failed'; }
 });`
 

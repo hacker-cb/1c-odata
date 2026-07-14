@@ -1,41 +1,32 @@
 // test/unit/sign-in-page.test.ts
-import type { Request, Response } from 'express'
 import { describe, expect, it } from 'vitest'
-import { makeSignInPage } from '../../src/auth/pages/sign-in.js'
+import { RESUME_TARGET_FN } from '../../src/auth/pages/sign-in.js'
 
-/** Render the sign-in page (no first-run probe) to its HTML string. */
-async function render(): Promise<string> {
-  let html = ''
-  const res = {
-    status() {
-      return this
-    },
-    type() {
-      return this
-    },
-    send(body: string) {
-      html = body
-      return this
-    },
-  } as unknown as Response
-  await makeSignInPage()({} as Request, res)
-  return html
-}
+// Compile the EXACT source string shipped to the browser and exercise it in Node
+// (URLSearchParams is a global in both), so these assert real behavior — one
+// source of truth, not brittle substring matching.
+const resumeTarget = new Function(`${RESUME_TARGET_FN}\nreturn resumeTarget;`)() as (search: string) => string
 
-describe('sign-in page resume target', () => {
-  it('resumes /oauth2/authorize only when an authorize request is in progress (client_id present)', async () => {
-    const html = await render()
-    expect(html).toContain("q.get('client_id')")
-    expect(html).toContain("'/api/auth/oauth2/authorize' + window.location.search")
+describe('resumeTarget (sign-in resume resolver)', () => {
+  it('resumes the OAuth authorize flow verbatim when a client_id is present', () => {
+    expect(resumeTarget('?client_id=abc&scope=mcp:read')).toBe(
+      '/api/auth/oauth2/authorize?client_id=abc&scope=mcp:read',
+    )
   })
 
-  it('lands a bare sign-in (no next, no client_id) on /admin, not the param-less authorize endpoint', async () => {
-    const html = await render()
-    expect(html).toContain("return '/admin'")
+  it('lands a bare sign-in (no next, no client_id) on /admin, not the param-less authorize endpoint', () => {
+    expect(resumeTarget('')).toBe('/admin')
   })
 
-  it('keeps the open-redirect guard on next (single leading slash, not protocol-relative //)', async () => {
-    const html = await render()
-    expect(html).toContain("next[0] === '/' && next[1] !== '/'")
+  it('honors a safe same-origin next path', () => {
+    expect(resumeTarget('?next=/admin/bases')).toBe('/admin/bases')
+  })
+
+  it('rejects a protocol-relative next (open-redirect guard) and falls through to /admin', () => {
+    expect(resumeTarget('?next=//evil.example.com')).toBe('/admin')
+  })
+
+  it('prefers a safe next over the authorize resume', () => {
+    expect(resumeTarget('?next=/admin/users&client_id=abc')).toBe('/admin/users')
   })
 })
