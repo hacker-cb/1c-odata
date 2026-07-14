@@ -65,6 +65,8 @@ export interface AdminApi {
   listUsers: (...args: any[]) => Promise<{ users: AdminUser[] }>
   // biome-ignore lint/suspicious/noExplicitAny: see listUsers.
   createUser: (...args: any[]) => Promise<{ user: AdminUser }>
+  // biome-ignore lint/suspicious/noExplicitAny: see listUsers. Updates email/name of any user (POST /admin/update-user).
+  adminUpdateUser: (...args: any[]) => Promise<unknown>
   // biome-ignore lint/suspicious/noExplicitAny: see listUsers.
   setRole: (...args: any[]) => Promise<{ user: AdminUser }>
   // biome-ignore lint/suspicious/noExplicitAny: see listUsers.

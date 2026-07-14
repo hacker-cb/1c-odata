@@ -143,6 +143,54 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @media (prefers-reduced-motion:reduce){.badge.ok::before{animation:none}}
 
+/* ── required-field marker (the input keeps its required attr for AT; the * is visual) ── */
+.req{color:var(--dg);margin-left:1px;font-weight:600}
+label .req{font-size:12.5px}
+.formhint{color:var(--faint);font-size:11.5px;margin:2px 0 14px}
+
+/* ── long single-token values (URL/email/login) wrap inside their cell instead of
+   forcing the whole table wider than its card (which would scroll horizontally) ── */
+tbody td,tbody th{overflow-wrap:anywhere}
+.longcell{max-width:34ch}
+
+/* ── htmx loading affordance: the button that fired an in-flight request dims and
+   stops taking clicks until htmx settles the swap (no double-submit, visible work) ── */
+button.htmx-request{opacity:.55;pointer-events:none}
+
+/* ── drawer: a native <dialog> pinned to the right edge, full height. showModal()
+   gives us aria-modal, an inert backdrop and focus containment for free. All forms
+   (base/user edit, set-password) render into #drawer-body; admin.js opens the drawer
+   when that body has content and closes it when emptied (see admin-js-asset.ts). ── */
+dialog{color:var(--tx)}
+dialog::backdrop{background:rgba(10,12,18,.5)}
+.drawer{position:fixed;inset:0 0 0 auto;margin:0;height:100dvh;max-height:100dvh;width:min(460px,100vw);
+  border:0;border-left:1px solid var(--bd);border-radius:0;background:var(--s1);
+  box-shadow:-16px 0 44px rgba(10,12,18,.24);padding:0;overflow:auto;overscroll-behavior:contain}
+.drawer-x{position:absolute;top:12px;right:12px;z-index:2;width:30px;height:30px;padding:0;justify-content:center;
+  border-radius:8px;font-size:19px;line-height:1;color:var(--mut);background:transparent;border-color:transparent}
+.drawer-x:hover{background:var(--s2);color:var(--tx)}
+#drawer-body{padding:22px 22px 28px}
+#drawer-body:empty{display:none}
+/* the panel IS the form surface, so forms drop their card chrome inside the drawer */
+.drawer fieldset{border:0;box-shadow:none;background:transparent;margin:0;padding:0}
+.drawer legend{font-size:16px;margin:0 0 16px;padding-right:34px}
+/* slide-in / fade — progressive: degrades to instant show/hide where
+   allow-discrete / @starting-style aren't supported (still fully functional) */
+@media (prefers-reduced-motion:no-preference){
+  .drawer{translate:100% 0;transition:translate .22s ease,overlay .22s ease allow-discrete,display .22s ease allow-discrete}
+  .drawer[open]{translate:0 0}
+  @starting-style{.drawer[open]{translate:100% 0}}
+  dialog::backdrop{transition:opacity .22s ease,overlay .22s ease allow-discrete,display .22s ease allow-discrete}
+  dialog:not([open])::backdrop{opacity:0}
+  @starting-style{dialog[open]::backdrop{opacity:0}}
+}
+/* confirm modal: centered card that replaces the browser's native confirm() for
+   destructive actions (hx-confirm), so it matches the design language */
+.modal{margin:auto;border:1px solid var(--bd);border-radius:var(--card-r);background:var(--s1);
+  box-shadow:var(--shadow);padding:0;max-width:min(420px,92vw)}
+.confirm-card{padding:20px 22px}
+.confirm-card p{margin:0 0 18px;font-size:14px;color:var(--tx)}
+
 /* ── pre-auth surfaces: centered card, no nav ── */
 .authwrap{min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:56px 20px;
   background:radial-gradient(120% 70% at 50% -10%,color-mix(in srgb,var(--ac) 9%,var(--bg)),var(--bg) 62%)}
@@ -244,6 +292,8 @@ export function appShell(opts: AppShellOptions): string {
 <nav class="nav"><a class="brand" href="/admin">${BRAND}</a>${links}${account}</nav>
 <div id="flash" aria-live="polite"></div>
 <main class="content" id="main">${opts.body}</main>
+<dialog id="drawer" class="drawer" aria-label="Editor"><button type="button" class="btn-sm drawer-x" data-dialog-close="#drawer" aria-label="Close">×</button><div id="drawer-body"></div></dialog>
+<dialog id="confirm" class="modal" aria-labelledby="confirm-msg"><div class="confirm-card"><p id="confirm-msg"></p><div class="btn-row"><button type="button" class="btn-sm" data-dialog-close="#confirm">Cancel</button><button type="button" class="btn-primary btn-sm" id="confirm-ok">Confirm</button></div></div></dialog>
 </div></body></html>`
 }
 
