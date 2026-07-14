@@ -210,8 +210,9 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
     res.type('html').send(renderOob(name, base) + chrome)
     return
   }
-  // Create form appends the row (beforeend) and clears the empty-state placeholder.
-  res.type('html').send(render('_base_row', { base }) + render('_clear_empty', { emptyId: 'bases-empty' }) + chrome)
+  // Create form appends the row (beforeend); the empty-state placeholder hides
+  // itself via CSS (:only-child) once a real row exists.
+  res.type('html').send(render('_base_row', { base }) + chrome)
 }
 
 /** Out-of-band row replacement for edits (the form target is #bases-tbody with hx-swap=none). */

@@ -82,7 +82,10 @@ main form br{display:none}
 .you{display:inline-block;margin-left:7px;padding:1px 7px;border-radius:10px;background:var(--ac-bg);color:var(--ac-tx);font-size:11px;font-weight:500}
 /* form action row (Save / Verify / Cancel + inline verify result) */
 .formactions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:4px}
-/* empty-table placeholder cell */
+/* empty-table placeholder row: always in the DOM, shown ONLY when it's the sole
+   row (so appending the first row hides it and deleting the last row re-shows it —
+   no htmx OOB juggling, and no console error on the populated happy path). */
+tbody tr.emptyrow:not(:only-child){display:none}
 td.empty{text-align:center;color:var(--mut);padding:22px 14px}
 /* small print under a section (e.g. the grants write-scope note) */
 .subtle{color:var(--faint);font-size:12px;margin:-8px 0 16px}

@@ -12,11 +12,6 @@ export const TEMPLATES: Record<string, string> = {
   // while the request's own swap target stays untouched. `kind` ∈ err | ok.
   _flash: `<div id="flash" hx-swap-oob="innerHTML"><p class="flash-msg <%= it.kind %>"><%= it.message %></p></div>`,
 
-  // Deletes the empty-state placeholder row (by id) when the FIRST real row is
-  // appended via beforeend. A no-op OOB when the placeholder isn't present, so the
-  // create handlers can always tack it on. `it.emptyId` ∈ users-empty | bases-empty.
-  _clear_empty: `<tr id="<%= it.emptyId %>" hx-swap-oob="delete"></tr>`,
-
   // ---- Dashboard ----
   dashboard: `<h1>Dashboard</h1>
 <p class="meta"><%= it.serverInfo %></p>
@@ -36,7 +31,7 @@ export const TEMPLATES: Record<string, string> = {
 <button class="btn-primary btn-sm" hx-get="/admin/bases/new" hx-target="#base-form-slot" hx-swap="innerHTML">New base</button></div>
 <div id="base-form-slot"></div>
 <div class="tablecard"><table><thead><tr><th>Name</th><th>Label</th><th>URL</th><th>Login</th><th>TZ</th><th>Health</th><th>Secret</th><th></th></tr></thead>
-<tbody id="bases-tbody"><% if (it.bases.length === 0) { %><tr id="bases-empty"><td colspan="8" class="empty">No bases yet — add one with <strong>New base</strong>.</td></tr><% } %><% for (const b of it.bases) { %><%~ it._r('_base_row', { base: b }) %><% } %></tbody></table></div>`,
+<tbody id="bases-tbody"><tr class="emptyrow"><td colspan="8" class="empty">No bases yet — add one with <strong>New base</strong>.</td></tr><% for (const b of it.bases) { %><%~ it._r('_base_row', { base: b }) %><% } %></tbody></table></div>`,
 
   _base_row: `<tr id="base-<%= it.base.name %>">
 <td class="mono"><%= it.base.name %></td>
@@ -103,13 +98,17 @@ export const TEMPLATES: Record<string, string> = {
 <% for (const b of it.bases) { %><%~ it._r('_grant_cell', { sub: u.id, email: u.email, base: b, granted: it.matrix[u.id+'|'+b] !== undefined, scope: it.matrix[u.id+'|'+b] || 'read' }) %><% } %>
 </tr><% } %></tbody></table></div><% } %>`,
 
+  // `email` is carried in hx-vals so it round-trips on a toggle: toggleGrant
+  // re-renders this cell from the POST body, and without it the aria-labels would
+  // read "…to undefined" after the first interaction. It is display-only (the
+  // grant itself keys on sub+base) and Eta-escaped, so echoing it back is safe.
   _grant_cell: `<td id="grant-<%= it.sub %>-<%= it.base %>">
 <input type="checkbox" <%= it.granted ? 'checked' : '' %> aria-label="Grant <%= it.base %> to <%= it.email %>"
  hx-post="/admin/grants/toggle" hx-target="#grant-<%= it.sub %>-<%= it.base %>" hx-swap="outerHTML"
- hx-vals='{"sub":"<%= it.sub %>","base":"<%= it.base %>","granted":"<%= it.granted ? '' : 'on' %>","scope":"<%= it.scope %>"}'>
+ hx-vals='{"sub":"<%= it.sub %>","base":"<%= it.base %>","email":"<%= it.email %>","granted":"<%= it.granted ? '' : 'on' %>","scope":"<%= it.scope %>"}'>
 <select <%= it.granted ? '' : 'disabled' %> aria-label="Scope of <%= it.base %> for <%= it.email %>"
  hx-post="/admin/grants/toggle" hx-target="#grant-<%= it.sub %>-<%= it.base %>" hx-swap="outerHTML"
- hx-vals='{"sub":"<%= it.sub %>","base":"<%= it.base %>","granted":"on"}' name="scope">
+ hx-vals='{"sub":"<%= it.sub %>","base":"<%= it.base %>","email":"<%= it.email %>","granted":"on"}' name="scope">
 <option value="read" <%= it.scope==='read' ? 'selected' : '' %>>read</option>
 <option value="write" <%= it.scope==='write' ? 'selected' : '' %>>write</option>
 </select></td>`,
@@ -129,7 +128,7 @@ export const TEMPLATES: Record<string, string> = {
 <label>Role <select name="role"><option value="user">user</option><option value="admin">admin</option></select></label>
 <button type="submit" class="btn-primary btn-sm">Create user</button></fieldset></form>
 <div class="tablecard"><table><thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr></thead>
-<tbody id="users-tbody"><% if (it.users.length === 0) { %><tr id="users-empty"><td colspan="6" class="empty">No users yet — create one above.</td></tr><% } %><% for (const row of it.users) { %><%~ it._r('_user_row', row) %><% } %></tbody></table></div>`,
+<tbody id="users-tbody"><tr class="emptyrow"><td colspan="6" class="empty">No users yet — create one above.</td></tr><% for (const row of it.users) { %><%~ it._r('_user_row', row) %><% } %></tbody></table></div>`,
 
   // Self-mutation is blocked in the UI (no Ban/Delete on your own row) AND
   // server-side; the role select stays enabled everywhere — demoting yourself is

@@ -18,8 +18,12 @@ const eta = new Eta({ autoEscape: true })
  * required with no default and a wrong value silently shifts DateTime parsing),
  * replacing the free-text input where a typo persisted a broken base. `Intl.
  * supportedValuesOf` is available on Node ≥ 22 (the package floor).
+ *
+ * `UTC` is prepended explicitly: `supportedValuesOf('timeZone')` omits it (and
+ * `Etc/UTC`) on the runtimes we target, yet `saveBase`'s `isValidTimezone` accepts
+ * it and the codebase's own configs/tests use it — so the select must offer it.
  */
-const TIMEZONES: readonly string[] = Intl.supportedValuesOf('timeZone')
+const TIMEZONES: readonly string[] = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((z) => z !== 'UTC')]
 
 type RenderFn = (data: Record<string, unknown>) => string
 
@@ -71,15 +75,6 @@ export function authPage(res: Response, view: string, data: Record<string, unkno
 /** Bare fragment — htmx swaps this into a target; no layout. */
 export function partial(res: Response, view: string, data: Record<string, unknown>): void {
   res.type('html').send(render(view, data))
-}
-
-/**
- * A newly-created row appended via `beforeend`, plus an OOB that deletes the
- * table's empty-state placeholder (`#<emptyId>`) if it's still there. The OOB is a
- * no-op once the placeholder is gone, so create handlers can always send it.
- */
-export function createdRow(res: Response, view: string, data: Record<string, unknown>, emptyId: string): void {
-  res.type('html').send(render(view, data) + render('_clear_empty', { emptyId }))
 }
 
 /**

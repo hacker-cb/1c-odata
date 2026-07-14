@@ -62,4 +62,18 @@ describe('grant editor', () => {
     )
     expect((await grantRepo.resolve('alice')).has('trade')).toBe(false)
   })
+
+  it('keeps the aria-label email in the swapped cell (round-trips through hx-vals)', async () => {
+    const deps = { grantRepo: new GrantRepo(handle.db) } as unknown as AdminDeps
+    const r = res()
+    await toggleGrant(
+      { body: { sub: 'alice', base: 'trade', email: 'a@x', granted: 'on', scope: 'read' } } as unknown as Request,
+      r as unknown as Response,
+      deps,
+    )
+    // Without threading email through the toggle body, the re-rendered aria-label
+    // would read "Grant trade to undefined".
+    expect(r.body).toContain('aria-label="Grant trade to a@x"')
+    expect(r.body).not.toContain('undefined')
+  })
 })
