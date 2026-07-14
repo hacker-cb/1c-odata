@@ -56,8 +56,14 @@ export function adminGate(auth: Auth): RequestHandler {
       res.redirect(`/sign-in?next=${encodeURIComponent(req.originalUrl)}`)
       return
     }
-    const role = (result.user as { role?: string | null }).role ?? 'user'
+    const sessionUser = result.user as { id?: string; email?: string; role?: string | null }
+    const role = sessionUser.role ?? 'user'
     const isAdmin = role.split(/[,\s]+/).some((r) => r === 'admin')
+    // Handlers need to know WHO is acting (self-mutation guards, the "(you)"
+    // marker) and the shell needs the identity for the nav's account chip —
+    // stash both so neither re-reads the session.
+    res.locals.actorId = sessionUser.id ?? ''
+    res.locals.navUser = { email: sessionUser.email ?? '', admin: isAdmin }
     if (!isAdmin) {
       // htmx callers get the flash contract — a bare <h1> would be swapped into
       // the request's own target (e.g. the health poll's <tbody>) now that the

@@ -168,6 +168,52 @@ describe('admin panel over HTTP', () => {
     })
   })
 
+  describe('user management surface', () => {
+    it('serves the panel helper script (generator/copy) before the gate', async () => {
+      session.value = null // /account pages for plain users load it too
+      const res = await fetch(`${origin}/admin/assets/admin.js`)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toContain('javascript')
+      const body = await res.text()
+      expect(body).toContain('data-gen-password')
+      expect(body).toContain('getRandomValues')
+    })
+
+    it('renders rows with status, created date, self marker and row actions', async () => {
+      session.value = { user: { id: 'a1', email: 'admin@x', role: 'admin' }, session: {} }
+      listUsers.mockResolvedValueOnce({
+        users: [
+          {
+            id: 'a1',
+            email: 'admin@x',
+            name: 'Admin',
+            role: 'admin',
+            banned: false,
+            createdAt: new Date('2026-01-02T03:04:05Z'),
+          },
+          { id: 'u2', email: 'user@x', name: 'U', role: 'user', banned: true },
+        ],
+      })
+      const html = await (await fetch(`${origin}/admin/users`)).text()
+      expect(html).toContain('class="you"') // self marker on the acting admin's row
+      expect(html).toContain('badge banned')
+      expect(html).toContain('2026-01-02')
+      expect(html).toContain('/admin/users/u2/password')
+      expect(html).toContain('/admin/users/u2/unban') // banned row offers Unban
+      expect(html).not.toContain('/admin/users/a1/ban') // no self-ban/delete affordances
+      expect(html).not.toContain(`hx-delete="/admin/users/a1"`)
+      expect(html).toContain('data-gen-password="#create-user-pw"') // generator on the create form
+    })
+
+    it('the nav carries the account chip + sign-out for the signed-in admin', async () => {
+      session.value = { user: { id: 'a1', email: 'admin@x', role: 'admin' }, session: {} }
+      const html = await (await fetch(`${origin}/admin`)).text()
+      expect(html).toContain('href="/account"')
+      expect(html).toContain('admin@x')
+      expect(html).toContain('action="/account/sign-out"')
+    })
+  })
+
   describe('plugin-level authz (second layer)', () => {
     it('forwards the admin session headers to createUser so the plugin can authorize', async () => {
       session.value = { user: { role: 'admin' }, session: {} }
@@ -205,11 +251,7 @@ describe('admin panel over HTTP', () => {
       session.value = { user: { role: 'admin' }, session: {} }
       const res = await fetch(`${origin}/admin/users`, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/x-www-form-urlencoded',
-          origin: 'http://127.0.0.1',
-          'HX-Request': 'true', // the flash/toast contract under test is the htmx path
-        },
+        headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://127.0.0.1' },
         body: 'email=e@x&role=user', // password omitted
       })
       expect(res.status).toBe(400)

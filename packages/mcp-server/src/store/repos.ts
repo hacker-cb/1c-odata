@@ -151,6 +151,15 @@ export class GrantRepo {
     await this.db.delete(grants).where(and(eq(grants.sub, sub), eq(grants.baseName, baseName)))
   }
 
+  /**
+   * Drop every grant of one user — the cleanup companion of user deletion. The
+   * grants table has no FK into better-auth's `user` table (the plugin owns that
+   * schema), so removeUser would otherwise leave orphaned grant rows behind.
+   */
+  async revokeAll(sub: string): Promise<void> {
+    await this.db.delete(grants).where(eq(grants.sub, sub))
+  }
+
   /** All (sub, scope) pairs granted on one base. For the admin grant matrix. */
   async listByBase(baseName: string): Promise<{ sub: string; scope: GrantScope }[]> {
     return this.db.select({ sub: grants.sub, scope: grants.scope }).from(grants).where(eq(grants.baseName, baseName))
@@ -249,4 +258,22 @@ export class SetupTokenRepo {
 export async function countAdmins(db: AuthDb): Promise<number> {
   const rows = await db.select({ role: user.role }).from(user).where(like(user.role, '%admin%'))
   return rows.filter((r) => (r.role ?? '').split(/[,\s]+/).some((x) => x === 'admin')).length
+}
+
+/**
+ * Minimal read of one better-auth user row, for the admin panel's mutation
+ * guards (last-admin / self checks) — the admin() plugin exposes no get-by-id
+ * endpoint and a listUsers round-trip would be both heavier and racier.
+ */
+export async function getUserById(
+  db: AuthDb,
+  id: string,
+): Promise<{ id: string; email: string; role: string | null } | undefined> {
+  const [row] = await db.select({ id: user.id, email: user.email, role: user.role }).from(user).where(eq(user.id, id))
+  return row
+}
+
+/** Same role parsing as adminGate/countAdmins: a comma/space-separated list containing "admin". */
+export function hasAdminRole(role: string | null | undefined): boolean {
+  return (role ?? '').split(/[,\s]+/).some((r) => r === 'admin')
 }

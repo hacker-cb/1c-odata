@@ -1,7 +1,7 @@
 // src/http/admin/views.ts
 import { Eta } from 'eta'
 import type { Response } from 'express'
-import { type AppSection, appShell, authShell } from '../../ui/shell.js'
+import { type AppSection, appShell, authShell, type NavUser } from '../../ui/shell.js'
 import { TEMPLATES } from './templates.js'
 
 /**
@@ -33,7 +33,12 @@ export function render(name: string, data: Record<string, unknown> = {}): string
   return get(name)({ ...data, _r: render })
 }
 
-/** Full admin page: fragment wrapped in the app shell (top-bar nav). `active` highlights the current section. */
+/**
+ * Full admin page: fragment wrapped in the app shell (top-bar nav). `active`
+ * highlights the current section. The signed-in identity for the nav's account
+ * chip is read from `res.locals.navUser`, where the session gate stashed it —
+ * call sites don't re-plumb it.
+ */
 export function page(
   res: Response,
   view: string,
@@ -41,7 +46,8 @@ export function page(
   title: string,
   active?: AppSection,
 ): void {
-  res.type('html').send(appShell({ title, active, body: render(view, data) }))
+  const user = (res.locals as { navUser?: NavUser }).navUser
+  res.type('html').send(appShell({ title, active, body: render(view, data), ...(user !== undefined ? { user } : {}) }))
 }
 
 /** Pre-auth page (e.g. the setup wizard): fragment wrapped in the centered-card shell — no nav. */
