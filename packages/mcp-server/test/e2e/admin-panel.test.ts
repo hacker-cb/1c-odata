@@ -205,7 +205,11 @@ describe('admin panel over HTTP', () => {
       session.value = { user: { role: 'admin' }, session: {} }
       const res = await fetch(`${origin}/admin/users`, {
         method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://127.0.0.1' },
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          origin: 'http://127.0.0.1',
+          'HX-Request': 'true', // the flash/toast contract under test is the htmx path
+        },
         body: 'email=e@x&role=user', // password omitted
       })
       expect(res.status).toBe(400)
