@@ -58,7 +58,11 @@ h1,h2,h3{letter-spacing:-.01em;color:var(--tx)}
 
 /* ── card (fieldset) ── */
 fieldset{border:1px solid var(--bd);background:var(--s1);border-radius:var(--card-r);margin:0 0 18px;padding:16px 18px;box-shadow:var(--shadow)}
-legend{font-weight:600;font-size:14px;padding:0 4px}
+/* Float the legend to a full-width block title INSIDE the card. A bare <legend>
+   straddles the top border, which collides with the rounded corner + shadow and
+   reads as "detached". float+100% takes it out of that border-piercing mode and
+   clears the fields below it. */
+legend{float:left;width:100%;padding:0;margin:0 0 14px;font-weight:600;font-size:14px}
 
 /* ── forms ── */
 label{display:block}
