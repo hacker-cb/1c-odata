@@ -1,7 +1,7 @@
 // src/http/admin/views.ts
 import { Eta } from 'eta'
 import type { Response } from 'express'
-import { type AppSection, appShell, authShell } from '../../ui/shell.js'
+import { type AppSection, appShell, authShell, type NavUser } from '../../ui/shell.js'
 import { TEMPLATES } from './templates.js'
 
 /**
@@ -33,7 +33,12 @@ export function render(name: string, data: Record<string, unknown> = {}): string
   return get(name)({ ...data, _r: render })
 }
 
-/** Full admin page: fragment wrapped in the app shell (top-bar nav). `active` highlights the current section. */
+/**
+ * Full admin page: fragment wrapped in the app shell (top-bar nav). `active`
+ * highlights the current section. The signed-in identity for the nav's account
+ * chip is read from `res.locals.navUser`, where the session gate stashed it —
+ * call sites don't re-plumb it.
+ */
 export function page(
   res: Response,
   view: string,
@@ -41,7 +46,8 @@ export function page(
   title: string,
   active?: AppSection,
 ): void {
-  res.type('html').send(appShell({ title, active, body: render(view, data) }))
+  const user = (res.locals as { navUser?: NavUser }).navUser
+  res.type('html').send(appShell({ title, active, body: render(view, data), ...(user !== undefined ? { user } : {}) }))
 }
 
 /** Pre-auth page (e.g. the setup wizard): fragment wrapped in the centered-card shell — no nav. */
@@ -63,4 +69,16 @@ export function partial(res: Response, view: string, data: Record<string, unknow
  */
 export function flash(res: Response, status: number, message: string, kind: 'err' | 'ok' = 'err'): void {
   res.status(status).setHeader('HX-Reswap', 'none').type('html').send(render('_flash', { kind, message }))
+}
+
+/**
+ * Success response for a mutation whose target should swap to EMPTY (a set-password
+ * form closing, a deleted row disappearing): the body is ONLY the OOB `#flash`
+ * toast, so htmx strips the OOB node and the request's own swap (`innerHTML` /
+ * `outerHTML`) receives '' — the form/row is removed AND the toast shows. Unlike
+ * {@link flash} this sends NO `HX-Reswap: none` (200; the swap-to-empty is intended)
+ * and always renders the `ok` kind.
+ */
+export function okFlashOob(res: Response, message: string): void {
+  res.type('html').send(render('_flash', { kind: 'ok', message }))
 }

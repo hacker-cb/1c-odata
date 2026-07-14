@@ -126,7 +126,7 @@ describe('admin panel over HTTP', () => {
       const res = await fetch(`${origin}/admin/users`, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'https://evil.example.com' },
-        body: 'email=e@x&password=p&role=user',
+        body: 'email=e@x&password=valid-pass-1&role=user',
       })
       expect(res.status).toBe(403)
       expect(createUserApi).not.toHaveBeenCalled()
@@ -137,7 +137,7 @@ describe('admin panel over HTTP', () => {
       const res = await fetch(`${origin}/admin/users`, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: 'email=e@x&password=p&role=user',
+        body: 'email=e@x&password=valid-pass-1&role=user',
       })
       expect(res.status).toBe(403)
     })
@@ -147,7 +147,7 @@ describe('admin panel over HTTP', () => {
       const res = await fetch(`${origin}/admin/users`, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://127.0.0.1' },
-        body: 'email=e@x&password=p&role=user',
+        body: 'email=e@x&password=valid-pass-1&role=user',
       })
       expect(res.status).toBe(200)
       expect(createUserApi).toHaveBeenCalledTimes(1)
@@ -155,7 +155,7 @@ describe('admin panel over HTTP', () => {
   })
 
   describe('required-field validation', () => {
-    it('a same-origin POST with a missing field is a 400, createUser not called', async () => {
+    it('a same-origin POST with a missing password is a 400, createUser not called', async () => {
       session.value = { user: { role: 'admin' }, session: {} }
       const res = await fetch(`${origin}/admin/users`, {
         method: 'POST',
@@ -163,8 +163,78 @@ describe('admin panel over HTTP', () => {
         body: 'email=e@x&role=user', // password omitted → must not coerce to "undefined"
       })
       expect(res.status).toBe(400)
-      expect(await res.text()).toContain('Missing email or password')
+      expect(await res.text()).toContain('Password must be at least 8 characters')
       expect(createUserApi).not.toHaveBeenCalled()
+    })
+
+    it('a too-short password is a clean 400 (not a 500 from better-auth)', async () => {
+      session.value = { user: { role: 'admin' }, session: {} }
+      const res = await fetch(`${origin}/admin/users`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://127.0.0.1' },
+        body: 'email=e@x&password=short&role=user', // 5 chars < 8
+      })
+      expect(res.status).toBe(400)
+      expect(await res.text()).toContain('at least 8 characters')
+      expect(createUserApi).not.toHaveBeenCalled()
+    })
+  })
+
+  it('a multi-role "admin,user" user shows the admin option selected, not the first', async () => {
+    session.value = { user: { id: 'a1', email: 'admin@x', role: 'admin' }, session: {} }
+    listUsers.mockResolvedValueOnce({
+      users: [{ id: 'm1', email: 'multi@x', name: 'M', role: 'admin,user', banned: false }],
+    })
+    const html = await (await fetch(`${origin}/admin/users`)).text()
+    // The admin <option> must carry `selected` — a bare `role==='admin'` check would
+    // miss "admin,user" and default the dropdown to `user`, misrepresenting the row.
+    expect(html).toMatch(/<option value="admin" selected>/)
+    expect(html).not.toMatch(/<option value="user" selected>/)
+  })
+
+  describe('user management surface', () => {
+    it('serves the panel helper script (generator/copy) before the gate', async () => {
+      session.value = null // /account pages for plain users load it too
+      const res = await fetch(`${origin}/admin/assets/admin.js`)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toContain('javascript')
+      const body = await res.text()
+      expect(body).toContain('data-gen-password')
+      expect(body).toContain('getRandomValues')
+    })
+
+    it('renders rows with status, created date, self marker and row actions', async () => {
+      session.value = { user: { id: 'a1', email: 'admin@x', role: 'admin' }, session: {} }
+      listUsers.mockResolvedValueOnce({
+        users: [
+          {
+            id: 'a1',
+            email: 'admin@x',
+            name: 'Admin',
+            role: 'admin',
+            banned: false,
+            createdAt: new Date('2026-01-02T03:04:05Z'),
+          },
+          { id: 'u2', email: 'user@x', name: 'U', role: 'user', banned: true },
+        ],
+      })
+      const html = await (await fetch(`${origin}/admin/users`)).text()
+      expect(html).toContain('class="you"') // self marker on the acting admin's row
+      expect(html).toContain('badge banned')
+      expect(html).toContain('2026-01-02')
+      expect(html).toContain('/admin/users/u2/password')
+      expect(html).toContain('/admin/users/u2/unban') // banned row offers Unban
+      expect(html).not.toContain('/admin/users/a1/ban') // no self-ban/delete affordances
+      expect(html).not.toContain(`hx-delete="/admin/users/a1"`)
+      expect(html).toContain('data-gen-password="#create-user-pw"') // generator on the create form
+    })
+
+    it('the nav carries the account chip + sign-out for the signed-in admin', async () => {
+      session.value = { user: { id: 'a1', email: 'admin@x', role: 'admin' }, session: {} }
+      const html = await (await fetch(`${origin}/admin`)).text()
+      expect(html).toContain('href="/account"')
+      expect(html).toContain('admin@x')
+      expect(html).toContain('action="/account/sign-out"')
     })
   })
 
@@ -178,7 +248,7 @@ describe('admin panel over HTTP', () => {
           origin: 'http://127.0.0.1',
           cookie: 'sess=abc',
         },
-        body: 'email=e@x&password=p&role=admin',
+        body: 'email=e@x&password=valid-pass-1&role=admin',
       })
       expect(createUserApi).toHaveBeenCalledTimes(1)
       const arg = createUserApi.mock.calls[0]?.[0] as { headers?: unknown } | undefined
@@ -205,11 +275,7 @@ describe('admin panel over HTTP', () => {
       session.value = { user: { role: 'admin' }, session: {} }
       const res = await fetch(`${origin}/admin/users`, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/x-www-form-urlencoded',
-          origin: 'http://127.0.0.1',
-          'HX-Request': 'true', // the flash/toast contract under test is the htmx path
-        },
+        headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://127.0.0.1' },
         body: 'email=e@x&role=user', // password omitted
       })
       expect(res.status).toBe(400)
@@ -231,7 +297,7 @@ describe('admin panel over HTTP', () => {
           origin: 'http://127.0.0.1',
           'HX-Request': 'true',
         },
-        body: 'email=e@x&password=p&role=user',
+        body: 'email=e@x&password=valid-pass-1&role=user',
       })
       expect(res.status).toBe(500)
       expect(res.headers.get('hx-reswap')).toBe('none')
@@ -299,7 +365,7 @@ describe('admin panel over HTTP', () => {
       const res = await fetch(`${origin}/admin/users`, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded', origin: 'http://127.0.0.1' },
-        body: 'email=e@x&password=p&role=user',
+        body: 'email=e@x&password=valid-pass-1&role=user',
       })
       expect(res.status).toBe(500)
       const body = await res.text()

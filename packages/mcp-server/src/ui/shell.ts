@@ -46,6 +46,8 @@ h1,h2,h3{letter-spacing:-.01em;color:var(--tx)}
 .nav a.link{font-size:13.5px;color:var(--mut);text-decoration:none;padding:7px 13px;border-radius:20px;transition:background .12s,color .12s}
 .nav a.link:hover{background:var(--s2);color:var(--tx)}
 .nav a.link.on{background:var(--ac-bg);color:var(--ac-tx);font-weight:500}
+.navspacer{flex:1}
+.nav .signout{margin:0}
 .content{width:100%;max-width:64rem;margin:0 auto;padding:24px 20px 64px}
 
 /* ── typography inside a page ── */
@@ -73,6 +75,11 @@ input::placeholder{color:var(--faint)}
 input:focus,select:focus,textarea:focus,button:focus-visible,a:focus-visible{outline:none;border-color:var(--ac);box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 24%,transparent)}
 input[type=checkbox]{width:auto;display:inline-block;accent-color:var(--ac);cursor:pointer}
 main form br{display:none}
+/* input + inline buttons on one row (password fields with Generate/Copy) */
+.fieldrow{display:flex;gap:7px;margin-top:5px}
+.fieldrow input{flex:1;margin-top:0}
+/* small "(you)" identity chip in the users table */
+.you{display:inline-block;margin-left:7px;padding:1px 7px;border-radius:10px;background:var(--ac-bg);color:var(--ac-tx);font-size:11px;font-weight:500}
 
 /* ── buttons ── */
 button{font:inherit;font-size:13.5px;font-weight:500;padding:8px 14px;border-radius:var(--radius);cursor:pointer;border:1px solid var(--bd);background:var(--s1);color:var(--tx);display:inline-flex;align-items:center;gap:7px;transition:background .12s,border-color .12s,filter .12s}
@@ -115,7 +122,10 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 .badge.ok{background:var(--ok-bg);color:var(--ok)}
 .badge.auth_failed{background:var(--warn-bg);color:var(--warn)}
 .badge.unreachable{background:var(--dg-bg);color:var(--dg)}
+.badge.banned{background:var(--dg-bg);color:var(--dg)}
+.badge.banned::before{animation:none}
 .badge.ok::before{animation:pulse 1.8s ease-in-out infinite}
+.badge.static::before{animation:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 @media (prefers-reduced-motion:reduce){.badge.ok::before{animation:none}}
 
@@ -138,6 +148,7 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 `
 
 const HTMX_SRC = '/admin/assets/htmx.min.js'
+const ADMIN_JS_SRC = '/admin/assets/admin.js'
 
 /**
  * htmx 2.x by default does NOT swap 4xx/5xx responses — every error fragment the
@@ -163,7 +174,7 @@ function head(title: string, extraHead = ''): string {
 
 const BRAND = `<span class="glyph">1c</span><span class="wordmark">1c-odata<span class="dim"> · mcp</span></span>`
 
-/** The four admin sections, in nav order. */
+/** The four admin sections, in nav order (shown to admins only). */
 const NAV: { href: string; label: string; key: AppSection }[] = [
   { href: '/admin', label: 'Dashboard', key: 'dashboard' },
   { href: '/admin/bases', label: 'Bases', key: 'bases' },
@@ -171,7 +182,14 @@ const NAV: { href: string; label: string; key: AppSection }[] = [
   { href: '/admin/users', label: 'Users', key: 'users' },
 ]
 
-export type AppSection = 'dashboard' | 'bases' | 'grants' | 'users'
+export type AppSection = 'dashboard' | 'bases' | 'grants' | 'users' | 'account'
+
+/** The signed-in identity the top bar renders (email chip → /account, sign-out). */
+export interface NavUser {
+  email: string
+  /** Admin sees the full section nav; a plain user only Account. */
+  admin: boolean
+}
 
 export interface AppShellOptions {
   title: string
@@ -179,19 +197,30 @@ export interface AppShellOptions {
   body: string
   /** Highlights the current nav item. */
   active?: AppSection | undefined
+  /** Renders the right-side account chip + sign-out; absent → sections only. */
+  user?: NavUser | undefined
 }
 
 /**
- * Full admin page: top-bar nav + content. Loads htmx same-origin (admin CSP is
- * `script-src 'self'`, so no inline script here). `body` is a trusted fragment.
+ * Full admin page: top-bar nav + content. Loads htmx + the panel helpers
+ * same-origin (admin CSP is `script-src 'self'`, so no inline script here).
+ * `body` is a trusted fragment.
  */
 export function appShell(opts: AppShellOptions): string {
-  const links = NAV.map(
-    (n) => `<a class="link${n.key === opts.active ? ' on' : ''}" href="${n.href}">${n.label}</a>`,
-  ).join('')
-  return `${head(opts.title, `\n${HTMX_CONFIG}\n<script src="${HTMX_SRC}"></script>`)}
+  const sections = opts.user === undefined || opts.user.admin ? NAV : []
+  const links = sections
+    .map((n) => `<a class="link${n.key === opts.active ? ' on' : ''}" href="${n.href}">${n.label}</a>`)
+    .join('')
+  // The account chip is the ONE nav item every signed-in role gets. Sign-out is a
+  // plain same-origin POST (CSRF-checked server-side); no JS needed.
+  const account =
+    opts.user === undefined
+      ? ''
+      : `<span class="navspacer"></span><a class="link${opts.active === 'account' ? ' on' : ''}" href="/account">${esc(opts.user.email)}</a>
+<form method="post" action="/account/sign-out" class="signout"><button type="submit" class="btn-sm">Sign out</button></form>`
+  return `${head(opts.title, `\n${HTMX_CONFIG}\n<script src="${HTMX_SRC}"></script>\n<script src="${ADMIN_JS_SRC}" defer></script>`)}
 <body><div class="app">
-<nav class="nav"><a class="brand" href="/admin">${BRAND}</a>${links}</nav>
+<nav class="nav"><a class="brand" href="/admin">${BRAND}</a>${links}${account}</nav>
 <div id="flash" aria-live="polite"></div>
 <main class="content" id="main">${opts.body}</main>
 </div></body></html>`

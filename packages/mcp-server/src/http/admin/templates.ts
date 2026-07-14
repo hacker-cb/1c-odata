@@ -87,24 +87,71 @@ export const TEMPLATES: Record<string, string> = {
 </select></td>`,
 
   // ---- Users ----
+  // `it.users` is a list of row bags: { user, self, created } (see users.rowData).
   users_list: `<h1>Users</h1>
 <p>Sign-up is closed — provision users here.</p>
+<div id="user-form-slot"></div>
 <form hx-post="/admin/users" hx-target="#users-tbody" hx-swap="beforeend">
 <fieldset><legend>Create user</legend>
 <label>Email <input name="email" type="email" placeholder="name@example.com" required></label>
 <label>Name <input name="name" placeholder="Full name"></label>
-<label>Password <input name="password" type="password" placeholder="Temporary password" required></label>
+<label>Password <span class="fieldrow"><input id="create-user-pw" name="password" type="password" autocomplete="new-password" placeholder="Temporary password" minlength="8" required>
+<button type="button" class="btn-sm" data-gen-password="#create-user-pw">Generate</button>
+<button type="button" class="btn-sm" data-copy="#create-user-pw">Copy</button></span></label>
 <label>Role <select name="role"><option value="user">user</option><option value="admin">admin</option></select></label>
 <button type="submit" class="btn-primary btn-sm">Create user</button></fieldset></form>
-<div class="tablecard"><table><thead><tr><th>Email</th><th>Name</th><th>Role</th></tr></thead>
-<tbody id="users-tbody"><% for (const u of it.users) { %><%~ it._r('_user_row', { user: u }) %><% } %></tbody></table></div>`,
+<div class="tablecard"><table><thead><tr><th>Email</th><th>Name</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr></thead>
+<tbody id="users-tbody"><% for (const row of it.users) { %><%~ it._r('_user_row', row) %><% } %></tbody></table></div>`,
 
+  // Self-mutation is blocked in the UI (no Ban/Delete on your own row) AND
+  // server-side; the role select stays enabled everywhere — demoting yourself is
+  // legitimate when another admin exists (the last-admin guard is server-side).
   _user_row: `<tr id="user-<%= it.user.id %>">
-<td class="mono"><%= it.user.email %></td><td><%= it.user.name %></td>
-<td><select hx-post="/admin/users/<%= it.user.id %>/role" hx-target="#user-<%= it.user.id %>" hx-swap="outerHTML" name="role">
-<option value="user" <%= it.user.role==='user' ? 'selected' : '' %>>user</option>
-<option value="admin" <%= it.user.role==='admin' ? 'selected' : '' %>>admin</option>
-</select></td></tr>`,
+<td class="mono"><%= it.user.email %><% if (it.self) { %> <span class="you">you</span><% } %></td>
+<td><%= it.user.name %></td>
+<td><select hx-post="/admin/users/<%= it.user.id %>/role" hx-target="#user-<%= it.user.id %>" hx-swap="outerHTML" name="role" aria-label="Role for <%= it.user.email %>">
+<option value="user" <%= it.roleAdmin ? '' : 'selected' %>>user</option>
+<option value="admin" <%= it.roleAdmin ? 'selected' : '' %>>admin</option>
+</select></td>
+<td><% if (it.user.banned) { %><span class="badge banned">banned</span><% } else { %><span class="badge ok static">active</span><% } %></td>
+<td class="mono"><%= it.created %></td>
+<td>
+<button class="btn-sm" hx-get="/admin/users/<%= it.user.id %>/password" hx-target="#user-form-slot" hx-swap="innerHTML">Password</button>
+<% if (!it.self) { %><% if (it.user.banned) { %>
+<button class="btn-sm" hx-post="/admin/users/<%= it.user.id %>/unban" hx-target="#user-<%= it.user.id %>" hx-swap="outerHTML">Unban</button>
+<% } else { %>
+<button class="btn-sm" hx-post="/admin/users/<%= it.user.id %>/ban" hx-target="#user-<%= it.user.id %>" hx-swap="outerHTML" hx-confirm="Ban <%= it.user.email %>? Sign-in is blocked and their sessions are revoked.">Ban</button>
+<% } %>
+<button class="btn-danger btn-sm" hx-delete="/admin/users/<%= it.user.id %>" hx-target="#user-<%= it.user.id %>" hx-swap="outerHTML" hx-confirm="Delete <%= it.user.email %>? Their grants are removed. This cannot be undone.">Delete</button>
+<% } %>
+</td></tr>`,
+
+  // Rendered into #user-form-slot. Success responds with ONLY an OOB ok-flash:
+  // htmx strips the OOB node, so the slot's innerHTML swap gets '' — form closed,
+  // toast shown. minlength mirrors better-auth's default password policy.
+  _user_password_form: `<form hx-post="/admin/users/<%= it.id %>/password" hx-target="#user-form-slot" hx-swap="innerHTML">
+<fieldset><legend>Set password — <%= it.email %></legend>
+<% if (it.error) { %><p class="err"><%= it.error %></p><% } %>
+<label>New password <span class="fieldrow"><input id="pw-<%= it.id %>" name="password" type="password" autocomplete="new-password" minlength="8" required>
+<button type="button" class="btn-sm" data-gen-password="#pw-<%= it.id %>">Generate</button>
+<button type="button" class="btn-sm" data-copy="#pw-<%= it.id %>">Copy</button></span></label>
+<p class="hint">Saving revokes the user's existing sessions; hand the new password over out of band.</p>
+<button type="submit" class="btn-primary btn-sm">Save password</button>
+<button type="button" class="btn-sm" hx-get="/admin/ui/close" hx-target="#user-form-slot" hx-swap="innerHTML">Cancel</button>
+</fieldset></form>`,
+
+  // ---- Account (any signed-in role; served by the /account router) ----
+  account_page: `<h1>Account</h1>
+<p><span class="mono"><%= it.email %></span> · role <%= it.role %></p>
+<form hx-post="/account/password" hx-swap="none">
+<fieldset><legend>Change password</legend>
+<label>Current password <input name="current" type="password" autocomplete="current-password" required></label>
+<label>New password <span class="fieldrow"><input id="account-pw" name="password" type="password" autocomplete="new-password" minlength="8" required>
+<button type="button" class="btn-sm" data-gen-password="#account-pw">Generate</button>
+<button type="button" class="btn-sm" data-copy="#account-pw">Copy</button></span></label>
+<p class="hint">Changing the password signs out your other sessions (this one stays).</p>
+<button type="submit" class="btn-primary btn-sm">Change password</button>
+</fieldset></form>`,
 
   // ---- First-run setup wizard ----
   // Rendered through `authShell` (centered card, no nav) via views.authPage. The body

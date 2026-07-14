@@ -50,6 +50,8 @@ export interface AdminUser {
   email: string
   name: string
   role?: string | null
+  banned?: boolean | null
+  createdAt?: Date | string
 }
 
 /**
@@ -65,6 +67,16 @@ export interface AdminApi {
   createUser: (...args: any[]) => Promise<{ user: AdminUser }>
   // biome-ignore lint/suspicious/noExplicitAny: see listUsers.
   setRole: (...args: any[]) => Promise<{ user: AdminUser }>
+  // biome-ignore lint/suspicious/noExplicitAny: see listUsers.
+  setUserPassword: (...args: any[]) => Promise<unknown>
+  // biome-ignore lint/suspicious/noExplicitAny: see listUsers.
+  removeUser: (...args: any[]) => Promise<unknown>
+  // biome-ignore lint/suspicious/noExplicitAny: see listUsers.
+  banUser: (...args: any[]) => Promise<{ user: AdminUser }>
+  // biome-ignore lint/suspicious/noExplicitAny: see listUsers.
+  unbanUser: (...args: any[]) => Promise<{ user: AdminUser }>
+  // biome-ignore lint/suspicious/noExplicitAny: see listUsers.
+  revokeUserSessions: (...args: any[]) => Promise<unknown>
 }
 
 export type Auth = BetterAuthInstance & {

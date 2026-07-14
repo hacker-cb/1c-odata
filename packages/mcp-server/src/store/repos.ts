@@ -151,6 +151,15 @@ export class GrantRepo {
     await this.db.delete(grants).where(and(eq(grants.sub, sub), eq(grants.baseName, baseName)))
   }
 
+  /**
+   * Drop every grant of one user — the cleanup companion of user deletion. The
+   * grants table has no FK into better-auth's `user` table (the plugin owns that
+   * schema), so removeUser would otherwise leave orphaned grant rows behind.
+   */
+  async revokeAll(sub: string): Promise<void> {
+    await this.db.delete(grants).where(eq(grants.sub, sub))
+  }
+
   /** All (sub, scope) pairs granted on one base. For the admin grant matrix. */
   async listByBase(baseName: string): Promise<{ sub: string; scope: GrantScope }[]> {
     return this.db.select({ sub: grants.sub, scope: grants.scope }).from(grants).where(eq(grants.baseName, baseName))
@@ -249,4 +258,56 @@ export class SetupTokenRepo {
 export async function countAdmins(db: AuthDb): Promise<number> {
   const rows = await db.select({ role: user.role }).from(user).where(like(user.role, '%admin%'))
   return rows.filter((r) => (r.role ?? '').split(/[,\s]+/).some((x) => x === 'admin')).length
+}
+
+/**
+ * Number of admin-role users who can actually SIGN IN — i.e. not banned. This is
+ * the count the last-admin lockout guard must use: a banned admin cannot log in,
+ * so treating them as "an admin remains" would let the last usable admin be
+ * demoted/banned/deleted and lock the panel out with no recoverable session.
+ *
+ * Distinct from {@link countAdmins}, which the /setup gate uses: there, ANY admin
+ * row (banned or not) must keep first-run onboarding closed — reopening it because
+ * the sole admin got banned would be a bootstrap-hijack vector on a public server.
+ */
+export async function countActiveAdmins(db: AuthDb): Promise<number> {
+  const rows = await db.select({ role: user.role, banned: user.banned }).from(user).where(like(user.role, '%admin%'))
+  return rows.filter((r) => r.banned !== true && (r.role ?? '').split(/[,\s]+/).some((x) => x === 'admin')).length
+}
+
+/** One better-auth user row for the admin panel (guards + row re-render). */
+export interface UserRow {
+  id: string
+  email: string
+  name: string
+  role: string | null
+  banned: boolean | null
+  createdAt: Date
+}
+
+/**
+ * Read one better-auth user row, for the admin panel's mutation guards
+ * (last-admin / self checks) AND the refused-mutation row re-render — the admin()
+ * plugin exposes no get-by-id endpoint and a listUsers round-trip would be both
+ * heavier and racier. Selects every column the `_user_row` template renders so a
+ * re-render off this row shows the true name/status/created, not blanks.
+ */
+export async function getUserById(db: AuthDb, id: string): Promise<UserRow | undefined> {
+  const [row] = await db
+    .select({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      banned: user.banned,
+      createdAt: user.createdAt,
+    })
+    .from(user)
+    .where(eq(user.id, id))
+  return row
+}
+
+/** Same role parsing as adminGate/countAdmins: a comma/space-separated list containing "admin". */
+export function hasAdminRole(role: string | null | undefined): boolean {
+  return (role ?? '').split(/[,\s]+/).some((r) => r === 'admin')
 }

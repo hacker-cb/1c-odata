@@ -6,6 +6,7 @@ import type { Auth } from '../auth/better-auth.js'
 import type { CanonicalUrls } from '../auth/config.js'
 import type { Keyring } from '../store/crypto.js'
 import type { AuthDb } from '../store/db.js'
+import { createAccountRouter } from './account/router.js'
 import { createAdminRouter } from './admin/router.js'
 import { createDiscoveryRouter } from './discovery.js'
 import { createMcpRouter } from './mcp-route.js'
@@ -94,6 +95,15 @@ export function createApp(opts: CreateAppOptions): Express {
         keyring: opts.auth.keyring,
         sharedPool: opts.auth.sharedPool,
         version: opts.auth.version ?? '0.0.0',
+        publicUrl: opts.auth.urls.publicUrl,
+      }),
+    )
+    // /account: self-service (change own password) + sign-out, for EVERY
+    // signed-in role — the admin panel's non-admin sibling.
+    app.use(
+      '/account',
+      createAccountRouter({
+        auth: opts.auth.auth,
         publicUrl: opts.auth.urls.publicUrl,
       }),
     )
