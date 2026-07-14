@@ -10,7 +10,7 @@ import { createBase, deleteBase, updateBase, verifyBase } from './bases.js'
 import { dashboardPage, healthTable } from './dashboard.js'
 import { grantsPage, toggleGrant } from './grants.js'
 import { HTMX_JS } from './htmx-asset.js'
-import { adminCsp, adminCsrf, adminGate } from './middleware.js'
+import { adminCsp, adminCsrf, adminGate, isHtmx } from './middleware.js'
 import { createUser, setUserRole, usersPage } from './users.js'
 import { flash, page, partial } from './views.js'
 
@@ -103,7 +103,7 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
         flash(res, 404, `No such base "${name}" — it may have been deleted; reload the page.`)
         return
       }
-      partial(res, '_base_form', { name, ...b })
+      partial(res, '_base_form', { edit: true, name, ...b })
     }, deps),
   )
   router.post('/bases/verify', wrap(verifyBase, deps))
@@ -139,10 +139,9 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
 const adminErrorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   logger.error({ err: err instanceof Error ? err.message : String(err), path: req.originalUrl }, 'admin handler failed')
   if (res.headersSent) return // a partial response already started — nothing safe to add
-  const message = 'Internal error — the operation did not complete.'
-  if ((req.get('HX-Request') ?? '') === 'true') {
-    flash(res, 500, message)
+  if (isHtmx(req)) {
+    flash(res, 500, 'Internal error — the operation did not complete.')
     return
   }
-  res.status(500).type('html').send(`<p class="err">${message}</p>`)
+  res.status(500).type('html').send('<p class="err">Internal error — the operation did not complete.</p>')
 }

@@ -247,6 +247,27 @@ describe('admin panel over HTTP', () => {
       expect(res.headers.get('hx-redirect')).toBe(`/sign-in?next=${encodeURIComponent('/admin?tab=1')}`)
     })
 
+    it('a non-admin 403 on an htmx request follows the flash contract (no bare <h1> into the target)', async () => {
+      session.value = { user: { role: 'user' }, session: {} }
+      const res = await fetch(`${origin}/admin/health/table`, { headers: { 'HX-Request': 'true' } })
+      expect(res.status).toBe(403)
+      expect(res.headers.get('hx-reswap')).toBe('none')
+      const body = await res.text()
+      expect(body).toContain('hx-swap-oob')
+      expect(body).not.toContain('<h1>')
+    })
+
+    it('a CSRF 403 on an htmx request follows the flash contract (a rejected DELETE must not eat the row)', async () => {
+      session.value = { user: { role: 'admin' }, session: {} }
+      const res = await fetch(`${origin}/admin/bases/trade`, {
+        method: 'DELETE',
+        headers: { origin: 'https://evil.example.com', 'HX-Request': 'true' },
+      })
+      expect(res.status).toBe(403)
+      expect(res.headers.get('hx-reswap')).toBe('none')
+      expect(await res.text()).toContain('hx-swap-oob')
+    })
+
     it('an edit request for a vanished base flashes a 404 toast', async () => {
       session.value = { user: { role: 'admin' }, session: {} }
       const res = await fetch(`${origin}/admin/bases/ghost/edit`)

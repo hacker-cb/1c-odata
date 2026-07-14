@@ -35,19 +35,38 @@ export class BaseRepo {
   }
 
   async upsert(name: string, conn: StoredConnection): Promise<void> {
-    const values = {
-      name,
-      baseUrl: conn.baseUrl,
-      login: conn.login,
-      serverTimezone: conn.serverTimezone,
-      label: conn.label ?? null,
-      shape: (conn.shape ?? null) as DataShapeJson | null,
-    }
+    const values = toRow(name, conn)
     await this.db.insert(bases).values(values).onConflictDoUpdate({ target: bases.name, set: values })
+  }
+
+  /**
+   * Insert-only create: returns false (and writes nothing) when `name` already
+   * exists. The atomic ON CONFLICT DO NOTHING is what makes the admin panel's
+   * no-silent-overwrite invariant hold under real concurrency — a check-then-upsert
+   * lets two concurrent creates of the same name both pass the check, with the
+   * loser silently replacing the winner's descriptor.
+   */
+  async create(name: string, conn: StoredConnection): Promise<boolean> {
+    // `.returning()` with no column selector — the union AuthDb narrows the
+    // arg-taking overload away (same constraint as SetupTokenRepo.consume); only
+    // the inserted-row count is load-bearing anyway.
+    const inserted = await this.db.insert(bases).values(toRow(name, conn)).onConflictDoNothing().returning()
+    return inserted.length > 0
   }
 
   async delete(name: string): Promise<void> {
     await this.db.delete(bases).where(eq(bases.name, name)) // cascades to secret/grants/health
+  }
+}
+
+function toRow(name: string, conn: StoredConnection): typeof bases.$inferInsert {
+  return {
+    name,
+    baseUrl: conn.baseUrl,
+    login: conn.login,
+    serverTimezone: conn.serverTimezone,
+    label: conn.label ?? null,
+    shape: (conn.shape ?? null) as DataShapeJson | null,
   }
 }
 
