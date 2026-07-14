@@ -6,6 +6,12 @@
  * for request data. Cyrillic labels live safely in this UTF-8 `.ts`. */
 
 export const TEMPLATES: Record<string, string> = {
+  // ---- Flash toast ----
+  // OOB fragment targeting the app shell's fixed `#flash` region. Error responses
+  // send ONLY this (with `HX-Reswap: none`), so the failure surfaces as a toast
+  // while the request's own swap target stays untouched. `kind` ∈ err | ok.
+  _flash: `<div id="flash" hx-swap-oob="innerHTML"><p class="flash-msg <%= it.kind %>"><%= it.message %></p></div>`,
+
   // ---- Dashboard ----
   dashboard: `<h1>Dashboard</h1>
 <p class="meta"><%= it.serverInfo %></p>
@@ -33,13 +39,17 @@ export const TEMPLATES: Record<string, string> = {
 <button class="btn-danger btn-sm" hx-delete="/admin/bases/<%= it.base.name %>" hx-target="#base-<%= it.base.name %>" hx-swap="outerHTML" hx-confirm="Delete base <%= it.base.name %>? Cascades to its secret, grants and health.">Delete</button>
 </td></tr>`,
 
-  _base_form: `<form <% if (it.name) { %>hx-put="/admin/bases/<%= it.name %>"<% } else { %>hx-post="/admin/bases"<% } %> hx-target="#bases-tbody" hx-swap="<%= it.name ? 'none' : 'beforeend' %>">
-<fieldset><legend><%= it.name ? 'Edit '+it.name : 'New base' %></legend>
+  // Mode is keyed on the EXPLICIT `it.edit` flag, never on `it.name` being set: an
+  // error re-render of the CREATE form carries the typed name, and inferring the
+  // mode from it would flip that re-render into an hx-put edit form — one click
+  // away from overwriting the very base whose existence caused the error.
+  _base_form: `<form <% if (it.edit) { %>hx-put="/admin/bases/<%= it.name %>"<% } else { %>hx-post="/admin/bases"<% } %> hx-target="#bases-tbody" hx-swap="<%= it.edit ? 'none' : 'beforeend' %>">
+<fieldset><legend><%= it.edit ? 'Edit '+it.name : 'New base' %></legend>
 <% if (it.error) { %><p class="err"><%= it.error %></p><% } %>
-<label>Name <input name="name" value="<%= it.name || '' %>" <%= it.name ? 'readonly' : '' %> required></label>
+<label>Name <input name="name" value="<%= it.name || '' %>" <%= it.edit ? 'readonly' : '' %> required></label>
 <label>Base URL <input name="baseUrl" value="<%= it.baseUrl || '' %>" required></label>
 <label>Login <input name="login" value="<%= it.login || '' %>" required></label>
-<label>Password <input name="password" type="password" placeholder="<%= it.name ? '(unchanged)' : '' %>"></label>
+<label>Password <input name="password" type="password" placeholder="<%= it.edit ? '(unchanged)' : '' %>"></label>
 <label>Server timezone <input name="serverTimezone" value="<%= it.serverTimezone || 'Europe/Moscow' %>" required></label>
 <label>Label <input name="label" value="<%= it.label || '' %>"></label>
 <button type="button" class="btn-sm" hx-post="/admin/bases/verify" hx-target="#verify-result" hx-swap="innerHTML" hx-include="closest form">Verify</button>
@@ -47,10 +57,12 @@ export const TEMPLATES: Record<string, string> = {
 <span id="verify-result"></span>
 </fieldset></form>`,
 
-  // Out-of-band re-render of the edit/new form into its stable slot. The edit form
-  // submits with hx-swap="none" (its success path is an OOB row), so a validation
-  // /verify error returned as a plain body would be swallowed — this OOB wrapper
-  // targets #base-form-slot so the error re-renders on the form for BOTH new & edit.
+  // Out-of-band re-render of the edit/new form into its stable slot, used for EVERY
+  // form-validation error. The edit form submits with hx-swap="none" (its success
+  // path is an OOB row) and the create form targets #bases-tbody with beforeend —
+  // in both cases a plain _base_form body would land in the wrong place (swallowed,
+  // or appended INSIDE the table). htmx removes the OOB element from the fragment,
+  // so the create form's beforeend swap gets nothing and only the slot re-renders.
   _base_form_oob: `<div id="base-form-slot" hx-swap-oob="innerHTML"><%~ it._r('_base_form', it) %></div>`,
 
   _verify_result: `<% if (it.ok) { %><span class="ok">✓ verified</span><% } else { %><span class="err">✗ <%= it.error %></span><% } %>`,

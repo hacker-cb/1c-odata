@@ -3,7 +3,7 @@ import { fromNodeHeaders } from 'better-auth/node'
 import type { Request, Response } from 'express'
 import type { GrantScope } from '../../store/repos.js'
 import type { AdminDeps } from './router.js'
-import { page, partial } from './views.js'
+import { flash, page, partial } from './views.js'
 
 /** GET /admin/grants — user × base matrix. */
 export async function grantsPage(req: Request, res: Response, deps: AdminDeps): Promise<void> {
@@ -27,7 +27,7 @@ export async function toggleGrant(req: Request, res: Response, deps: AdminDeps):
   const sub = req.body.sub
   const base = req.body.base
   if (typeof sub !== 'string' || sub === '' || typeof base !== 'string' || base === '') {
-    res.status(400).type('html').send('<p class="err">Missing sub or base.</p>')
+    flash(res, 400, 'Missing sub or base.')
     return
   }
   const scope: GrantScope = req.body.scope === 'write' ? 'write' : 'read'

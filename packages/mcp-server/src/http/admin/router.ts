@@ -10,9 +10,9 @@ import { createBase, deleteBase, updateBase, verifyBase } from './bases.js'
 import { dashboardPage, healthTable } from './dashboard.js'
 import { grantsPage, toggleGrant } from './grants.js'
 import { HTMX_JS } from './htmx-asset.js'
-import { adminCsp, adminCsrf, adminGate } from './middleware.js'
+import { adminCsp, adminCsrf, adminGate, isHtmx } from './middleware.js'
 import { createUser, setUserRole, usersPage } from './users.js'
-import { page, partial } from './views.js'
+import { flash, page, partial } from './views.js'
 
 /** Everything the admin handlers close over. Built once in createAdminRouter. */
 export interface AdminDeps {
@@ -100,10 +100,10 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
       const name = String(req.params.name)
       const b = await d.baseRepo.get(name)
       if (!b) {
-        res.status(404).type('html').send('<p class="err">No such base</p>')
+        flash(res, 404, `No such base "${name}" — it may have been deleted; reload the page.`)
         return
       }
-      partial(res, '_base_form', { name, ...b })
+      partial(res, '_base_form', { edit: true, name, ...b })
     }, deps),
   )
   router.post('/bases/verify', wrap(verifyBase, deps))
@@ -126,9 +126,22 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
   router.post('/users', wrap(createUser, deps))
   router.post('/users/:id/role', wrap(setUserRole, deps))
 
-  // Error middleware (4-arg): logs and renders a 500 fragment. htmx-aware — a
-  // short body + a 500 status makes the client surface the failure instead of
-  // silently swapping nothing. Placed LAST so it catches every wrapped handler.
+  // Terminal 404 for unmatched /admin/* paths (behind the gate): without it,
+  // Express's default "Cannot GET …" page would be the response body — and with
+  // 4xx swapping enabled, an htmx caller (e.g. a poll left running across a
+  // deploy that renamed a fragment route) would swap that page into its target.
+  router.use((req, res) => {
+    if (isHtmx(req)) {
+      flash(res, 404, 'Not found — reload the page.')
+      return
+    }
+    res.status(404).type('html').send('<h1>404 — Not found</h1>')
+  })
+
+  // Error middleware (4-arg): logs and surfaces the failure — as a flash toast
+  // for htmx callers (a bare 500 body would not be swapped and the failure would
+  // be invisible), a plain fragment otherwise. Placed LAST so it catches every
+  // wrapped handler.
   router.use(adminErrorHandler)
 
   return router
@@ -138,5 +151,9 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
 const adminErrorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   logger.error({ err: err instanceof Error ? err.message : String(err), path: req.originalUrl }, 'admin handler failed')
   if (res.headersSent) return // a partial response already started — nothing safe to add
+  if (isHtmx(req)) {
+    flash(res, 500, 'Internal error — the operation did not complete.')
+    return
+  }
   res.status(500).type('html').send('<p class="err">Internal error — the operation did not complete.</p>')
 }

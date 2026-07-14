@@ -1,7 +1,19 @@
 // src/http/admin/middleware.ts
 import { fromNodeHeaders } from 'better-auth/node'
-import type { RequestHandler } from 'express'
+import type { Request, RequestHandler } from 'express'
 import type { Auth } from '../../auth/better-auth.js'
+import { flash } from './views.js'
+
+/**
+ * True when the request was issued by htmx (an AJAX fragment swap, not a full
+ * page load). The ONE definition every error path keys off: with the app shell's
+ * responseHandling override making 4xx/5xx bodies swappable, an htmx caller must
+ * receive the flash contract (OOB toast + HX-Reswap:none) or an HX-Redirect —
+ * a bare fragment would be swapped into the request's own target.
+ */
+export function isHtmx(req: Request): boolean {
+  return req.get('HX-Request') === 'true'
+}
 
 /**
  * Gate the admin panel on the better-auth browser session + `admin` role.
@@ -23,9 +35,22 @@ export function adminGate(auth: Auth): RequestHandler {
   return async (req, res, next) => {
     const result = await auth.api.getSession({ headers: fromNodeHeaders(req.headers) })
     if (!result) {
-      // Browsers get redirected to sign-in; programmatic (htmx) callers see 401.
-      if ((req.get('HX-Request') ?? '') === 'true') {
-        res.status(401).type('html').send('<p>Session expired — reload.</p>')
+      // Browsers get redirected to sign-in. htmx callers can't follow a 302 (the
+      // fetch would transparently follow it and swap the sign-in PAGE into the
+      // fragment target) — send `HX-Redirect` instead, which htmx honors with a
+      // full browser navigation regardless of the 401 status. `next` is the
+      // DOCUMENT url (HX-Current-URL), not the fragment url — resuming on
+      // e.g. /admin/health/table would render a bare <tr> dump. The sign-in page
+      // re-validates `next` as same-origin, so the client header can't smuggle an
+      // open redirect; we still reduce it to path+query here.
+      if (isHtmx(req)) {
+        // htmx honors HX-Redirect with a full navigation before any swap logic,
+        // so the body is never rendered — keep it empty.
+        res
+          .status(401)
+          .setHeader('HX-Redirect', `/sign-in?next=${encodeURIComponent(docPath(req.get('HX-Current-URL')))}`)
+          .type('html')
+          .send('')
         return
       }
       res.redirect(`/sign-in?next=${encodeURIComponent(req.originalUrl)}`)
@@ -34,10 +59,27 @@ export function adminGate(auth: Auth): RequestHandler {
     const role = (result.user as { role?: string | null }).role ?? 'user'
     const isAdmin = role.split(/[,\s]+/).some((r) => r === 'admin')
     if (!isAdmin) {
+      // htmx callers get the flash contract — a bare <h1> would be swapped into
+      // the request's own target (e.g. the health poll's <tbody>) now that the
+      // shell config makes 4xx bodies swappable.
+      if (isHtmx(req)) {
+        flash(res, 403, 'Admin role required.')
+        return
+      }
       res.status(403).type('html').send('<h1>403 — admin role required</h1>')
       return
     }
     next()
+  }
+}
+
+/** Path+query of the document URL a client header reports, or /admin when absent/malformed. */
+function docPath(currentUrl: string | undefined): string {
+  try {
+    const u = new URL(currentUrl ?? '')
+    return u.pathname + u.search
+  } catch {
+    return '/admin' // header absent or malformed — the panel home is the safe default
   }
 }
 
@@ -78,6 +120,13 @@ export function adminCsrf(publicUrl: string): RequestHandler {
       }
     }
     if (!ok) {
+      // Same flash-vs-fragment split as adminGate's 403: under the swappable-4xx
+      // config a bare <p> would replace the request's target (e.g. outerHTML-delete
+      // a row whose DELETE was in fact rejected).
+      if (isHtmx(req)) {
+        flash(res, 403, 'Cross-origin request rejected.')
+        return
+      }
       res.status(403).type('html').send('<p class="err">Cross-origin request rejected.</p>')
       return
     }

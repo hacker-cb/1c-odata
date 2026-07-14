@@ -53,3 +53,14 @@ export function authPage(res: Response, view: string, data: Record<string, unkno
 export function partial(res: Response, view: string, data: Record<string, unknown>): void {
   res.type('html').send(render(view, data))
 }
+
+/**
+ * Error (or notice) response for htmx fragment endpoints: an OOB toast into the
+ * app shell's `#flash` region. `HX-Reswap: none` suppresses the request's own
+ * target swap (OOB fragments are still processed under swap "none"), so a 4xx/5xx
+ * body can never corrupt the target — e.g. append an error <p> into a <tbody> or
+ * outerHTML-delete a row whose DELETE actually failed.
+ */
+export function flash(res: Response, status: number, message: string, kind: 'err' | 'ok' = 'err'): void {
+  res.status(status).setHeader('HX-Reswap', 'none').type('html').send(render('_flash', { kind, message }))
+}

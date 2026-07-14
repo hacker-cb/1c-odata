@@ -155,6 +155,75 @@ describe('admin base CRUD', () => {
     expect(d.sharedPool.refresh).not.toHaveBeenCalled()
   })
 
+  it('a CREATE with an existing name is rejected — no silent overwrite', async () => {
+    vi.mocked(verifyConnectivity).mockResolvedValue()
+    const d = deps(handle, keyring)
+    await d.baseRepo.upsert('trade', { baseUrl: 'http://old/odata', login: 'old', serverTimezone: 'Europe/Moscow' })
+    const req = {
+      body: {
+        name: 'trade',
+        baseUrl: 'http://new/odata',
+        login: 'new',
+        password: 'p',
+        serverTimezone: 'Europe/Moscow',
+      },
+      params: {},
+    } as unknown as Request
+    const r = res()
+    await createBase(d)(req, r as unknown as Response)
+    expect(r.body).toContain('already exists')
+    // The error re-renders into the stable form slot (OOB) and MUST stay a CREATE
+    // form: inferring edit mode from the typed name would hand the user an hx-put
+    // that overwrites the very base whose existence caused the error.
+    expect(r.body).toContain('hx-swap-oob')
+    expect(r.body).toContain('base-form-slot')
+    expect(r.body).toContain('hx-post="/admin/bases"')
+    expect(r.body).not.toContain('hx-put')
+    // the existing descriptor is untouched — createBase must never upsert over it
+    const stored = await d.baseRepo.get('trade')
+    expect(stored?.baseUrl).toBe('http://old/odata')
+    expect(stored?.login).toBe('old')
+    expect(verifyConnectivity).not.toHaveBeenCalled()
+    expect(d.sharedPool.refresh).not.toHaveBeenCalled()
+  })
+
+  it('a tampered `edit` field in a create POST cannot flip the error re-render into edit mode', async () => {
+    vi.mocked(verifyConnectivity).mockResolvedValue()
+    const d = deps(handle, keyring)
+    await d.baseRepo.upsert('trade', { baseUrl: 'http://old/odata', login: 'old', serverTimezone: 'Europe/Moscow' })
+    const req = {
+      // `edit` is attacker/stale-form-supplied body data — the mode must come from the route.
+      body: {
+        name: 'trade',
+        edit: '1',
+        baseUrl: 'http://new/odata',
+        login: 'n',
+        password: 'p',
+        serverTimezone: 'Europe/Moscow',
+      },
+      params: {},
+    } as unknown as Request
+    const r = res()
+    await createBase(d)(req, r as unknown as Response)
+    expect(r.body).toContain('already exists')
+    expect(r.body).toContain('hx-post="/admin/bases"')
+    expect(r.body).not.toContain('hx-put')
+  })
+
+  it('BaseRepo.create is insert-only: the uniqueness race loser writes nothing', async () => {
+    // The atomic primitive behind the no-silent-overwrite invariant: the handler's
+    // pre-check is advisory (two concurrent creates both pass it); the transaction
+    // relies on create() returning false instead of upserting over the winner.
+    const d = deps(handle, keyring)
+    expect(
+      await d.baseRepo.create('trade', { baseUrl: 'http://first/odata', login: 'a', serverTimezone: 'Europe/Moscow' }),
+    ).toBe(true)
+    expect(
+      await d.baseRepo.create('trade', { baseUrl: 'http://second/odata', login: 'b', serverTimezone: 'Europe/Moscow' }),
+    ).toBe(false)
+    expect((await d.baseRepo.get('trade'))?.baseUrl).toBe('http://first/odata')
+  })
+
   it('rejects a blank / non-IANA server timezone before any persistence', async () => {
     vi.mocked(verifyConnectivity).mockResolvedValue()
     const d = deps(handle, keyring)

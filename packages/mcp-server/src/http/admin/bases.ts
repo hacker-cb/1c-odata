@@ -8,6 +8,13 @@ import { BaseRepo, SecretRepo } from '../../store/repos.js'
 import type { AdminDeps } from './router.js'
 import { partial, render } from './views.js'
 
+/** Sentinel: a CREATE lost the uniqueness race inside the save transaction (rolled back). */
+class DuplicateBaseError extends Error {
+  constructor() {
+    super('base name already exists')
+  }
+}
+
 /** Coarse redaction: verifyConnectivity errors may echo a URL; keep only the class + status hint. */
 function redact(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err)
@@ -27,13 +34,23 @@ export function classifyProbe(err: unknown): { status: 'auth_failed' | 'unreacha
 
 /**
  * Re-render the form with an error. Never echoes the password back into the DOM.
- * On EDIT (`editName` set) the form submitted with hx-swap="none", so a plain
- * fragment would be swallowed — render the OOB wrapper that targets the stable
- * #base-form-slot instead, so the error is visible on both the new and edit forms.
+ * ALWAYS renders through the OOB wrapper targeting the stable #base-form-slot:
+ * neither form's own swap target can host an error re-render (the edit form
+ * submits hx-swap="none", the create form appends into #bases-tbody). The mode
+ * flag is explicit — a create error must re-render a CREATE form even though the
+ * typed `name` is present (see the _base_form template note).
  */
 function reform(res: Response, body: Record<string, unknown>, error: string, editName?: string): void {
   const { password: _pw, ...safe } = body
-  partial(res, editName !== undefined ? '_base_form_oob' : '_base_form', { ...safe, error })
+  partial(res, '_base_form_oob', {
+    ...safe,
+    // The mode flag is derived from the ROUTE, never from the body: `...safe`
+    // would otherwise let a tampered `edit` field in a create POST flip the
+    // re-render into an hx-put edit form aimed at the existing base.
+    edit: editName !== undefined,
+    ...(editName !== undefined ? { name: editName } : {}),
+    error,
+  })
 }
 
 /** A well-formed IANA zone name, checked exactly as `@1c-odata/client`'s validateConnection does. */
@@ -112,6 +129,17 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
     return
   }
 
+  // A CREATE must never silently overwrite an existing base: upsert() would
+  // replace its URL/login/secret and the swap would append a DUPLICATE row (same
+  // DOM id) to the table. This pre-check (after the free local validations, before
+  // the network probe) catches the common case with a friendly error; the
+  // transaction below re-enforces it atomically for the concurrent-create race.
+  const duplicateError = `Base "${name}" already exists — use Edit on its row instead.`
+  if (editName === undefined && (await deps.baseRepo.get(name)) !== undefined) {
+    reform(res, req.body, duplicateError)
+    return
+  }
+
   // Determine the password to verify (and possibly store). On edit with a blank
   // field, reuse the stored secret so verify runs against the exact live pair.
   let verifyPassword = password
@@ -139,23 +167,41 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
     serverTimezone,
     ...(label !== '' ? { label } : {}),
   }
-  await deps.db.transaction(async (tx) => {
-    // drizzle's transaction handle is a valid query executor for the repos' insert
-    // upserts, but its type lacks the `$client` field of the top-level `AuthDb`
-    // union, so cast through `unknown`. Ordering: base row before secret row (FK).
-    const txDb = tx as unknown as typeof deps.db
-    await new BaseRepo(txDb).upsert(name, descriptor)
-    if (password !== '') {
-      await new SecretRepo(txDb).put(name, encrypt(deps.keyring, name, password))
+  try {
+    await deps.db.transaction(async (tx) => {
+      // drizzle's transaction handle is a valid query executor for the repos' insert
+      // upserts, but its type lacks the `$client` field of the top-level `AuthDb`
+      // union, so cast through `unknown`. Ordering: base row before secret row (FK).
+      const txDb = tx as unknown as typeof deps.db
+      const baseRepo = new BaseRepo(txDb)
+      if (editName !== undefined) {
+        await baseRepo.upsert(name, descriptor)
+      } else if (!(await baseRepo.create(name, descriptor))) {
+        // Concurrent create won the race after our pre-check — roll back rather
+        // than overwrite (the atomic enforcement of the invariant above).
+        throw new DuplicateBaseError()
+      }
+      if (password !== '') {
+        await new SecretRepo(txDb).put(name, encrypt(deps.keyring, name, password))
+      }
+    })
+  } catch (err) {
+    if (err instanceof DuplicateBaseError) {
+      reform(res, req.body, duplicateError)
+      return
     }
-  })
+    throw err
+  }
   await deps.healthRepo.upsert(name, 'ok') // seed green; the job re-probes on its interval
 
   // Evict the process-global cache so the next tool call re-fetches $metadata with
   // the new URL/credentials. MUST be the SHARED pool, not a ScopedPool.
   deps.sharedPool.refresh(name)
 
-  const hasSecret = password !== '' ? true : await deps.secretRepo.has(name)
+  // A secret necessarily exists here: create (and edit-with-password) just stored
+  // one, and the edit-with-blank path only passed the verify gate by successfully
+  // loading the stored secret above — no extra query needed.
+  const hasSecret = true
   if (editName !== undefined) {
     // htmx PUT swaps the row by id via an OOB fragment (hx-swap=none on the form).
     res.type('html').send(renderOob(name, { name, baseUrl, login, serverTimezone, hasSecret }))
