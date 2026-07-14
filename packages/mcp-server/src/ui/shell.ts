@@ -106,9 +106,12 @@ form.inline{display:inline}
 .tablecard{background:var(--s1);border:1px solid var(--bd);border-radius:var(--card-r);overflow:auto;box-shadow:var(--shadow)}
 table{border-collapse:collapse;width:100%;font-size:13px}
 thead th{text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);font-weight:500;padding:10px 14px;background:var(--s2);border-bottom:1px solid var(--bd);white-space:nowrap}
-tbody td{padding:10px 14px;border-bottom:1px solid var(--bd);vertical-align:middle}
-tbody tr:last-child td{border-bottom:0}
-tbody tr:hover td{background:var(--s2)}
+/* tbody th is the grants matrix's row header (scope="row") — style it like a
+   normal body cell, not a bold centered header. */
+tbody td,tbody th{padding:10px 14px;border-bottom:1px solid var(--bd);vertical-align:middle}
+tbody th{text-align:left;font-weight:400}
+tbody tr:last-child td,tbody tr:last-child th{border-bottom:0}
+tbody tr:hover td,tbody tr:hover th{background:var(--s2)}
 td select,td input{padding:4px 8px;font-size:12.5px}
 .mono{font-family:var(--mono);font-size:12.5px}
 
@@ -125,7 +128,8 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 @keyframes flash-out{to{opacity:0;visibility:hidden}}
 @media (prefers-reduced-motion:reduce){#flash .flash-msg{animation:none}}
 
-/* ── status badges (class == health status: ok / auth_failed / unreachable) ── */
+/* ── status badges (class == health status: ok / auth_failed / unreachable /
+   unknown = not probed yet; also reused for the user 'banned' state) ── */
 .badge{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11.5px;font-weight:500;padding:3px 9px;border-radius:20px}
 .badge::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
 .badge.ok{background:var(--ok-bg);color:var(--ok)}

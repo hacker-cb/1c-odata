@@ -47,7 +47,9 @@ function get(name: string): RenderFn {
  * both harmless where unused, so call sites don't thread them through.
  */
 export function render(name: string, data: Record<string, unknown> = {}): string {
-  return get(name)({ timezones: TIMEZONES, ...data, _r: render })
+  // `data` spreads FIRST so the injected `timezones`/`_r` are fixed and a caller's
+  // stray same-named field can't shadow them.
+  return get(name)({ ...data, timezones: TIMEZONES, _r: render })
 }
 
 /**

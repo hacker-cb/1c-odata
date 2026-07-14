@@ -32,12 +32,11 @@ export async function toggleGrant(req: Request, res: Response, deps: AdminDeps):
   }
   const scope: GrantScope = req.body.scope === 'write' ? 'write' : 'read'
   const granted = req.body.granted === 'on'
-  // Display-only, carried in hx-vals so the re-rendered cell keeps its aria-label
-  // (the grant itself keys on sub+base). Escaped by Eta on render.
-  const email = typeof req.body.email === 'string' ? req.body.email : ''
 
   if (granted) await deps.grantRepo.grant(sub, base, scope)
   else await deps.grantRepo.revoke(sub, base)
 
-  partial(res, '_grant_cell', { sub, base, email, granted, scope })
+  // The cell's aria-label needs only the base (the user comes from the row's
+  // <th scope="row">), so nothing user-controlled rides in hx-vals.
+  partial(res, '_grant_cell', { sub, base, granted, scope })
 }

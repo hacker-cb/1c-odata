@@ -93,22 +93,23 @@ export const TEMPLATES: Record<string, string> = {
 <p>Toggle a base for a user, then pick read or write scope.</p>
 <p class="subtle">The remote MCP surface is read-only, so <code>write</code> is reserved — it is stored but grants no extra capability over HTTP today.</p>
 <% if (it.users.length === 0 || it.bases.length === 0) { %><div class="tablecard"><table><tbody><tr><td class="empty"><% if (it.bases.length === 0) { %>No bases to grant — add one under Bases.<% } else { %>No users to grant — add one under Users.<% } %></td></tr></tbody></table></div><% } else { %>
-<div class="tablecard"><table><thead><tr><th>User</th><% for (const b of it.bases) { %><th><%= b %></th><% } %></tr></thead>
-<tbody><% for (const u of it.users) { %><tr><td class="mono"><%= u.email %></td>
-<% for (const b of it.bases) { %><%~ it._r('_grant_cell', { sub: u.id, email: u.email, base: b, granted: it.matrix[u.id+'|'+b] !== undefined, scope: it.matrix[u.id+'|'+b] || 'read' }) %><% } %>
+<div class="tablecard"><table><thead><tr><th scope="col">User</th><% for (const b of it.bases) { %><th scope="col"><%= b %></th><% } %></tr></thead>
+<tbody><% for (const u of it.users) { %><tr><th scope="row" class="mono"><%= u.email %></th>
+<% for (const b of it.bases) { %><%~ it._r('_grant_cell', { sub: u.id, base: b, granted: it.matrix[u.id+'|'+b] !== undefined, scope: it.matrix[u.id+'|'+b] || 'read' }) %><% } %>
 </tr><% } %></tbody></table></div><% } %>`,
 
-  // `email` is carried in hx-vals so it round-trips on a toggle: toggleGrant
-  // re-renders this cell from the POST body, and without it the aria-labels would
-  // read "…to undefined" after the first interaction. It is display-only (the
-  // grant itself keys on sub+base) and Eta-escaped, so echoing it back is safe.
+  // Screen readers get the USER from the row's <th scope="row"> and the BASE from
+  // the column's <th scope="col">, so the cell's own aria-label needs only the
+  // action — no email round-trip, which also keeps hx-vals free of any value that
+  // could break its hand-assembled JSON (sub is a UUID, base is a restricted
+  // ASCII connection name — both JSON-safe; an email with a quote is not).
   _grant_cell: `<td id="grant-<%= it.sub %>-<%= it.base %>">
-<input type="checkbox" <%= it.granted ? 'checked' : '' %> aria-label="Grant <%= it.base %> to <%= it.email %>"
+<input type="checkbox" <%= it.granted ? 'checked' : '' %> aria-label="Grant access to <%= it.base %>"
  hx-post="/admin/grants/toggle" hx-target="#grant-<%= it.sub %>-<%= it.base %>" hx-swap="outerHTML"
- hx-vals='{"sub":"<%= it.sub %>","base":"<%= it.base %>","email":"<%= it.email %>","granted":"<%= it.granted ? '' : 'on' %>","scope":"<%= it.scope %>"}'>
-<select <%= it.granted ? '' : 'disabled' %> aria-label="Scope of <%= it.base %> for <%= it.email %>"
+ hx-vals='{"sub":"<%= it.sub %>","base":"<%= it.base %>","granted":"<%= it.granted ? '' : 'on' %>","scope":"<%= it.scope %>"}'>
+<select <%= it.granted ? '' : 'disabled' %> aria-label="Scope for <%= it.base %>"
  hx-post="/admin/grants/toggle" hx-target="#grant-<%= it.sub %>-<%= it.base %>" hx-swap="outerHTML"
- hx-vals='{"sub":"<%= it.sub %>","base":"<%= it.base %>","email":"<%= it.email %>","granted":"on"}' name="scope">
+ hx-vals='{"sub":"<%= it.sub %>","base":"<%= it.base %>","granted":"on"}' name="scope">
 <option value="read" <%= it.scope==='read' ? 'selected' : '' %>>read</option>
 <option value="write" <%= it.scope==='write' ? 'selected' : '' %>>write</option>
 </select></td>`,
