@@ -20,6 +20,7 @@ import {
   SecretStore,
   toolResult,
   verifyConnectivity,
+  verifyReachability,
 } from '@1c-odata/mcp/internal'
 import { describe, expect, it } from 'vitest'
 
@@ -42,6 +43,7 @@ describe('@1c-odata/mcp/internal surface', () => {
       SecretStore,
       passwordEnvVar,
       verifyConnectivity,
+      verifyReachability,
       // Additionally relied on by @1c-odata/mcp-server (tenancy + CLI):
       resolveDataDir,
       assertValidConnectionName,

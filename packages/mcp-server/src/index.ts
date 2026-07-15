@@ -19,6 +19,27 @@ import { type GrantMap, resolveGrants } from './tenancy/grants.js'
 import { ScopedPool } from './tenancy/scoped-pool.js'
 import { readPackageVersion } from './version.js'
 
+/**
+ * Health interval + light-probe timeout overrides from process-wide env (positive
+ * ints only; anything else falls back to health-job.ts defaults of 60s / 5s). Kept
+ * out of the boot function to hold its cognitive complexity down.
+ */
+function healthJobEnvConfig(): { intervalMs?: number; probeTimeoutMs?: number } {
+  const posInt = (v: string | undefined): number | undefined => {
+    const n = v !== undefined ? Number(v) : Number.NaN
+    return Number.isInteger(n) && n > 0 ? n : undefined
+  }
+  const intervalMs = posInt(process.env.ONEC_MCP_HEALTH_INTERVAL_MS)
+  const probeTimeoutMs = posInt(process.env.ONEC_MCP_HEALTH_TIMEOUT_MS)
+  // The interval floor + the `timeout < interval` invariant are enforced in
+  // startHealthJob (the single source of truth, defensive for any caller), so here
+  // we only pass the parsed positive-int overrides through.
+  return {
+    ...(intervalMs !== undefined ? { intervalMs } : {}),
+    ...(probeTimeoutMs !== undefined ? { probeTimeoutMs } : {}),
+  }
+}
+
 /** Auth configuration for the HTTP server. Absent → the no-auth Slice-1 server. */
 export interface AuthServerOptions {
   /** External public origin (https). Derives `iss`, `aud`, PRM, discovery. */
@@ -170,7 +191,9 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
     // Health job: only on the tenancy path (needs db-derived repos + keyring). Built
     // BEFORE the app so its guarded `runOnce` can back the admin "check now" button —
     // a manual check then shares the job's single in-flight guard (never stacks on
-    // the timer/startup sweep).
+    // the timer/startup sweep). Interval + light-probe timeout are tunable via
+    // process-wide env (like the rest of the network config); defaults (60s / 5s)
+    // live in health-job.ts.
     let healthJob: HealthJob | undefined
     if (keyring !== undefined) {
       healthJob = startHealthJob({
@@ -179,6 +202,7 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
         healthRepo: new HealthRepo(db),
         keyring,
         log: { error: (o, m) => process.stderr.write(`${m ?? 'health'}: ${JSON.stringify(o)}\n`) },
+        ...healthJobEnvConfig(),
       })
     }
 

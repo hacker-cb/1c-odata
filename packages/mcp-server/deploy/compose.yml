@@ -39,6 +39,10 @@ services:
       # Auth store; migrations run automatically on boot. POSTGRES_PASSWORD is
       # interpolated raw, so it must be URL-safe — generate it with `openssl rand -hex`.
       DATABASE_URL: postgres://mcp:${POSTGRES_PASSWORD}@db:5432/mcp
+      # Optional connection-health tuning. Empty → defaults (60s interval, 5s probe
+      # timeout); the timeout is clamped below the interval. See .env.example.
+      ONEC_MCP_HEALTH_INTERVAL_MS: ${ONEC_MCP_HEALTH_INTERVAL_MS:-}
+      ONEC_MCP_HEALTH_TIMEOUT_MS: ${ONEC_MCP_HEALTH_TIMEOUT_MS:-}
     # No published ports — only Caddy reaches it on the internal compose network.
     expose:
       - "3000"

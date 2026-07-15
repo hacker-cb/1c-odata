@@ -40,11 +40,17 @@ export interface AdminDeps {
   grantRepo: GrantRepo
   healthRepo: HealthRepo
   /**
-   * Run one on-demand health sweep (the "check now" button), re-entrancy-guarded:
-   * concurrent presses / tabs coalesce onto a single in-flight sweep instead of
-   * stacking probe load. The periodic job guards its own timer path separately.
+   * Launch an on-demand health sweep (the "check now" button) and mark it active:
+   * re-entrancy-guarded (concurrent presses coalesce onto one in-flight sweep), and
+   * the panel shows per-base "checking" spinners until it settles.
    */
-  onDemandHealthCheck: () => Promise<void>
+  startOnDemandCheck: () => void
+  /**
+   * The active on-demand sweep's start time, or null when none is in flight — so
+   * per-base spinners appear ONLY for a button-initiated check, NOT on every 60s
+   * background sweep. A base whose `lastCheck` predates it is still being probed.
+   */
+  checkingSince: () => Date | null
 }
 
 export interface CreateAdminRouterOptions {
@@ -82,10 +88,9 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
   const grantRepo = new GrantRepo(opts.db)
   const healthRepo = new HealthRepo(opts.db)
 
-  // Prefer the health job's guarded runOnce (shares its in-flight guard with the
-  // periodic timer sweep). Absent that (tests), build a router-scoped guarded
-  // fallback so the on-demand "check now" sweep still can't stack on itself — the
-  // client-side button dim only stops double-submit within one tab.
+  // The "check now" button runs a guarded sweep: the health job's runOnce when
+  // provided (so a manual check SHARES the job's single in-flight guard and never
+  // stacks on the timer sweep), else a router-scoped guarded fallback (tests).
   let sweepInflight: Promise<void> | null = null
   const fallbackHealthCheck = (): Promise<void> => {
     if (sweepInflight) return sweepInflight
@@ -98,6 +103,35 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
   }
   const onDemandHealthCheck = opts.onDemandHealthCheck ?? fallbackHealthCheck
 
+  // Per-base spinners show ONLY while a button-initiated check is in flight — NOT on
+  // every 60s background sweep (which would otherwise flash the whole table each
+  // minute). `startOnDemandCheck` stamps `onDemandStartedAt` and marks the check
+  // active until its sweep settles; `checkingSince` gates the per-base derivation on
+  // that (a base whose lastCheck predates the stamp is still being probed). The stamp
+  // is router-local, so progress never depends on a separately-wired sweep clock.
+  let onDemandActive = false
+  let onDemandStartedAt: Date | null = null
+  const startOnDemandCheck = (): void => {
+    // Already checking → coalesce onto the in-flight sweep WITHOUT re-stamping: a
+    // second press must not move `onDemandStartedAt` forward, or bases already
+    // probed earlier in this sweep would flip back to "checking".
+    if (onDemandActive) return
+    onDemandActive = true
+    onDemandStartedAt = new Date()
+    // Promise.resolve().then(...) so a (contract-violating) SYNCHRONOUS throw from
+    // onDemandHealthCheck still becomes a rejected promise — .finally then always
+    // runs and clears the flag, never leaving the UI stuck "checking". The trailing
+    // .catch swallows any rejection (runHealthSweep logs its own failures) so this
+    // fire-and-forget can never surface as an unhandledRejection.
+    void Promise.resolve()
+      .then(onDemandHealthCheck)
+      .finally(() => {
+        onDemandActive = false
+      })
+      .catch(() => {})
+  }
+  const checkingSince = (): Date | null => (onDemandActive ? onDemandStartedAt : null)
+
   const deps: AdminDeps = {
     auth: opts.auth,
     db: opts.db,
@@ -108,7 +142,8 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
     secretRepo,
     grantRepo,
     healthRepo,
-    onDemandHealthCheck,
+    startOnDemandCheck,
+    checkingSince,
   }
 
   const router = express.Router()
