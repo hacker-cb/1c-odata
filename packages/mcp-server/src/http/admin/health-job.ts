@@ -14,66 +14,74 @@ export interface HealthJob {
   stop(): Promise<void>
 }
 
-export interface HealthJobDeps {
+export interface HealthSweepDeps {
   baseRepo: BaseRepo
   secretRepo: SecretRepo
   healthRepo: HealthRepo
   keyring: Keyring
-  intervalMs?: number
   probeTimeoutMs?: number
   log?: { error(obj: unknown, msg?: string): void }
 }
 
+export interface HealthJobDeps extends HealthSweepDeps {
+  intervalMs?: number
+}
+
 /**
- * Single-instance periodic health job: every intervalMs, probe each base with
- * verifyConnectivity and record ok/auth_failed/unreachable in HealthRepo. No
- * cross-replica coordination — one writer assumed (pglite is single-process;
+ * Probe every base once with verifyConnectivity and record ok / auth_failed /
+ * unreachable in HealthRepo. The shared body of the periodic job (below) AND the
+ * admin panel's on-demand "check now" button. Never throws — a sweep-level failure
+ * is logged, not propagated (so the timer / the request handler can't crash).
+ */
+export async function runHealthSweep(deps: HealthSweepDeps): Promise<void> {
+  const probeTimeoutMs = deps.probeTimeoutMs ?? 10_000
+  try {
+    const bases = await deps.baseRepo.list()
+    for (const base of bases) {
+      const sealed = await deps.secretRepo.get(base.name)
+      if (sealed === null) {
+        await deps.healthRepo.upsert(base.name, 'auth_failed', 'No password assigned')
+        continue
+      }
+      let password: string
+      try {
+        password = decrypt(deps.keyring, base.name, sealed)
+      } catch {
+        await deps.healthRepo.upsert(base.name, 'auth_failed', 'Secret decryption failed')
+        continue
+      }
+      try {
+        await verifyConnectivity({ baseUrl: base.baseUrl, login: base.login, password, timeout: probeTimeoutMs })
+        await deps.healthRepo.upsert(base.name, 'ok')
+      } catch (err) {
+        const { status, message } = classifyProbe(err)
+        await deps.healthRepo.upsert(base.name, status, message)
+      }
+    }
+  } catch (err) {
+    // Log a serializable shape: a bare Error stringifies to `{}` under the JSON
+    // sink, dropping the message. Never let a sweep throw out of the caller.
+    deps.log?.error({ err: err instanceof Error ? err.message : String(err) }, 'health sweep failed')
+  }
+}
+
+/**
+ * Single-instance periodic health job: every intervalMs, run {@link runHealthSweep}.
+ * No cross-replica coordination — one writer assumed (pglite is single-process;
  * multi-replica pg would multiply probe load — tracked separately).
  */
 export function startHealthJob(deps: HealthJobDeps): HealthJob {
   const intervalMs = deps.intervalMs ?? 60_000
-  const probeTimeoutMs = deps.probeTimeoutMs ?? 10_000
   let running = false
   // The currently-running sweep (or a settled promise). `stop()` awaits it so an
   // in-flight probe/write can't race the DB handle closing at shutdown.
   let inflight: Promise<void> = Promise.resolve()
 
-  async function runSweep(): Promise<void> {
-    try {
-      const bases = await deps.baseRepo.list()
-      for (const base of bases) {
-        const sealed = await deps.secretRepo.get(base.name)
-        if (sealed === null) {
-          await deps.healthRepo.upsert(base.name, 'auth_failed', 'No password assigned')
-          continue
-        }
-        let password: string
-        try {
-          password = decrypt(deps.keyring, base.name, sealed)
-        } catch {
-          await deps.healthRepo.upsert(base.name, 'auth_failed', 'Secret decryption failed')
-          continue
-        }
-        try {
-          await verifyConnectivity({ baseUrl: base.baseUrl, login: base.login, password, timeout: probeTimeoutMs })
-          await deps.healthRepo.upsert(base.name, 'ok')
-        } catch (err) {
-          const { status, message } = classifyProbe(err)
-          await deps.healthRepo.upsert(base.name, status, message)
-        }
-      }
-    } catch (err) {
-      // Log a serializable shape: a bare Error stringifies to `{}` under the JSON
-      // sink, dropping the message. Never let a sweep throw out of the timer.
-      deps.log?.error({ err: err instanceof Error ? err.message : String(err) }, 'health sweep failed')
-    }
-  }
-
   /** Start a sweep, or return the in-flight one — a slow sweep must not stack (re-entrancy guard). */
   function sweep(): Promise<void> {
     if (running) return inflight
     running = true
-    inflight = runSweep().finally(() => {
+    inflight = runHealthSweep(deps).finally(() => {
       running = false
     })
     return inflight

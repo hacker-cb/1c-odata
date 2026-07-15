@@ -30,7 +30,11 @@ export const TEMPLATES: Record<string, string> = {
   _drawer_close: `<div id="drawer-body" hx-swap-oob="innerHTML"></div>`,
 
   // ---- Dashboard ----
-  dashboard: `<h1>Dashboard</h1>
+  // The health table auto-refreshes every 10s (re-reading the DB the background job
+  // writes). "Check connections now" forces an on-demand re-probe of every base and
+  // swaps the fresh rows into the same #health-tbody; the button dims while in flight.
+  dashboard: `<div class="pagehead"><h1>Dashboard</h1>
+<button class="btn-sm" hx-post="/admin/health/check" hx-target="#health-tbody" hx-swap="innerHTML">Check connections now</button></div>
 <p class="meta"><%= it.serverInfo %></p>
 <div class="tablecard"><table><thead><tr><th>Base</th><th>Status</th><th>Last check (UTC)</th><th>Error</th></tr></thead>
 <tbody id="health-tbody" hx-get="/admin/health/table" hx-trigger="load, every 10s" hx-swap="innerHTML"><%~ it._r('_health_rows', { rows: it.rows }) %></tbody></table></div>`,
@@ -98,7 +102,7 @@ export const TEMPLATES: Record<string, string> = {
 <p class="subtle">The remote MCP surface is read-only, so <code>write</code> is reserved — it is stored but grants no extra capability over HTTP today.</p>
 <% if (it.users.length === 0 || it.bases.length === 0) { %><div class="tablecard"><table><tbody><tr><td class="empty"><% if (it.bases.length === 0) { %>No bases to grant — add one under Bases.<% } else { %>No users to grant — add one under Users.<% } %></td></tr></tbody></table></div><% } else { %>
 <div class="tablecard"><table><thead><tr><th scope="col">User</th><% for (const b of it.bases) { %><th scope="col"><%= b %></th><% } %></tr></thead>
-<tbody><% for (const u of it.users) { %><tr><th scope="row" class="mono longcell"><%= u.email %></th>
+<tbody><% for (const u of it.users) { %><tr><th scope="row"><span class="uident"><% if (u.name) { %><span class="uname"><%= u.name %></span><% } %><span class="umail mono"><%= u.email %></span></span></th>
 <% for (const b of it.bases) { %><%~ it._r('_grant_cell', { sub: u.id, base: b, granted: it.matrix[u.id+'|'+b] !== undefined, scope: it.matrix[u.id+'|'+b] || 'read' }) %><% } %>
 </tr><% } %></tbody></table></div><% } %>`,
 

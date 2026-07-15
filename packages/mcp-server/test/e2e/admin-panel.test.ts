@@ -109,6 +109,30 @@ describe('admin panel over HTTP', () => {
     expect(html).toContain('Dashboard')
     expect(html).toContain('DB-backed')
     expect(html).toContain('/admin/assets/htmx.min.js')
+    expect(html).toContain('/admin/health/check') // on-demand "check connections now" button
+  })
+
+  it('Check connections now re-probes every base and swaps in the refreshed rows', async () => {
+    session.value = { user: { role: 'admin' }, session: {} }
+    // 'trade' is seeded WITHOUT a secret, so the sweep records auth_failed without
+    // any network probe — deterministic + hermetic.
+    const res = await fetch(`${origin}/admin/health/check`, {
+      method: 'POST',
+      headers: { origin: 'http://127.0.0.1' },
+    })
+    expect(res.status).toBe(200)
+    const html = await res.text()
+    expect(html).toContain('trade')
+    expect(html).toContain('auth_failed') // no password assigned → auth_failed badge
+  })
+
+  it('the grants matrix shows each user full name above their email', async () => {
+    session.value = { user: { role: 'admin' }, session: {} }
+    listUsers.mockResolvedValueOnce({ users: [{ id: 'u1', email: 'jane@x', name: 'Jane Doe', role: 'user' }] })
+    const html = await (await fetch(`${origin}/admin/grants`)).text()
+    expect(html).toContain('class="uident"')
+    expect(html).toContain('Jane Doe') // full name
+    expect(html).toContain('jane@x') // email underneath
   })
 
   it('renders the bases list from DB state for an admin', async () => {

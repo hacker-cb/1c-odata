@@ -33,6 +33,8 @@ export interface AppAuthOptions {
   sharedPool?: ReadPool
   /** Server version, forwarded to the admin dashboard's DB-aware server_info. */
   version?: string
+  /** The health job's guarded runOnce — lets the admin "check now" button share the job's in-flight guard. */
+  onDemandHealthCheck?: () => Promise<void>
 }
 
 export interface CreateAppOptions {
@@ -96,6 +98,7 @@ export function createApp(opts: CreateAppOptions): Express {
         sharedPool: opts.auth.sharedPool,
         version: opts.auth.version ?? '0.0.0',
         publicUrl: opts.auth.urls.publicUrl,
+        ...(opts.auth.onDemandHealthCheck !== undefined ? { onDemandHealthCheck: opts.auth.onDemandHealthCheck } : {}),
       }),
     )
     // /account: self-service (change own password) + sign-out, for EVERY

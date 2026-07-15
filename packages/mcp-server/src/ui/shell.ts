@@ -152,6 +152,10 @@ label .req{font-size:12.5px}
    forcing the whole table wider than its card (which would scroll horizontally) ── */
 tbody td,tbody th{overflow-wrap:anywhere}
 .longcell{max-width:34ch}
+/* grants row-header: full name over a muted email (email only when no name) */
+.uident{display:flex;flex-direction:column;gap:1px;max-width:34ch}
+.uident .uname{font-weight:500}
+.uident .umail{font-size:11.5px;color:var(--mut);overflow-wrap:anywhere}
 
 /* ── htmx loading affordance: the button that fired an in-flight request dims and
    stops taking clicks until htmx settles the swap (no double-submit, visible work) ── */
