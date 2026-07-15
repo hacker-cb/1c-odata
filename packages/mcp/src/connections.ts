@@ -2,12 +2,14 @@ import {
   connectionAuth,
   type DataShape,
   InvalidArgumentError,
+  MetadataError,
   normalizeBaseUrl,
   validateConnection,
 } from '@1c-odata/client'
+import { request } from '@1c-odata/client/internal'
 import { fetchMetadataXml } from '@1c-odata/metadata'
 import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfig } from './config.js'
-import { DEFAULT_METADATA_TIMEOUT_MS } from './constants.js'
+import { DEFAULT_METADATA_TIMEOUT_MS, DEFAULT_REACHABILITY_TIMEOUT_MS } from './constants.js'
 import { stripUrlUserinfo } from './redact.js'
 import { passwordEnvVar, SecretStore } from './secret-store.js'
 
@@ -214,6 +216,66 @@ export async function verifyConnectivity(input: {
     auth: connectionAuth({ auth: { username: input.login.trim(), password: input.password } }),
     timeout: input.timeout ?? DEFAULT_METADATA_TIMEOUT_MS,
   })
+}
+
+/**
+ * Lightweight reachability + auth probe: GET the OData service ROOT (a small
+ * service document) instead of the full multi-MB `$metadata`. A 2xx means the base
+ * is reachable AND the credentials are valid; a non-2xx surfaces as a typed
+ * HTTPError (401 → `PermissionError`) from the same transport pipeline as
+ * {@link verifyConnectivity}, so callers classify auth-vs-network identically.
+ *
+ * Use this for periodic / on-demand HEALTH checks — on real bases the service root
+ * is ~20× smaller than `$metadata` (KB–hundreds of KB vs 10–15 MB), so the probe is
+ * far cheaper on the 1С server and stays well under a short timeout even on a slow
+ * link. Use {@link verifyConnectivity} when you must also confirm the `$metadata`
+ * itself is fetchable/parseable (adding or re-verifying a base).
+ */
+export async function verifyReachability(input: {
+  baseUrl: string
+  login: string
+  password: string
+  timeout?: number
+}): Promise<void> {
+  // normalizeBaseUrl strips a trailing slash; the OData service document lives at
+  // the root WITH the slash, so re-append it.
+  const root = `${normalizeBaseUrl(stripUrlUserinfo(input.baseUrl.trim()))}/`
+  const raw = await request(
+    {
+      method: 'GET',
+      url: root,
+      headers: {
+        Authorization: connectionAuth({ auth: { username: input.login.trim(), password: input.password } }).header,
+        // Prefer JSON but accept the Atom service document too (some servers only
+        // serve XML) so the probe doesn't 406 a healthy base.
+        Accept: 'application/json, application/xml;q=0.9, */*;q=0.1',
+      },
+    },
+    { timeout: input.timeout ?? DEFAULT_REACHABILITY_TIMEOUT_MS },
+  )
+  // A 2xx that is NOT an OData service document must not read as healthy (the health
+  // job would record `ok` for an invalid URL/credentials). The OData root is either a
+  // JSON object/array (`{…}` / `[…]`) or an Atom service document (`<service>` /
+  // `<app:service>`, optionally behind an XML declaration / comments). Accept ONLY
+  // those shapes — a whitelist, not "reject HTML": an HTML fragment like `<body>…` or
+  // a proxy's plain-text page (which a bare `startsWith('<')` would wave through) is
+  // rejected too. The message carries no auth keyword, so classifyProbe files it as
+  // `unreachable`.
+  const head = raw.body
+    .replace(/^\uFEFF/, '')
+    .trimStart()
+    // Bounded like assertEdmxResponse: keep off the multi-MB tail, but large enough
+    // that a long XML prolog / leading comments can't push <service> out of range.
+    .slice(0, 8192)
+    .toLowerCase()
+  const looksJson = head.startsWith('{') || head.startsWith('[')
+  const looksXmlServiceDoc = /^(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:service|app:service)\b/.test(head)
+  if (!looksJson && !looksXmlServiceDoc) {
+    throw new MetadataError(
+      `The service root at ${root} did not return an OData document — the response is neither a JSON nor an XML service document (wrong base URL, or a sign-in portal)`,
+      { request: { method: 'GET', url: root } },
+    )
+  }
 }
 
 export interface SetLabelResult {

@@ -44,7 +44,7 @@ export type { ConnectionSource, ListedConnection } from './connection-source.js'
 // and in a health job. The connection-MANAGEMENT functions in the same module
 // (`upsertConnection`/`removeConnection`/`updateConnectionCredentials`/
 // `setConnectionLabel`) stay private: they are bound to the file-backed config.
-export { verifyConnectivity } from './connections.js'
+export { verifyConnectivity, verifyReachability } from './connections.js'
 export { FileConnectionSource, type FileConnectionSourceOptions } from './file-connection-source.js'
 // Response limits.
 export { clampTop, DEFAULT_LIMITS, type Limits, resolveLimits } from './limits.js'

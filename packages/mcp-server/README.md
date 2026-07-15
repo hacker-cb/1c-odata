@@ -111,6 +111,18 @@ The store is Postgres in production (`--pg-url` / `DATABASE_URL`) or embedded
 PGlite for dev (`--auth-data-dir` to persist, else in-memory). Single instance:
 session state, the `$metadata` cache, and the health job are per-process.
 
+**Connection health.** The dashboard shows each base's reachability, kept current by
+a background job that probes every base on an interval, plus a **Check connections
+now** button for an on-demand sweep (with a per-base "checking" spinner). The probe
+is a lightweight `GET` on the OData service root — *not* a full `$metadata` download
+(~20× less data on real bases), so it's cheap on the 1С server and safe under a short
+timeout. Both knobs are tunable via process-wide env:
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `ONEC_MCP_HEALTH_INTERVAL_MS` | `60000` | Background probe interval (ms). |
+| `ONEC_MCP_HEALTH_TIMEOUT_MS` | `5000` | Per-base probe timeout (ms). |
+
 For a turnkey self-hosted stack (server + Postgres + Caddy auto-HTTPS) see
 [`deploy/README.md`](./deploy/README.md) — `docker compose up` from `.env`.
 

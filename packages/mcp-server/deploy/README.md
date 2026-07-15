@@ -263,6 +263,7 @@ server {
 
 - **Update:** `git pull && docker compose up -d --build` (migrations re-run idempotently on boot).
 - **Logs:** `docker compose logs -f mcp`.
+- **Health-probe tuning (optional):** the dashboard probes each base's reachability on an interval — set `ONEC_MCP_HEALTH_INTERVAL_MS` / `ONEC_MCP_HEALTH_TIMEOUT_MS` in `.env` (defaults 60000 / 5000; the probe is a lightweight service-root GET, and the timeout is clamped below the interval). Both are already wired through `compose.yml` to the `mcp` service.
 - **Data:** lives in the `db-data` volume; TLS certs in `caddy-data`. Back both up. **Also back up `ONEC_MCP_ENC_KEY`** — without it the stored 1С passwords are unrecoverable.
 - **Stop:** `docker compose down` (keeps volumes) — add `-v` to also drop the database and certs.
 

@@ -37,13 +37,17 @@ export const TEMPLATES: Record<string, string> = {
 <button class="btn-sm" hx-post="/admin/health/check" hx-target="#health-tbody" hx-swap="innerHTML">Check connections now</button></div>
 <p class="meta"><%= it.serverInfo %></p>
 <div class="tablecard"><table><thead><tr><th>Base</th><th>Status</th><th>Last check (UTC)</th><th>Error</th></tr></thead>
-<tbody id="health-tbody" hx-get="/admin/health/table" hx-trigger="load, every 10s" hx-swap="innerHTML"><%~ it._r('_health_rows', { rows: it.rows }) %></tbody></table></div>`,
+<tbody id="health-tbody" hx-get="/admin/health/table" hx-trigger="load, every 10s" hx-swap="innerHTML"><%~ it._r('_health_rows', { rows: it.rows, anyChecking: it.anyChecking }) %></tbody></table></div>`,
 
+  // A base being re-probed shows a spinner ("checking…") instead of its stale
+  // status. While ANY base is checking, a hidden self-triggering row fast-polls
+  // /health/table (~800ms) so each base flips to its result as the sweep writes it;
+  // once nothing is checking the fast poll stops (the tbody's own 10s poll remains).
   _health_rows: `<% if (it.rows.length === 0) { %><tr><td colspan="4" class="empty">No bases configured yet.</td></tr><% } %><% for (const h of it.rows) { %><tr>
 <td class="mono"><%= h.baseName %></td>
-<td><span class="badge <%= h.status %>"><%= h.status.replace('_',' ') %></span></td>
+<td><% if (h.checking) { %><span class="badge checking">checking…</span><% } else { %><span class="badge <%= h.status %>"><%= h.status.replace('_',' ') %></span><% } %></td>
 <td class="mono"><%= h.lastCheck %></td>
-<td class="err"><%= h.error || '' %></td></tr><% } %>`,
+<td class="err"><%= h.error || '' %></td></tr><% } %><% if (it.anyChecking) { %><tr class="hpoll" hx-get="/admin/health/table" hx-trigger="load delay:800ms" hx-target="#health-tbody" hx-swap="innerHTML"></tr><% } %>`,
 
   // ---- Bases ----
   // Each row bag is { base } where base carries name/baseUrl/login/serverTimezone/

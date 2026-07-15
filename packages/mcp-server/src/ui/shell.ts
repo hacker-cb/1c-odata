@@ -140,8 +140,14 @@ td select,td input{padding:4px 8px;font-size:12.5px}
 .badge.unknown{background:var(--s2);color:var(--mut)}
 .badge.ok::before{animation:pulse 1.8s ease-in-out infinite}
 .badge.static::before{animation:none}
+/* on-demand "check now": a base being re-probed shows a spinning ring instead of
+   its (stale) status badge; the hidden .hpoll row fast-polls while any base checks */
+.badge.checking{background:var(--ac-bg);color:var(--ac-tx)}
+.badge.checking::before{width:9px;height:9px;background:none;border:2px solid currentColor;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
+tr.hpoll{display:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-@media (prefers-reduced-motion:reduce){.badge.ok::before{animation:none}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.badge.ok::before,.badge.checking::before{animation:none}}
 
 /* ── required-field marker (the input keeps its required attr for AT; the * is visual) ── */
 .req{color:var(--dg);margin-left:1px;font-weight:600}

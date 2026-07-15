@@ -112,18 +112,27 @@ describe('admin panel over HTTP', () => {
     expect(html).toContain('/admin/health/check') // on-demand "check connections now" button
   })
 
-  it('Check connections now re-probes every base and swaps in the refreshed rows', async () => {
+  it('Check connections now kicks a background sweep and shows per-base "checking" spinners immediately', async () => {
     session.value = { user: { role: 'admin' }, session: {} }
-    // 'trade' is seeded WITHOUT a secret, so the sweep records auth_failed without
-    // any network probe — deterministic + hermetic.
+    // The response returns IMMEDIATELY (the sweep runs in the background), so every
+    // base shows a "checking" spinner and a hidden fast-poll row drives the follow-up.
     const res = await fetch(`${origin}/admin/health/check`, {
       method: 'POST',
       headers: { origin: 'http://127.0.0.1' },
     })
     expect(res.status).toBe(200)
     const html = await res.text()
-    expect(html).toContain('trade')
-    expect(html).toContain('auth_failed') // no password assigned → auth_failed badge
+    expect(html).toContain('trade') // the base is listed…
+    expect(html).toContain('badge checking') // …with a spinner (being re-probed)
+    expect(html).toContain('class="hpoll"') // fast poll active while any base checks
+  })
+
+  it('the health table lists every base (even never-probed) with no spinner when idle', async () => {
+    session.value = { user: { role: 'admin' }, session: {} }
+    const html = await (await fetch(`${origin}/admin/health/table`)).text()
+    expect(html).toContain('trade') // appears even with no health row yet (unknown status)
+    expect(html).not.toContain('badge checking') // no sweep started → no spinner
+    expect(html).not.toContain('class="hpoll"') // …and no fast poll
   })
 
   it('the grants matrix shows each user full name above their email', async () => {
