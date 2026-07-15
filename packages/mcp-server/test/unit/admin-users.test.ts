@@ -82,6 +82,7 @@ function deps(handle: DbHandle): AdminDeps {
     secretRepo: new SecretRepo(db),
     grantRepo: new GrantRepo(db),
     healthRepo: new HealthRepo(db),
+    onDemandHealthCheck: async () => {},
   }
 }
 

@@ -167,24 +167,10 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
       })
     }
 
-    const app = createApp({
-      buildServer,
-      ...(opts.allowedHosts !== undefined ? { allowedHosts: opts.allowedHosts } : {}),
-      ...(opts.maxSessions !== undefined ? { maxSessions: opts.maxSessions } : {}),
-      // Carry `db`/`keyring`/`sharedPool`/`version` on the auth options only when
-      // tenancy is on — the admin routes read them; the MCP route never does
-      // (see app.ts). `sharedPool` MUST be the process-global pool so admin base
-      // edits `refresh()` the shared cache, not a per-session ScopedPool.
-      auth: {
-        auth,
-        urls,
-        authRouter,
-        bearerMiddleware,
-        ...(keyring !== undefined ? { db, keyring, sharedPool, version } : {}),
-      },
-    })
-
-    // Health job: only on the tenancy path (needs db-derived repos + keyring).
+    // Health job: only on the tenancy path (needs db-derived repos + keyring). Built
+    // BEFORE the app so its guarded `runOnce` can back the admin "check now" button —
+    // a manual check then shares the job's single in-flight guard (never stacks on
+    // the timer/startup sweep).
     let healthJob: HealthJob | undefined
     if (keyring !== undefined) {
       healthJob = startHealthJob({
@@ -194,8 +180,28 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
         keyring,
         log: { error: (o, m) => process.stderr.write(`${m ?? 'health'}: ${JSON.stringify(o)}\n`) },
       })
-      void healthJob.runOnce() // seed the dashboard so it isn't blank for the first interval
     }
+
+    const app = createApp({
+      buildServer,
+      ...(opts.allowedHosts !== undefined ? { allowedHosts: opts.allowedHosts } : {}),
+      ...(opts.maxSessions !== undefined ? { maxSessions: opts.maxSessions } : {}),
+      // Carry `db`/`keyring`/`sharedPool`/`version` (+ the health job's guarded
+      // runOnce) on the auth options only when tenancy is on — the admin routes read
+      // them; the MCP route never does (see app.ts). `sharedPool` MUST be the
+      // process-global pool so admin base edits `refresh()` the shared cache.
+      auth: {
+        auth,
+        urls,
+        authRouter,
+        bearerMiddleware,
+        ...(keyring !== undefined ? { db, keyring, sharedPool, version } : {}),
+        // Present only on the tenancy path (healthJob is built iff keyring is set).
+        ...(healthJob !== undefined ? { onDemandHealthCheck: healthJob.runOnce } : {}),
+      },
+    })
+
+    void healthJob?.runOnce() // seed the dashboard so it isn't blank for the first interval
 
     // Guard double-close: cli.ts may call close() twice (the server 'error'
     // handler AND a SIGINT/SIGTERM), and closing the pg pool twice throws.

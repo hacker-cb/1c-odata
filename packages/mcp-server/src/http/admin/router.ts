@@ -8,8 +8,9 @@ import type { AuthDb } from '../../store/db.js'
 import { BaseRepo, GrantRepo, HealthRepo, SecretRepo } from '../../store/repos.js'
 import { ADMIN_JS } from './admin-js-asset.js'
 import { createBase, deleteBase, updateBase, verifyBase } from './bases.js'
-import { dashboardPage, healthTable } from './dashboard.js'
+import { checkHealthNow, dashboardPage, healthTable } from './dashboard.js'
 import { grantsPage, toggleGrant } from './grants.js'
+import { runHealthSweep } from './health-job.js'
 import { HTMX_JS } from './htmx-asset.js'
 import { adminCsp, adminCsrf, adminGate, isHtmx } from './middleware.js'
 import {
@@ -38,6 +39,12 @@ export interface AdminDeps {
   secretRepo: SecretRepo
   grantRepo: GrantRepo
   healthRepo: HealthRepo
+  /**
+   * Run one on-demand health sweep (the "check now" button), re-entrancy-guarded:
+   * concurrent presses / tabs coalesce onto a single in-flight sweep instead of
+   * stacking probe load. The periodic job guards its own timer path separately.
+   */
+  onDemandHealthCheck: () => Promise<void>
 }
 
 export interface CreateAdminRouterOptions {
@@ -48,6 +55,12 @@ export interface CreateAdminRouterOptions {
   version: string
   /** Canonical public origin — the admin CSRF guard's same-origin target. */
   publicUrl: string
+  /**
+   * The health job's guarded `runOnce`, so the admin "check now" button SHARES the
+   * job's single in-flight guard (a manual check never stacks on the timer sweep).
+   * Omitted in tests → the router builds its own guarded fallback (self-contained).
+   */
+  onDemandHealthCheck?: () => Promise<void>
 }
 
 /**
@@ -64,16 +77,38 @@ function wrap(handler: (req: Request, res: Response, deps: AdminDeps) => Promise
 }
 
 export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
+  const baseRepo = new BaseRepo(opts.db)
+  const secretRepo = new SecretRepo(opts.db)
+  const grantRepo = new GrantRepo(opts.db)
+  const healthRepo = new HealthRepo(opts.db)
+
+  // Prefer the health job's guarded runOnce (shares its in-flight guard with the
+  // periodic timer sweep). Absent that (tests), build a router-scoped guarded
+  // fallback so the on-demand "check now" sweep still can't stack on itself — the
+  // client-side button dim only stops double-submit within one tab.
+  let sweepInflight: Promise<void> | null = null
+  const fallbackHealthCheck = (): Promise<void> => {
+    if (sweepInflight) return sweepInflight
+    sweepInflight = runHealthSweep({ baseRepo, secretRepo, healthRepo, keyring: opts.keyring, log: logger }).finally(
+      () => {
+        sweepInflight = null
+      },
+    )
+    return sweepInflight
+  }
+  const onDemandHealthCheck = opts.onDemandHealthCheck ?? fallbackHealthCheck
+
   const deps: AdminDeps = {
     auth: opts.auth,
     db: opts.db,
     keyring: opts.keyring,
     sharedPool: opts.sharedPool,
     version: opts.version,
-    baseRepo: new BaseRepo(opts.db),
-    secretRepo: new SecretRepo(opts.db),
-    grantRepo: new GrantRepo(opts.db),
-    healthRepo: new HealthRepo(opts.db),
+    baseRepo,
+    secretRepo,
+    grantRepo,
+    healthRepo,
+    onDemandHealthCheck,
   }
 
   const router = express.Router()
@@ -97,9 +132,10 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
   // htmx posts urlencoded; the global express.json() in app.ts won't parse these.
   router.use(express.urlencoded({ extended: false }))
 
-  // Dashboard + health poll
+  // Dashboard + health poll + on-demand re-probe
   router.get('/', wrap(dashboardPage, deps))
   router.get('/health/table', wrap(healthTable, deps))
+  router.post('/health/check', wrap(checkHealthNow, deps))
 
   // Bases
   router.get(

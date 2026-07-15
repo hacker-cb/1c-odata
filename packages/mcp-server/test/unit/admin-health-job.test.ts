@@ -54,6 +54,28 @@ describe('health job', () => {
     expect(rows).toEqual({ good: 'ok', nopass: 'auth_failed', down: 'unreachable' })
   })
 
+  it('runOnce coalesces concurrent calls onto ONE in-flight sweep (shared guard)', async () => {
+    // This guard now backs BOTH the timer and the admin "check now" button (which
+    // calls runOnce), so overlapping presses must not double-probe.
+    const bases = new BaseRepo(handle.db)
+    const secrets = new SecretRepo(handle.db)
+    await bases.upsert('b', { baseUrl: 'http://b', login: 'u', serverTimezone: 'Europe/Moscow' })
+    await secrets.put('b', encrypt(keyring, 'b', 'p'))
+    // Slow probe so the two runOnce calls genuinely overlap.
+    vi.mocked(verifyConnectivity).mockImplementation(() => new Promise((r) => setTimeout(r, 25)))
+
+    const job = startHealthJob({
+      baseRepo: bases,
+      secretRepo: secrets,
+      healthRepo: new HealthRepo(handle.db),
+      keyring,
+      intervalMs: 1_000_000,
+    })
+    await Promise.all([job.runOnce(), job.runOnce()]) // two overlapping sweeps
+    await job.stop()
+    expect(verifyConnectivity).toHaveBeenCalledTimes(1) // coalesced to a single sweep
+  })
+
   it('stop() clears the interval (no leaked timer)', async () => {
     const clearSpy = vi.spyOn(globalThis, 'clearInterval')
     const bases = new BaseRepo(handle.db)
