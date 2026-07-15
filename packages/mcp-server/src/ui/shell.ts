@@ -74,6 +74,12 @@ fieldset input,fieldset select,.card input,.card select{display:block;width:100%
 input::placeholder{color:var(--faint)}
 input:focus,select:focus,textarea:focus,button:focus-visible,a:focus-visible{outline:none;border-color:var(--ac);box-shadow:0 0 0 3px color-mix(in srgb,var(--ac) 24%,transparent)}
 input[type=checkbox]{width:auto;display:inline-block;accent-color:var(--ac);cursor:pointer}
+/* Secret field that must stay OUT of the browser password manager (a 1С base
+   password is not the user's credential — #100). A password manager only engages
+   with type=password inputs, so we render a type=text field and mask it in CSS.
+   -webkit-text-security is supported by Chromium/WebKit and Firefox >= 118 (2023);
+   older Firefox would show the value unmasked, acceptable for a modern admin tool. */
+input.masked{-webkit-text-security:disc;text-security:disc}
 main form br{display:none}
 /* input + inline buttons on one row (password fields with Generate/Copy) */
 .fieldrow{display:flex;gap:7px;margin-top:5px}

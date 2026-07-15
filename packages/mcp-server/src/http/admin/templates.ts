@@ -84,7 +84,7 @@ export const TEMPLATES: Record<string, string> = {
 <label>Name <span class="req" aria-hidden="true">*</span> <input name="name" value="<%= it.name || '' %>" <%= it.edit ? 'readonly' : '' %> required></label>
 <label>Base URL <span class="req" aria-hidden="true">*</span> <input name="baseUrl" type="url" value="<%= it.baseUrl || '' %>" placeholder="https://host/base/odata/standard.odata/" required></label>
 <label>Login <span class="req" aria-hidden="true">*</span> <input name="login" value="<%= it.login || '' %>" required></label>
-<label>Password <% if (!it.edit) { %><span class="req" aria-hidden="true">*</span> <% } %><input name="password" type="password" autocomplete="off" <%= it.edit ? '' : 'required' %> placeholder="<%= it.edit ? '(unchanged)' : '' %>"></label>
+<label>Password <% if (!it.edit) { %><span class="req" aria-hidden="true">*</span> <% } %><input name="password" type="text" class="masked" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Base password" <%= it.edit ? '' : 'required' %> placeholder="<%= it.edit ? '(unchanged)' : '' %>"></label>
 <% const tz = it.serverTimezone || '' %>
 <label>Server timezone <span class="req" aria-hidden="true">*</span> <input name="serverTimezone" list="tzlist" value="<%= tz %>" placeholder="Type to search…" autocomplete="off" required>
 <datalist id="tzlist"><% for (const z of it.timezones) { %><option value="<%= z %>"></option><% } %></datalist></label>

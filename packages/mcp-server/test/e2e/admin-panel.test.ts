@@ -167,6 +167,27 @@ describe('admin panel over HTTP', () => {
     expect(html).toMatch(/name="password"[^>]*required/) // create password is required (matches server validation)
   })
 
+  it('the base password field is a CSS-masked text input, kept out of the browser password manager (#100)', async () => {
+    session.value = { user: { role: 'admin' }, session: {} }
+    const html = await (await fetch(`${origin}/admin/bases/new`)).text()
+    // Isolate the base-form password <input> tag, then assert each attribute
+    // independently — order-agnostic, so a harmless template attribute reshuffle
+    // does not break the test while a real regression still does.
+    const pw = html.match(/<input\b[^>]*\bname="password"[^>]*>/)?.[0] ?? ''
+    expect(pw).not.toBe('') // the field exists
+    // A 1С base password is not the admin's credential — the browser must not offer
+    // to save it. A password manager only engages type=password, so the field is a
+    // type=text masked via the `.masked` CSS class (-webkit-text-security).
+    expect(pw).toContain('type="text"')
+    expect(pw).toContain('class="masked"')
+    expect(pw).not.toContain('type="password"') // never a real password input
+    // ALL password-manager opt-outs must be present — native + third-party.
+    expect(pw).toContain('autocomplete="off"')
+    expect(pw).toContain('data-1p-ignore') // 1Password
+    expect(pw).toContain('data-lpignore') // LastPass
+    expect(pw).toContain('data-bwignore') // Bitwarden
+  })
+
   it('the NEW base form leaves the timezone empty (no default) + required', async () => {
     session.value = { user: { role: 'admin' }, session: {} }
     const html = await (await fetch(`${origin}/admin/bases/new`)).text()
