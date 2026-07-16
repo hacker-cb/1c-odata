@@ -128,7 +128,17 @@ function parsePreviousKeys(raw: string | undefined): Kek[] {
           '(expected e.g. "1:BASE64KEY,0:OLDERBASE64KEY").',
       )
     }
-    const id = parseKeyId(entry.slice(0, at), 'ONEC_MCP_ENC_KEYS_PREVIOUS')
+    // A retired id must be spelled out: parseKeyId's blank→1 default belongs to
+    // ONEC_MCP_ENC_KEY_ID, so letting `:key` through here would silently load the key
+    // under id 1 and leave rows sealed under the OMITTED id undecryptable.
+    const rawId = entry.slice(0, at).trim()
+    if (rawId === '') {
+      throw new MissingEncryptionKeyError(
+        `ONEC_MCP_ENC_KEYS_PREVIOUS entry ${JSON.stringify(entry.trim())} has no key id ` +
+          '(expected "id:key" — the id is what the sealed row records, so it cannot be inferred).',
+      )
+    }
+    const id = parseKeyId(rawId, 'ONEC_MCP_ENC_KEYS_PREVIOUS')
     return { id, key: decodeKey(entry.slice(at + 1).trim(), `ONEC_MCP_ENC_KEYS_PREVIOUS key id ${id}`) }
   })
 }

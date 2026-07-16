@@ -17,7 +17,7 @@ import { readPackageVersion } from './version.js'
 const DEFAULT_PORT = 3000
 const DEFAULT_HOST = '127.0.0.1'
 
-interface ServeOptions {
+export interface ServeOptions {
   dataDir?: string
   insecureStorage?: boolean
   port: string
@@ -68,10 +68,15 @@ interface AuthContext {
  * tenancy, the Slice-2 file source). `loadKeyring` throws {@link MissingEncryptionKeyError}
  * loudly on a malformed/short key, failing boot rather than corrupting writes.
  */
-function resolveKeyring(env: NodeJS.ProcessEnv, opts: ServeOptions): Keyring | undefined {
+export function resolveKeyring(env: NodeJS.ProcessEnv, opts: ServeOptions): Keyring | undefined {
   const encKey = opts.encKey ?? env.ONEC_MCP_ENC_KEY
   if (encKey === undefined || encKey === '') return undefined
-  return loadKeyring({ ONEC_MCP_ENC_KEY: encKey, ONEC_MCP_ENC_KEY_ID: env.ONEC_MCP_ENC_KEY_ID } as NodeJS.ProcessEnv)
+  // Pass the WHOLE env through and override only the current key (so `--enc-key`
+  // still wins over `ONEC_MCP_ENC_KEY`). Hand-listing the vars here is what silently
+  // dropped `ONEC_MCP_ENC_KEYS_PREVIOUS` — with the docs telling operators to rotate,
+  // that would have stranded every secret sealed under the retired key. loadKeyring
+  // owns which vars it reads; this function must not duplicate that list.
+  return loadKeyring({ ...env, ONEC_MCP_ENC_KEY: encKey })
 }
 
 /**

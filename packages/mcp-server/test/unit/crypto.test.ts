@@ -163,5 +163,6 @@ describe('KEK rotation', () => {
     expect(previous(`1:${Buffer.alloc(16).toString('base64')}`)).toThrow(/32-byte/) // short key
     expect(previous(`999:${KEY_A}`)).toThrow(/0\.\.255/) // id out of range
     expect(previous(`2:${KEY_A}`)).toThrow(/already in use/) // collides with the current id
+    expect(previous(`:${KEY_A}`)).toThrow(/has no key id/) // blank id must NOT fall back to 1
   })
 })
