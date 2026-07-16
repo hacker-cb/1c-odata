@@ -85,6 +85,24 @@ they are **granted**. Users are managed through an admin panel gated by the
 better-auth `admin` role (server-rendered, internal-only) — CRUD of bases /
 grants / users, connection health, all under `/admin`.
 
+**Rotating the encryption key.** Every sealed secret records the id of the key that
+sealed it, so old and new keys can coexist: `ONEC_MCP_ENC_KEY` is always the key new
+secrets are sealed with, and `ONEC_MCP_ENC_KEYS_PREVIOUS` holds retired keys for
+decryption only.
+
+```bash
+# Before:  ONEC_MCP_ENC_KEY=<key1>   ONEC_MCP_ENC_KEY_ID=1
+ONEC_MCP_ENC_KEY="$(openssl rand -base64 32)"   # the new key…
+ONEC_MCP_ENC_KEY_ID=2                           # …under a NEW id
+ONEC_MCP_ENC_KEYS_PREVIOUS=1:<key1>             # the old one, decrypt-only
+```
+
+Re-sealing is **lazy**: a base's secret moves to the new key when its password is
+next saved in `/admin`. Keep the retired key in `ONEC_MCP_ENC_KEYS_PREVIOUS` until
+every base has been re-saved — dropping it earlier leaves those secrets unreadable.
+A malformed key, a duplicate id, or a key that is not 32 bytes fails the boot loudly
+rather than stranding data.
+
 **Bootstrap the first admin — the setup wizard.** On boot, while no admin exists,
 the server prints a one-time `…/setup?token=…` URL to its log (at `warn` level,
 re-printed on every restart until an admin is created). Open it in a browser to

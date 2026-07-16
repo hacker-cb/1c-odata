@@ -36,6 +36,10 @@ services:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
       # AES-256 key encrypting 1С passwords at rest — turns on multi-tenancy.
       ONEC_MCP_ENC_KEY: ${ONEC_MCP_ENC_KEY:?set ONEC_MCP_ENC_KEY in .env}
+      # Key rotation (optional): the id of the current key, plus retired keys kept
+      # for decryption only. Empty → id 1 and no retired keys. See .env.example.
+      ONEC_MCP_ENC_KEY_ID: ${ONEC_MCP_ENC_KEY_ID:-}
+      ONEC_MCP_ENC_KEYS_PREVIOUS: ${ONEC_MCP_ENC_KEYS_PREVIOUS:-}
       # Auth store; migrations run automatically on boot. POSTGRES_PASSWORD is
       # interpolated raw, so it must be URL-safe — generate it with `openssl rand -hex`.
       DATABASE_URL: postgres://mcp:${POSTGRES_PASSWORD}@db:5432/mcp
