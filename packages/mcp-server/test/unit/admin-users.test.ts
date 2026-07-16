@@ -20,7 +20,7 @@ import {
 import { loadKeyring } from '../../src/store/crypto.js'
 import { createDb, type DbHandle } from '../../src/store/db.js'
 import { runAuthMigrations } from '../../src/store/migrate.js'
-import { BaseRepo, GrantRepo, HealthRepo, SecretRepo } from '../../src/store/repos.js'
+import { BaseRepo, countActiveAdmins, GrantRepo, HealthRepo, SecretRepo } from '../../src/store/repos.js'
 
 const KEY = Buffer.alloc(32, 9).toString('base64')
 
@@ -310,5 +310,91 @@ describe('admin user management guards', () => {
     expect(r.body).toContain('id="drawer-body" hx-swap-oob="innerHTML"></div>')
     expect(r.body).toContain('flash-msg err')
     expect(api.setUserPassword).not.toHaveBeenCalled()
+  })
+
+  // The guard reads the admin count and the mutation acts on it — two round-trips.
+  // Concurrently, both requests could read "2 admins", both pass, and both commit,
+  // leaving ZERO usable admins. The handlers serialize guard+mutation to stop that.
+  it('two admins banning each other concurrently cannot both succeed (last-admin TOCTOU)', async () => {
+    await seedUser(handle, 'a1', 'one@x', 'admin')
+    await seedUser(handle, 'a2', 'two@x', 'admin')
+    const d = deps(handle)
+    // The stub must really mutate: with a no-op stub the second guard would re-read
+    // an unchanged count and the test would pass even without serialization.
+    api.banUser.mockImplementation(async (arg: unknown) => {
+      const userId = (arg as { body: { userId: string } }).body.userId
+      await handle.db.update(user).set({ banned: true }).where(eq(user.id, userId))
+      return { user: { id: userId, email: `${userId}@x`, name: '', role: 'admin', banned: true } }
+    })
+
+    const [r1, r2] = [res('a1'), res('a2')]
+    await Promise.all([
+      banUser(req({ id: 'a2' }), r1 as unknown as Response, d),
+      banUser(req({ id: 'a1' }), r2 as unknown as Response, d),
+    ])
+
+    // Serialized: the first ban lands, the second then sees a single active admin
+    // left and is refused — the panel keeps exactly one way back in.
+    expect(api.banUser).toHaveBeenCalledTimes(1)
+    expect(await countActiveAdmins(handle.db)).toBe(1)
+    expect([r1, r2].filter((r) => r.body.includes('last admin'))).toHaveLength(1)
+  })
+
+  // Demotion is the vector #105 actually names: guardTarget(…, 'demote') exists
+  // because self-demotion is legitimate and is caught ONLY by the admin count.
+  it('two admins demoting each other concurrently cannot both succeed (last-admin TOCTOU)', async () => {
+    await seedUser(handle, 'a1', 'one@x', 'admin')
+    await seedUser(handle, 'a2', 'two@x', 'admin')
+    const d = deps(handle)
+    api.setRole.mockImplementation(async (arg: unknown) => {
+      const userId = (arg as { body: { userId: string } }).body.userId
+      await handle.db.update(user).set({ role: 'user' }).where(eq(user.id, userId))
+      return { user: { id: userId, email: `${userId}@x`, name: '', role: 'user' } }
+    })
+
+    const [r1, r2] = [res('a1'), res('a2')]
+    await Promise.all([
+      setUserRole(req({ id: 'a2' }, { role: 'user' }), r1 as unknown as Response, d),
+      setUserRole(req({ id: 'a1' }, { role: 'user' }), r2 as unknown as Response, d),
+    ])
+
+    expect(api.setRole).toHaveBeenCalledTimes(1)
+    expect(await countActiveAdmins(handle.db)).toBe(1)
+    expect([r1, r2].filter((r) => r.body.includes('last admin'))).toHaveLength(1)
+  })
+
+  it('two admins deleting each other concurrently cannot both succeed (last-admin TOCTOU)', async () => {
+    await seedUser(handle, 'a1', 'one@x', 'admin')
+    await seedUser(handle, 'a2', 'two@x', 'admin')
+    const d = deps(handle)
+    api.removeUser.mockImplementation(async (arg: unknown) => {
+      const userId = (arg as { body: { userId: string } }).body.userId
+      await handle.db.delete(user).where(eq(user.id, userId))
+      return {}
+    })
+
+    const [r1, r2] = [res('a1'), res('a2')]
+    await Promise.all([
+      deleteUser(req({ id: 'a2' }), r1 as unknown as Response, d),
+      deleteUser(req({ id: 'a1' }), r2 as unknown as Response, d),
+    ])
+
+    // The irreversible one: exactly one delete lands, the panel keeps a way back in.
+    expect(api.removeUser).toHaveBeenCalledTimes(1)
+    expect(await countActiveAdmins(handle.db)).toBe(1)
+    expect([r1, r2].filter((r) => r.body.includes('last admin'))).toHaveLength(1)
+  })
+
+  it('a rejected guarded mutation does not wedge the lock for the next one', async () => {
+    await seedUser(handle, 'a1', 'one@x', 'admin')
+    await seedUser(handle, 'a2', 'two@x', 'admin')
+    const d = deps(handle)
+    api.banUser.mockRejectedValueOnce(new Error('better-auth exploded'))
+    await expect(banUser(req({ id: 'a2' }), res('a1') as unknown as Response, d)).rejects.toThrow('exploded')
+    // The chain must still run the next holder (it links on settle, not on success).
+    api.banUser.mockResolvedValue({ user: { id: 'a2', email: 'two@x', name: '', role: 'admin', banned: true } })
+    const r = res('a1')
+    await banUser(req({ id: 'a2' }), r as unknown as Response, d)
+    expect(api.banUser).toHaveBeenCalledTimes(2)
   })
 })

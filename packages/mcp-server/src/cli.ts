@@ -11,6 +11,7 @@ import { logger } from './logger.js'
 import { type Keyring, loadKeyring } from './store/crypto.js'
 import { createDb, type Dialect } from './store/db.js'
 import { runAuthMigrations } from './store/migrate.js'
+import { countAdmins } from './store/repos.js'
 import { readPackageVersion } from './version.js'
 
 const DEFAULT_PORT = 3000
@@ -34,6 +35,7 @@ interface AdminCreateOptions {
   publicUrl?: string
   pgUrl?: string
   authDataDir?: string
+  force?: boolean
 }
 
 interface SetPasswordOptions {
@@ -270,6 +272,7 @@ export function buildProgram(): Command {
     .option('--public-url <url>', 'external https origin (else ONEC_MCP_PUBLIC_URL)')
     .option('--pg-url <url>', 'Postgres connection string for the auth store (else DATABASE_URL; else pglite)')
     .option('--auth-data-dir <path>', 'persist the pglite auth store here (must match `serve`)')
+    .option('--force', 'create the admin even if one already exists (bypasses the bootstrap-only guard)')
     .action(async (opts: AdminCreateOptions) => {
       const publicUrl = opts.publicUrl ?? process.env.ONEC_MCP_PUBLIC_URL
       if (publicUrl === undefined || publicUrl === '') {
@@ -294,6 +297,23 @@ export function buildProgram(): Command {
       const dbHandle = createDb(dialect)
       try {
         await runAuthMigrations(dbHandle)
+        // Bootstrap-only by contract (the README calls this the CLI equivalent of the
+        // one-time /setup wizard, which self-closes once an admin exists). This call
+        // bypasses every session check, so without a gate a repeat run would silently
+        // mint extra admins. The sanctioned way to add an admin afterwards is the
+        // /admin panel: an existing admin promotes a user.
+        //
+        // Scope: this is check-then-act, so it closes the REPEAT-RUN case, not two
+        // invocations racing against one empty Postgres — both would read 0 and both
+        // create. Preventing that needs DB-level serialization (advisory lock, or a
+        // consume-once sentinel like the /setup token); an operator running the
+        // bootstrap command twice at once is not the case this guard is aimed at.
+        if (opts.force !== true && (await countAdmins(dbHandle.db)) > 0) {
+          throw new Error(
+            'An administrator already exists — admin-create is for the initial bootstrap only. ' +
+              'Promote a user from the /admin panel instead, or pass --force to add one anyway.',
+          )
+        }
         const auth = buildAuth({ urls: resolveCanonicalUrls(publicUrl), db: dbHandle.db, secret })
         // Header-less call: session is null and (ctx.request || ctx.headers) is
         // falsy, so both the create-check and the set-role check are skipped —
