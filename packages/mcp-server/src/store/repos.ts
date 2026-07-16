@@ -152,9 +152,10 @@ export class GrantRepo {
   }
 
   /**
-   * Drop every grant of one user — the cleanup companion of user deletion. The
-   * grants table has no FK into better-auth's `user` table (the plugin owns that
-   * schema), so removeUser would otherwise leave orphaned grant rows behind.
+   * Drop every grant of one user. Defensive/explicit: `grants.sub` already has an
+   * FK into better-auth's `user` table with ON DELETE cascade (tenancy-schema.ts),
+   * so deleting the user row would clear these too — but callers may revoke a
+   * user's access WITHOUT deleting the row, so this stands on its own.
    */
   async revokeAll(sub: string): Promise<void> {
     await this.db.delete(grants).where(eq(grants.sub, sub))

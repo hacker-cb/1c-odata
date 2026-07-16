@@ -281,8 +281,24 @@ describe('admin base CRUD', () => {
       const req = { body: { name: 'x', baseUrl: 'http://1c/odata', login: 'u', password: '' } } as unknown as Request
       const r = res()
       await verifyBase(req, r as unknown as Response, d)
-      expect(r.body).toContain('password required')
+      expect(r.body).toContain('Password required')
       expect(verifyConnectivity).not.toHaveBeenCalled()
+    })
+
+    it('never sends the stored secret to a request-changed URL (no credential exfil)', async () => {
+      // C1: an admin editing base "prod" changes only the URL to an attacker host,
+      // clicks Verify with a blank password — the stored secret must NOT be probed
+      // against the attacker URL (that would exfiltrate a write-only credential).
+      const d = deps(handle, keyring)
+      await d.baseRepo.upsert('prod', { baseUrl: 'https://prod/odata', login: 'u', serverTimezone: 'Europe/Moscow' })
+      await d.secretRepo.put('prod', encrypt(keyring, 'prod', 'prod-secret'))
+      const req = {
+        body: { name: 'prod', baseUrl: 'https://attacker.example/', login: 'u', password: '' },
+      } as unknown as Request
+      const r = res()
+      await verifyBase(req, r as unknown as Response, d)
+      expect(verifyConnectivity).not.toHaveBeenCalled() // secret never leaves for the changed URL
+      expect(r.body).toContain('Re-enter the password')
     })
 
     it('never echoes the typed password back into the probe result', async () => {
@@ -298,7 +314,7 @@ describe('admin base CRUD', () => {
   })
 
   describe('updateBase (edit)', () => {
-    it('a blank password on edit reuses the stored secret to verify + keeps it', async () => {
+    it('a blank password on edit with UNCHANGED url+login reuses the stored secret + keeps it', async () => {
       const d = deps(handle, keyring)
       // Seed an existing base + secret.
       await d.baseRepo.upsert('trade', { baseUrl: 'http://1c/odata', login: 'u', serverTimezone: 'Europe/Moscow' })
@@ -306,22 +322,63 @@ describe('admin base CRUD', () => {
       vi.mocked(verifyConnectivity).mockResolvedValue()
 
       const req = {
-        // No password field — the edit form left it blank ("unchanged").
-        body: { baseUrl: 'http://1c/odata2', login: 'u2', password: '', serverTimezone: 'Europe/Moscow' },
+        // Same url+login as stored (only the timezone changes); blank password → reuse.
+        body: { baseUrl: 'http://1c/odata', login: 'u', password: '', serverTimezone: 'UTC' },
         params: { name: 'trade' },
       } as unknown as Request
       const r = res()
       await updateBase(d)(req, r as unknown as Response)
 
-      // Verify ran against the DECRYPTED stored password, not a blank.
-      expect(verifyConnectivity).toHaveBeenCalledWith(expect.objectContaining({ password: 'stored-pw' }))
-      // Descriptor updated…
-      expect((await d.baseRepo.get('trade'))?.baseUrl).toBe('http://1c/odata2')
+      // Verify ran against the DECRYPTED stored password + the base's OWN stored pair.
+      expect(verifyConnectivity).toHaveBeenCalledWith(
+        expect.objectContaining({ baseUrl: 'http://1c/odata', login: 'u', password: 'stored-pw' }),
+      )
+      // Descriptor updated (timezone)…
+      expect((await d.baseRepo.get('trade'))?.serverTimezone).toBe('UTC')
       // …and the stored secret is unchanged (blank field must NOT wipe it).
       const sealed = await d.secretRepo.get('trade')
       expect(sealed).not.toBeNull()
       if (sealed) expect(decrypt(keyring, 'trade', sealed)).toBe('stored-pw')
       expect(d.sharedPool.refresh).toHaveBeenCalledWith('trade')
+    })
+
+    it('rejects a blank-password edit that CHANGES the URL — no persist, no exfil (C1)', async () => {
+      const d = deps(handle, keyring)
+      await d.baseRepo.upsert('prod', { baseUrl: 'https://prod/odata', login: 'u', serverTimezone: 'Europe/Moscow' })
+      await d.secretRepo.put('prod', encrypt(keyring, 'prod', 'prod-secret'))
+      vi.mocked(verifyConnectivity).mockResolvedValue()
+
+      const req = {
+        // Changed URL to an attacker host, blank password — must be refused.
+        body: { baseUrl: 'https://attacker.example/', login: 'u', password: '', serverTimezone: 'Europe/Moscow' },
+        params: { name: 'prod' },
+      } as unknown as Request
+      const r = res()
+      await updateBase(d)(req, r as unknown as Response)
+
+      expect(verifyConnectivity).not.toHaveBeenCalled() // stored secret never sent to the changed URL
+      expect(r.body).toContain('Re-enter the password')
+      expect((await d.baseRepo.get('prod'))?.baseUrl).toBe('https://prod/odata') // NOT persisted
+    })
+
+    it('strips embedded userinfo from the persisted base URL (codex-1)', async () => {
+      vi.mocked(verifyConnectivity).mockResolvedValue()
+      const d = deps(handle, keyring)
+      const req = {
+        body: {
+          name: 'creds',
+          baseUrl: 'https://u:p@1c/odata',
+          login: 'u',
+          password: 'typed',
+          serverTimezone: 'Europe/Moscow',
+        },
+      } as unknown as Request
+      const r = res()
+      await createBase(d)(req, r as unknown as Response)
+      const stored = await d.baseRepo.get('creds')
+      // The base password must never land in base_url — userinfo is stripped.
+      expect(stored?.baseUrl).not.toContain('@')
+      expect(stored?.baseUrl).toContain('1c/odata')
     })
 
     it('a verify failure on edit renders an OOB error (visible on the edit form)', async () => {

@@ -191,7 +191,9 @@ export function buildProgram(): Command {
       const allowedHosts = resolveAllowedHosts(process.env, opts.host, port, publicUrl)
       let auth: NonNullable<Parameters<typeof createHttpServer>[0]['auth']> | undefined
       if (publicUrl !== undefined && publicUrl !== '') {
-        const secret = process.env.BETTER_AUTH_SECRET ?? process.env.AUTH_SECRET
+        // `||` not `??`: an empty-string BETTER_AUTH_SECRET (e.g. `${VAR}` with the
+        // host var unset) must fall through to AUTH_SECRET, not shadow it.
+        const secret = process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET
         if (secret === undefined || secret === '') {
           throw new Error('BETTER_AUTH_SECRET is required when --public-url enables auth')
         }
@@ -199,9 +201,21 @@ export function buildProgram(): Command {
         // switch from the file source to DB-backed, per-user-scoped bases. Absent
         // → auth without tenancy (Slice-2 file source).
         const keyring = resolveKeyring(process.env, opts)
+        const dialect = resolveDialect(process.env, opts)
+        // Tenancy stores admins, grants, and AES-GCM-encrypted 1С secrets in this
+        // DB. An in-memory pglite (no --pg-url/DATABASE_URL, no --auth-data-dir) is
+        // wiped on every restart — silently losing them AND reopening /setup on the
+        // public URL. Refuse it, mirroring the admin-create/set-password guards.
+        if (keyring !== undefined && dialect.kind === 'pglite' && dialect.dataDir === undefined) {
+          throw new Error(
+            'Multi-tenancy (--enc-key / ONEC_MCP_ENC_KEY) needs a PERSISTENT auth store, else every ' +
+              'restart wipes admins + encrypted base secrets and reopens /setup. ' +
+              'Set --pg-url / DATABASE_URL, or --auth-data-dir / ONEC_MCP_AUTH_DATA_DIR.',
+          )
+        }
         auth = {
           publicUrl,
-          dialect: resolveDialect(process.env, opts),
+          dialect,
           secret,
           ...(keyring !== undefined ? { keyring } : {}),
         }
@@ -261,7 +275,8 @@ export function buildProgram(): Command {
       if (publicUrl === undefined || publicUrl === '') {
         throw new Error('--public-url (or ONEC_MCP_PUBLIC_URL) is required')
       }
-      const secret = process.env.BETTER_AUTH_SECRET ?? process.env.AUTH_SECRET
+      // `||` not `??`: an empty-string BETTER_AUTH_SECRET must fall through to AUTH_SECRET.
+      const secret = process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET
       if (secret === undefined || secret === '') {
         throw new Error('BETTER_AUTH_SECRET is required')
       }
@@ -307,7 +322,8 @@ export function buildProgram(): Command {
       if (publicUrl === undefined || publicUrl === '') {
         throw new Error('--public-url (or ONEC_MCP_PUBLIC_URL) is required')
       }
-      const secret = process.env.BETTER_AUTH_SECRET ?? process.env.AUTH_SECRET
+      // `||` not `??`: an empty-string BETTER_AUTH_SECRET must fall through to AUTH_SECRET.
+      const secret = process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET
       if (secret === undefined || secret === '') {
         throw new Error('BETTER_AUTH_SECRET is required')
       }

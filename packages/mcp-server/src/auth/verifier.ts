@@ -13,6 +13,9 @@ export interface JwtVerifierOptions {
   algorithms?: string[]
 }
 
+/** Fail a hung AS-metadata fetch fast rather than hanging bearer checks (~undici 300s default). */
+const AS_METADATA_TIMEOUT_MS = 5_000
+
 interface AsMetadata {
   issuer: string
   jwks_uri: string
@@ -33,7 +36,14 @@ function makeJwksProvider(issuer: string): () => Promise<JwksResolver> {
       cached = (async () => {
         const base = issuer.replace(/\/+$/, '')
         const metadataUrl = `${base}/.well-known/oauth-authorization-server`
-        const res = await fetch(metadataUrl, { headers: { accept: 'application/json' } })
+        // Bound the metadata fetch (jose bounds the JWKS fetch, but this one is
+        // ours): a hung AS-metadata endpoint must fail fast — the promise is cached
+        // and shared, so without a timeout every concurrent bearer check would hang
+        // on it for undici's ~300s default instead of surfacing a prompt 500.
+        const res = await fetch(metadataUrl, {
+          headers: { accept: 'application/json' },
+          signal: AbortSignal.timeout(AS_METADATA_TIMEOUT_MS),
+        })
         if (!res.ok) {
           throw new Error(`Failed to fetch AS metadata (${res.status} ${res.statusText}) from ${metadataUrl}`)
         }

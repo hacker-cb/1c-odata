@@ -37,11 +37,37 @@ export function resolveCanonicalUrls(publicUrl: string): CanonicalUrls {
         `(e.g. https://mcp.example.com). Set --public-url or ONEC_MCP_PUBLIC_URL.`,
     )
   }
-  const authBaseUrl = `${base}/api/auth`
+  // Must be a BARE origin: every derived URL is origin-rooted (`/api/auth`, `/mcp`,
+  // `/.well-known/…`) and the Express routes mount at the root. A path/query/hash
+  // (e.g. https://host/mcp) would silently mangle `iss`/`aud` into https://host/mcp/api/auth.
+  let parsed: URL
+  try {
+    parsed = new URL(base)
+  } catch {
+    throw new Error(`Invalid public URL ${JSON.stringify(publicUrl)}: not a valid URL.`)
+  }
+  if (
+    (parsed.pathname !== '' && parsed.pathname !== '/') ||
+    parsed.search !== '' ||
+    parsed.hash !== '' ||
+    parsed.username !== '' ||
+    parsed.password !== ''
+  ) {
+    throw new Error(
+      `Invalid public URL ${JSON.stringify(publicUrl)}: expected a bare origin without a path/query/fragment/userinfo ` +
+        `(e.g. https://mcp.example.com) — the server mounts /mcp and /api/auth at the origin root.`,
+    )
+  }
+  // Derive from parsed.origin, NOT the raw `base`: `new URL` normalizes a bare `?`
+  // or `#` away from search/hash (so the guard above passes them), yet they survive
+  // in the raw string and would mangle `${base}/api/auth` into `…/?/api/auth`.
+  // The origin is the canonical scheme://host[:port] with any such tail dropped.
+  const origin = parsed.origin
+  const authBaseUrl = `${origin}/api/auth`
   return {
-    publicUrl: base,
+    publicUrl: origin,
     authBaseUrl,
     issuer: authBaseUrl,
-    mcpResourceUrl: `${base}/mcp`,
+    mcpResourceUrl: `${origin}/mcp`,
   }
 }
