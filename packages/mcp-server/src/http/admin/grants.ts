@@ -65,9 +65,14 @@ export async function toggleGrant(req: Request, res: Response, deps: AdminDeps):
     // written) and toast "reload", instead of a generic 500 that leaves the box
     // looking applied. A revoke can't hit this (a DELETE of an already-cascaded row
     // is a no-op), so only the grant path lands here.
+    //
+    // 200, like the last-admin snap-back in users.ts: when the body IS server truth
+    // for the request's own target, it must swap. (4xx would swap too — shell.ts
+    // overrides htmx's responseHandling to make error bodies swappable — but the
+    // status carries no meaning htmx acts on here, and matching the existing idiom
+    // keeps this independent of that config.)
     if (!isForeignKeyViolation(err)) throw err
     res
-      .status(404)
       .type('html')
       .send(
         render('_grant_cell', { sub, base, granted: false, scope }) +
