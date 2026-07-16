@@ -24,10 +24,10 @@ export const DEFAULT_SESSION_IDLE_MS = 30 * 60_000
 export const DEFAULT_SWEEP_INTERVAL_MS = 60_000
 
 /** The only transport surface the registry drives — the SDK transport satisfies it (the default type param). */
-type ReclaimableTransport = { close(): Promise<void> }
+export type ReclaimableTransport = { close(): Promise<void> }
 
 /** One live session: its transport, the `sub` that opened it, and its last-activity stamp. */
-interface SessionEntry<T extends ReclaimableTransport> {
+export interface SessionEntry<T extends ReclaimableTransport> {
   transport: T
   // `| undefined` (not optional-only): the no-auth path stores `undefined` here
   // deliberately and the per-sub quota treats that principal as exempt.
