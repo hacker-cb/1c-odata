@@ -138,9 +138,9 @@ describe('e2e: createHttpServer (production wiring)', () => {
       source,
       dataDir: '/synthetic',
       auth: { publicUrl, dialect: { kind: 'pglite' }, secret: SECRET }, // no keyring
-      // Move the (always-on) session sweeper off the health job's 60s period so the
-      // `ms === 60_000` filter below uniquely identifies the health-job interval.
-      sessions: { sweepIntervalMs: 45_000 },
+      // Disable the always-on session sweeper so the `ms === 60_000` filter below
+      // uniquely identifies the health-job interval (not the sweeper timer).
+      sessions: { sweepIntervalMs: 0 },
     })
     server.listen(port, '127.0.0.1')
     await new Promise<void>((r) => server.once('listening', r))
@@ -169,9 +169,9 @@ describe('e2e: createHttpServer (production wiring)', () => {
       source,
       dataDir: '/synthetic',
       auth: { publicUrl, dialect: { kind: 'pglite' }, secret: SECRET, keyring },
-      // Move the (always-on) session sweeper off the health job's 60s period so the
-      // `ms === 60_000` filter below uniquely identifies the health-job interval.
-      sessions: { sweepIntervalMs: 45_000 },
+      // Disable the always-on session sweeper so the `ms === 60_000` filter below
+      // uniquely identifies the health-job interval (not the sweeper timer).
+      sessions: { sweepIntervalMs: 0 },
     })
     server.listen(port, '127.0.0.1')
     await new Promise<void>((r) => server.once('listening', r))

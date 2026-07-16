@@ -10,10 +10,14 @@ export const DEFAULT_MAX_SESSIONS = 1024
  */
 export const DEFAULT_MAX_SESSIONS_PER_SUB = 32
 /**
- * A session untouched for longer than this is reaped by the sweeper. Targets the
- * POST-only leak: a client that `initialize`d but never opened a GET stream and
- * never sent DELETE would otherwise linger forever (the SDK's `onclose` fires only
- * on an explicit DELETE). 30 min comfortably outlives normal client think-time.
+ * A session with NO open GET stream, untouched for longer than this, is reaped by
+ * the sweeper. Targets the POST-only leak: a client that `initialize`d but only ever
+ * POSTed (never opened a GET stream, never sent DELETE) would otherwise linger
+ * forever (the SDK's `onclose` fires only on an explicit DELETE). A session that
+ * DOES hold a live GET stream is exempt from idle-reaping ({@link streamOpened}) — a
+ * connected-but-quiet client is not "abandoned"; its socket is reclaimed when the
+ * stream closes (the eager GET `res.on('close')` path in mcp-route.ts). 30 min
+ * comfortably outlives normal client think-time.
  */
 export const DEFAULT_SESSION_IDLE_MS = 30 * 60_000
 /** How often the background sweeper runs. */
@@ -30,6 +34,12 @@ interface SessionEntry<T extends ReclaimableTransport> {
   sub: string | undefined
   /** ms epoch of the last request that touched this session; the sweeper reaps stale ones. */
   lastActivity: number
+  /**
+   * Count of currently-open GET SSE streams for this session (a counter, not a bool,
+   * so a racing second GET that errors can't clear a live first stream's exemption).
+   * While `> 0` the session holds a live connection and the idle sweeper skips it.
+   */
+  openStreams: number
 }
 
 /** Session cap + idle-sweep knobs. Every field defaults (see the DEFAULT_* consts). */
@@ -38,9 +48,14 @@ export interface SessionTuning {
   maxSessions?: number
   /** Per-`sub` concurrent-session cap (the no-auth `undefined` principal is exempt). */
   maxSessionsPerSub?: number
-  /** Reap a session after this many ms of inactivity. */
+  /** Reap a session (with no open GET stream) after this many ms of inactivity. */
   idleMs?: number
-  /** Background sweeper period; `<= 0` disables the timer (sweeps still run on `reserve`). */
+  /**
+   * Background sweeper period. `<= 0` disables the timer — a PROGRAMMATIC escape
+   * hatch (tests); the env layer (`ONEC_MCP_SESSION_SWEEP_MS`) accepts positive ints
+   * only and falls back to the default, so operators cannot disable it this way.
+   * The opportunistic sweep at the head of `reserve` runs regardless.
+   */
   sweepIntervalMs?: number
 }
 
@@ -83,9 +98,12 @@ export interface SessionReservation<T extends ReclaimableTransport> {
  * Idle sessions are reaped two ways: opportunistically at the head of every
  * {@link reserve} (a returning principal whose old sessions went stale reclaims a
  * slot immediately, without waiting for a tick), and by an optional background
- * `unref()` timer ({@link start}/{@link stop}). Reaping is safe because no
- * `eventStore` is configured — sessions are not resumable, so a client whose
- * session was swept simply re-initializes (see the 404 path in mcp-route.ts).
+ * `unref()` timer ({@link start}/{@link stop}). A session that holds a live GET SSE
+ * stream ({@link streamOpened}) is a connected client and is EXEMPT from idle-reaping
+ * — only sessions with no open stream (the POST-only leak) are reaped. Reaping is
+ * safe because no `eventStore` is configured — sessions are not resumable, so a
+ * client whose session was swept simply re-initializes (see the 404 path in
+ * mcp-route.ts).
  */
 export class SessionRegistry<T extends ReclaimableTransport = StreamableHTTPServerTransport> {
   private readonly sessions = new Map<string, SessionEntry<T>>()
@@ -96,7 +114,7 @@ export class SessionRegistry<T extends ReclaimableTransport = StreamableHTTPServ
   private pendingTotal = 0
   private readonly maxSessions: number
   private readonly maxSessionsPerSub: number
-  private readonly idleMs: number
+  private readonly idleMsValue: number
   private readonly sweepIntervalMs: number
   private readonly now: () => number
   private timer: ReturnType<typeof setInterval> | undefined
@@ -104,7 +122,7 @@ export class SessionRegistry<T extends ReclaimableTransport = StreamableHTTPServ
   constructor(opts: SessionRegistryOptions = {}) {
     this.maxSessions = opts.maxSessions ?? DEFAULT_MAX_SESSIONS
     this.maxSessionsPerSub = opts.maxSessionsPerSub ?? DEFAULT_MAX_SESSIONS_PER_SUB
-    this.idleMs = opts.idleMs ?? DEFAULT_SESSION_IDLE_MS
+    this.idleMsValue = opts.idleMs ?? DEFAULT_SESSION_IDLE_MS
     this.sweepIntervalMs = opts.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS
     this.now = opts.now ?? Date.now
   }
@@ -132,7 +150,7 @@ export class SessionRegistry<T extends ReclaimableTransport = StreamableHTTPServ
     let released = false
     return {
       commit: (sid, transport) => {
-        this.sessions.set(sid, { transport, sub, lastActivity: this.now() })
+        this.sessions.set(sid, { transport, sub, lastActivity: this.now(), openStreams: 0 })
         if (sub !== undefined) this.liveBySub.set(sub, (this.liveBySub.get(sub) ?? 0) + 1)
       },
       release: () => {
@@ -167,18 +185,43 @@ export class SessionRegistry<T extends ReclaimableTransport = StreamableHTTPServ
     if (entry !== undefined) entry.lastActivity = this.now()
   }
 
+  /** The configured idle TTL (ms) — exposed so the GET handler can set a matching socket keepalive. */
+  get idleMs(): number {
+    return this.idleMsValue
+  }
+
   /**
-   * Reap every session idle beyond `idleMs`, returning the count swept. Collects the
-   * stale ids first (so closing — which re-enters `remove` via `onclose` — never
-   * mutates the map mid-iteration), removes each from the map, then fires a
-   * best-effort `transport.close()` whose failure is swallowed (a reap must not
-   * surface an unhandledRejection and crash the multi-tenant process).
+   * Mark that a GET SSE stream opened for this session — it now holds a live
+   * connection and the idle sweeper skips it until the stream closes. Paired with
+   * {@link streamClosed}. A counter (not a flag) so a racing second GET that errors
+   * and closes can't clear a still-live first stream's exemption.
+   */
+  streamOpened(sid: string): void {
+    const entry = this.sessions.get(sid)
+    if (entry !== undefined) entry.openStreams += 1
+  }
+
+  /** Mark that a GET SSE stream closed. Idempotent-safe: never drives the counter below zero. */
+  streamClosed(sid: string): void {
+    const entry = this.sessions.get(sid)
+    if (entry !== undefined && entry.openStreams > 0) entry.openStreams -= 1
+  }
+
+  /**
+   * Reap every session with NO open GET stream that is idle beyond `idleMs`,
+   * returning the count swept. A session holding a live stream (`openStreams > 0`) is
+   * a connected client, not an abandoned one — it is skipped and reclaimed instead
+   * when its stream closes (mcp-route's GET `res.on('close')`). Collects the stale
+   * ids first (so closing — which re-enters `remove` via `onclose` — never mutates
+   * the map mid-iteration), removes each from the map, then fires a best-effort
+   * `transport.close()` whose failure is swallowed (a reap must not surface an
+   * unhandledRejection and crash the multi-tenant process).
    */
   sweepIdle(): number {
-    const cutoff = this.now() - this.idleMs
+    const cutoff = this.now() - this.idleMsValue
     const stale: Array<{ sid: string; transport: T }> = []
     for (const [sid, entry] of this.sessions) {
-      if (entry.lastActivity <= cutoff) stale.push({ sid, transport: entry.transport })
+      if (entry.openStreams === 0 && entry.lastActivity <= cutoff) stale.push({ sid, transport: entry.transport })
     }
     for (const { sid, transport } of stale) {
       this.remove(sid) // drop from map + counter BEFORE close, so onclose's remove is a no-op

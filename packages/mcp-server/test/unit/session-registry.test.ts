@@ -106,6 +106,36 @@ describe('SessionRegistry', () => {
     expect(reg.size).toBe(1)
   })
 
+  it('a session holding an open GET stream is exempt from idle-reaping until the stream closes', () => {
+    let clock = 0
+    const reg = new SessionRegistry<FakeTransport>({ idleMs: 1000, now: () => clock })
+    const t = openSession(reg, 'alice', 's1')
+    reg.streamOpened('s1') // a live SSE stream now backs the session
+    clock = 100000 // far past idle
+    expect(reg.sweepIdle()).toBe(0) // connected client — NOT reaped
+    expect(reg.size).toBe(1)
+    expect(t.closed).toBe(0)
+    // Stream closes → exemption lifted → the now-idle session is reapable.
+    reg.streamClosed('s1')
+    expect(reg.sweepIdle()).toBe(1)
+    expect(reg.size).toBe(0)
+    expect(t.closed).toBe(1)
+  })
+
+  it('streamOpened is a counter — a racing second GET closing keeps the first stream exempt; no underflow', () => {
+    let clock = 0
+    const reg = new SessionRegistry<FakeTransport>({ idleMs: 1000, now: () => clock })
+    openSession(reg, 'alice', 's1')
+    reg.streamOpened('s1') // the real stream
+    reg.streamOpened('s1') // a racing second GET
+    reg.streamClosed('s1') // the racing GET closes
+    clock = 100000
+    expect(reg.sweepIdle()).toBe(0) // still exempt — first stream is live
+    reg.streamClosed('s1') // first stream closes
+    reg.streamClosed('s1') // extra close must not underflow the counter
+    expect(reg.sweepIdle()).toBe(1) // now reapable
+  })
+
   it('reserve() opportunistically reaps stale sessions so a returning principal gets a slot', () => {
     let clock = 0
     const reg = new SessionRegistry<FakeTransport>({ maxSessionsPerSub: 1, idleMs: 1000, now: () => clock })

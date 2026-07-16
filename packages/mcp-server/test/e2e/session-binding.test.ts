@@ -131,6 +131,15 @@ describe('session ↔ sub binding', () => {
     expect(res.status).toBe(404)
   })
 
+  it('a request with NO Mcp-Session-Id header is 400 (missing), distinct from the 404 unknown-id path', async () => {
+    // The slice deliberately splits 400 ("header absent") from 404 ("id present but
+    // unknown"). A header-less DELETE/GET must hit the 400 branch, never 404.
+    const del = await fetch(url, { method: 'DELETE', headers: { accept: ACCEPT, 'x-test-sub': 'alice' } })
+    expect(del.status).toBe(400)
+    const get = await fetch(url, { method: 'GET', headers: { accept: ACCEPT, 'x-test-sub': 'alice' } })
+    expect(get.status).toBe(400)
+  })
+
   it('a terminated (DELETE) session id then 404s — the reclaim → re-init contract', async () => {
     const sid = await openSession('alice')
     // Terminate the session explicitly.

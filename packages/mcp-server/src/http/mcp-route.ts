@@ -191,13 +191,27 @@ export function createMcpRouter(opts: McpRouteOptions): McpRouter {
   router.get('/', async (req: Request, res: Response) => {
     const transport = resolveOwnedSession(req, res)
     if (transport === undefined) return
+    // resolveOwnedSession returns a transport only for a present, known session id,
+    // so the header is a valid string here.
+    const sessionId = req.headers['mcp-session-id'] as string
+    // This GET holds a live SSE connection: mark the session stream-open so the idle
+    // sweeper won't reap a connected-but-quiet client (a client that keeps the stream
+    // open but sends no tool-call for `idleMs` is NOT abandoned). A counter, so a
+    // racing second GET can't clear the first stream's exemption.
+    sessions.streamOpened(sessionId)
+    // TCP keepalive on the SSE socket: our server sends no application-level pings, so
+    // without this a half-open connection (peer vanished, no FIN) would keep the
+    // session stream-open — hence exempt from idle-reaping — forever. Keepalive lets
+    // the OS detect the dead peer (~idleMs later) and fire `close`, which reclaims it.
+    res.socket?.setKeepAlive(true, sessions.idleMs)
     // The GET stream is the session's long-lived SSE channel. The SDK's `onclose`
     // fires ONLY on an explicit `DELETE /` (1.29), so a client that just drops its
-    // socket would otherwise leak its transport + McpServer until the idle sweeper
-    // reaps it. Reclaim the session eagerly when this stream closes. Safe because no
-    // `eventStore` is configured, so sessions are not resumable — a dropped stream
-    // means the client must re-initialize anyway.
+    // socket would otherwise leak its transport + McpServer. Reclaim the session
+    // eagerly when this stream closes. Safe because no `eventStore` is configured, so
+    // sessions are not resumable — a dropped stream means the client must re-initialize.
     res.on('close', () => {
+      // This stream is no longer open — drop the exemption (idempotent-safe).
+      sessions.streamClosed(sessionId)
       // Reclaim ONLY when this GET actually became the session's SSE stream (200).
       // A second/racing GET on a session that already owns a stream gets an SDK
       // error response (409 Conflict / 406 / …); that error response closing must

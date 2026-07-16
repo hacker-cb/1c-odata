@@ -129,11 +129,13 @@ one tenant from exhausting the process and reclaim abandoned sessions:
 
 - a **per-principal quota** so a single `sub` can't occupy every global slot and 503
   everyone else (the no-auth loopback principal is exempt — one trusted owner), and
-- an **idle sweeper** that reaps sessions untouched beyond a TTL. A client whose
-  session was swept (or that reconnects after a long pause) transparently re-initializes
-  — the server returns `404` for the stale id, the spec's "start a new session" signal
-  (safe because sessions aren't resumable). This also reclaims POST-only sessions that
-  never send `DELETE`.
+- an **idle sweeper** that reaps sessions **with no open SSE stream** left untouched
+  beyond a TTL — reclaiming POST-only sessions that never send `DELETE`. A client
+  holding a live GET stream is a connected client and is exempt (its socket is
+  reclaimed when the stream closes). A client whose session was swept (or that
+  reconnects after a long pause) transparently re-initializes — the server returns
+  `404` for the stale id, the spec's "start a new session" signal (safe because
+  sessions aren't resumable).
 
 | Env var | Default | Meaning |
 |---|---|---|
