@@ -138,13 +138,16 @@ describe('e2e: createHttpServer (production wiring)', () => {
       source,
       dataDir: '/synthetic',
       auth: { publicUrl, dialect: { kind: 'pglite' }, secret: SECRET }, // no keyring
+      // Move the (always-on) session sweeper off the health job's 60s period so the
+      // `ms === 60_000` filter below uniquely identifies the health-job interval.
+      sessions: { sweepIntervalMs: 45_000 },
     })
     server.listen(port, '127.0.0.1')
     await new Promise<void>((r) => server.once('listening', r))
     try {
       const res = await fetch(`${publicUrl}/admin`, { redirect: 'manual' })
       expect(res.status).toBe(404)
-      // The health job (the only setInterval in our source) must not run here.
+      // The health job (tenancy-only) must not run here — its 60s interval is absent.
       const ours = setIntervalSpy.mock.calls.filter(([, ms]) => ms === 60_000)
       expect(ours.length).toBe(0)
     } finally {
@@ -166,6 +169,9 @@ describe('e2e: createHttpServer (production wiring)', () => {
       source,
       dataDir: '/synthetic',
       auth: { publicUrl, dialect: { kind: 'pglite' }, secret: SECRET, keyring },
+      // Move the (always-on) session sweeper off the health job's 60s period so the
+      // `ms === 60_000` filter below uniquely identifies the health-job interval.
+      sessions: { sweepIntervalMs: 45_000 },
     })
     server.listen(port, '127.0.0.1')
     await new Promise<void>((r) => server.once('listening', r))

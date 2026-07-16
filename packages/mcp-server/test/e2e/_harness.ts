@@ -346,7 +346,7 @@ export async function startAppWithAuth(as: AuthHarness): Promise<AppWithAuth> {
   const gateUrls = { ...urls, issuer: as.base, mcpResourceUrl: as.mcpUrl }
   const { authRouter, bearerMiddleware } = createAuthMount({ auth: as.auth, urls: gateUrls })
 
-  const app = createApp({
+  const { app, sessions } = createApp({
     buildServer: () => buildMcpServer(pool, { version: '9.9.9', dataDir: '/synthetic' }),
     auth: { auth: as.auth, urls: gateUrls, authRouter, bearerMiddleware },
   })
@@ -357,6 +357,7 @@ export async function startAppWithAuth(as: AuthHarness): Promise<AppWithAuth> {
     appBase: appPublicUrl,
     mcpUrl: as.mcpUrl,
     async close() {
+      sessions.stop()
       await new Promise<void>((r) => server.close(() => r()))
       await new Promise<void>((r) => upstream.server.close(() => r()))
     },

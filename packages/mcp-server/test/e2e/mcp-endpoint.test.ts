@@ -58,6 +58,7 @@ describe('e2e: MCP over Express /mcp', () => {
   let httpServer: Server
   let upstream: Server
   let baseUrl: URL
+  let stopSessions: () => void
 
   beforeEach(async () => {
     const up = await startUpstream()
@@ -77,9 +78,10 @@ describe('e2e: MCP over Express /mcp', () => {
       },
     }
     const pool = new ConnectionPool(source)
-    const app = createApp({
+    const { app, sessions } = createApp({
       buildServer: () => buildMcpServer(pool, { version: '9.9.9', dataDir: '/synthetic' }),
     })
+    stopSessions = () => sessions.stop()
     httpServer = app.listen(0)
     await new Promise<void>((r) => httpServer.once('listening', r))
     const { port } = httpServer.address() as AddressInfo
@@ -87,6 +89,7 @@ describe('e2e: MCP over Express /mcp', () => {
   })
 
   afterEach(async () => {
+    stopSessions()
     await new Promise<void>((r) => httpServer.close(() => r()))
     await new Promise<void>((r) => upstream.close(() => r()))
   })
@@ -131,7 +134,7 @@ describe('e2e: DNS-rebinding protection', () => {
       },
     }
     const pool = new ConnectionPool(source)
-    const app = createApp({
+    const { app, sessions } = createApp({
       buildServer: () => buildMcpServer(pool, { version: '9.9.9', dataDir: '/synthetic' }),
       // Allowlist deliberately EXCLUDES the loopback host the request will carry.
       allowedHosts: ['allowed.example:1234'],
@@ -154,6 +157,7 @@ describe('e2e: DNS-rebinding protection', () => {
       expect(res.status).toBeGreaterThanOrEqual(400)
       expect(res.headers.get('mcp-session-id')).toBeNull()
     } finally {
+      sessions.stop()
       await new Promise<void>((r) => server.close(() => r()))
     }
   })

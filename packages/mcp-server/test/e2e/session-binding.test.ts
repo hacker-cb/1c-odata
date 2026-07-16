@@ -39,7 +39,7 @@ const ACCEPT = 'application/json, text/event-stream'
  * `x-test-sub` header (mirrors how requireBearerAuth sets req.auth from the JWT's
  * verifier output), so flipping the header between requests switches principals.
  */
-function startApp(): Promise<{ server: Server; url: string }> {
+function startApp(): Promise<{ server: Server; url: string; stop: () => void }> {
   const app = express()
   app.use('/mcp', (req, _res, next) => {
     const sub = req.headers['x-test-sub']
@@ -49,17 +49,15 @@ function startApp(): Promise<{ server: Server; url: string }> {
     next()
   })
   app.use(express.json())
-  app.use(
-    '/mcp',
-    createMcpRouter({
-      buildServer: () => buildMcpServer(emptyPool, { version: 't', dataDir: '/tmp' }),
-    }),
-  )
+  const mcp = createMcpRouter({
+    buildServer: () => buildMcpServer(emptyPool, { version: 't', dataDir: '/tmp' }),
+  })
+  app.use('/mcp', mcp.router)
   const server = app.listen(0, '127.0.0.1')
   return new Promise((resolve) =>
     server.once('listening', () => {
       const { port } = server.address() as AddressInfo
-      resolve({ server, url: `http://127.0.0.1:${port}/mcp` })
+      resolve({ server, url: `http://127.0.0.1:${port}/mcp`, stop: () => mcp.sessions.stop() })
     }),
   )
 }
@@ -67,12 +65,14 @@ function startApp(): Promise<{ server: Server; url: string }> {
 describe('session ↔ sub binding', () => {
   let server: Server
   let url: string
+  let stop: () => void
 
   beforeEach(async () => {
-    ;({ server, url } = await startApp())
+    ;({ server, url, stop } = await startApp())
   })
 
   afterEach(async () => {
+    stop()
     await new Promise<void>((r) => server.close(() => r()))
   })
 
@@ -114,7 +114,10 @@ describe('session ↔ sub binding', () => {
     expect(ok.status).toBe(200)
   })
 
-  it('an unknown session id is 400 (before any ownership check)', async () => {
+  it('an unknown session id is 404 so the client re-initializes (before any ownership check)', async () => {
+    // A present-but-unknown Mcp-Session-Id (swept idle session, or a post-DELETE id)
+    // MUST be 404 per the Streamable-HTTP spec — the client then transparently opens
+    // a fresh session. 400 is reserved for a request MISSING the header entirely.
     const res = await fetch(url, {
       method: 'POST',
       headers: {
@@ -125,6 +128,23 @@ describe('session ↔ sub binding', () => {
       },
       body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
     })
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(404)
+  })
+
+  it('a terminated (DELETE) session id then 404s — the reclaim → re-init contract', async () => {
+    const sid = await openSession('alice')
+    // Terminate the session explicitly.
+    const del = await fetch(url, {
+      method: 'DELETE',
+      headers: { accept: ACCEPT, 'mcp-session-id': sid, 'x-test-sub': 'alice' },
+    })
+    expect(del.status).toBeLessThan(300)
+    // Its id is now unknown → 404 (not 403/400), so the owner re-initializes cleanly.
+    const after = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: ACCEPT, 'mcp-session-id': sid, 'x-test-sub': 'alice' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list', params: {} }),
+    })
+    expect(after.status).toBe(404)
   })
 })

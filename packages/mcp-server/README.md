@@ -123,6 +123,25 @@ timeout. Both knobs are tunable via process-wide env:
 | `ONEC_MCP_HEALTH_INTERVAL_MS` | `60000` | Background probe interval (ms). |
 | `ONEC_MCP_HEALTH_TIMEOUT_MS` | `5000` | Per-base probe timeout (ms). |
 
+**Session limits.** Each MCP client `initialize` opens a live session (its own
+`McpServer` + transport, dispatched by the `Mcp-Session-Id` header). Two guards keep
+one tenant from exhausting the process and reclaim abandoned sessions:
+
+- a **per-principal quota** so a single `sub` can't occupy every global slot and 503
+  everyone else (the no-auth loopback principal is exempt — one trusted owner), and
+- an **idle sweeper** that reaps sessions untouched beyond a TTL. A client whose
+  session was swept (or that reconnects after a long pause) transparently re-initializes
+  — the server returns `404` for the stale id, the spec's "start a new session" signal
+  (safe because sessions aren't resumable). This also reclaims POST-only sessions that
+  never send `DELETE`.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `ONEC_MCP_MAX_SESSIONS` | `1024` | Global concurrent-session ceiling (all principals). |
+| `ONEC_MCP_MAX_SESSIONS_PER_SUB` | `32` | Per-principal concurrent-session quota. |
+| `ONEC_MCP_SESSION_IDLE_MS` | `1800000` | Reap a session after this much inactivity (30 min). |
+| `ONEC_MCP_SESSION_SWEEP_MS` | `60000` | Idle-sweeper period (ms). |
+
 For a turnkey self-hosted stack (server + Postgres + Caddy auto-HTTPS) see
 [`deploy/README.md`](./deploy/README.md) — `docker compose up` from `.env`.
 
