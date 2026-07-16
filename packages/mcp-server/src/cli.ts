@@ -299,9 +299,15 @@ export function buildProgram(): Command {
         await runAuthMigrations(dbHandle)
         // Bootstrap-only by contract (the README calls this the CLI equivalent of the
         // one-time /setup wizard, which self-closes once an admin exists). This call
-        // bypasses every session check, so without a gate a repeat run — or two racing
-        // ones — would silently mint extra admins. The sanctioned way to add an admin
-        // afterwards is the /admin panel: an existing admin promotes a user.
+        // bypasses every session check, so without a gate a repeat run would silently
+        // mint extra admins. The sanctioned way to add an admin afterwards is the
+        // /admin panel: an existing admin promotes a user.
+        //
+        // Scope: this is check-then-act, so it closes the REPEAT-RUN case, not two
+        // invocations racing against one empty Postgres — both would read 0 and both
+        // create. Preventing that needs DB-level serialization (advisory lock, or a
+        // consume-once sentinel like the /setup token); an operator running the
+        // bootstrap command twice at once is not the case this guard is aimed at.
         if (opts.force !== true && (await countAdmins(dbHandle.db)) > 0) {
           throw new Error(
             'An administrator already exists — admin-create is for the initial bootstrap only. ' +

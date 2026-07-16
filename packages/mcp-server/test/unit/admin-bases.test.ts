@@ -403,10 +403,23 @@ describe('admin base CRUD', () => {
   describe('cloud-metadata targets are refused (SSRF)', () => {
     // An authenticated admin must not be able to aim the probe at an instance
     // metadata endpoint: those answer unauthenticated and hand out cloud creds.
+    // Every SPELLING of a listed address must be refused, not just the canonical one:
+    // the WHATWG parser folds some variants for us (decimal/octal IPv4, an IPv4
+    // trailing dot, IPv6 zero-expansion), but a v4-mapped literal and a DNS root label
+    // survive parsing and still reach the same endpoint.
     it.each([
       ['AWS/Azure/GCP IMDS', 'http://169.254.169.254/latest/meta-data/'],
+      ['IMDS as decimal IPv4', 'http://2852039166/latest/meta-data/'],
+      ['IMDS as octal IPv4', 'http://0251.0376.0251.0376/latest/meta-data/'],
+      ['IMDS with an IPv4 trailing dot', 'http://169.254.169.254./latest/meta-data/'],
+      ['IMDS as an IPv4-mapped IPv6 literal', 'http://[::ffff:169.254.169.254]/latest/meta-data/'],
+      ['IMDS as a v4-mapped IPv6 in hex', 'http://[::ffff:a9fe:a9fe]/latest/meta-data/'],
       ['AWS IMDS over IPv6', 'http://[fd00:ec2::254]/latest/meta-data/'],
+      ['AWS IMDS over IPv6, zero-expanded', 'http://[fd00:ec2:0:0:0:0:0:254]/latest/meta-data/'],
       ['GCP metadata host', 'http://metadata.google.internal/computeMetadata/v1/'],
+      ['GCP metadata host, uppercased', 'http://METADATA.GOOGLE.INTERNAL/computeMetadata/v1/'],
+      ['GCP metadata host with a root label', 'http://metadata.google.internal./computeMetadata/v1/'],
+      ['GCP short alias', 'http://metadata/computeMetadata/v1/'],
     ])('createBase refuses %s — never probes, never persists', async (_label, baseUrl) => {
       const d = deps(handle, keyring)
       const req = {

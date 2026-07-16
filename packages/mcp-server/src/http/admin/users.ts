@@ -67,20 +67,24 @@ type Guard = { ok: true; target: UserRow } | { ok: false; status: number; messag
  * by a write, two separate round-trips — so two concurrent admins can both read `2`,
  * both pass the gate, and both commit, leaving ZERO sign-in-capable admins (a
  * permanent lockout). Chaining them through one in-process promise makes read+write
- * atomic for this process, which is exactly the "one writer assumed" model the rest
- * of the server is built on (CLAUDE.md; pglite is single-process).
+ * atomic within this process.
  *
- * LIMIT: process-local. A multi-replica Postgres deployment would need a DB-level
- * lock (`SELECT … FOR UPDATE` / advisory lock) — out of scope here.
+ * LIMIT: process-local, and therefore only as strong as the single-writer deployment
+ * it assumes — the same assumption the health job already documents for its sweep.
+ * It closes the realistic race (two admins clicking in one server), NOT a
+ * multi-replica Postgres one, which would need a DB-level lock (`SELECT … FOR
+ * UPDATE` / advisory lock).
  */
-let adminMutations: Promise<unknown> = Promise.resolve()
+let adminMutations: Promise<void> = Promise.resolve()
 
 function withAdminLock<T>(fn: () => Promise<T>): Promise<T> {
-  // `.then(fn, fn)` — run once the previous holder SETTLES, success or failure, so a
-  // rejected mutation can never wedge the chain.
-  const run = adminMutations.then(fn, fn)
-  // Park a never-rejecting link: `run`'s rejection belongs to the caller, and an
-  // unhandled one here would surface as an unhandledRejection.
+  // `adminMutations` is kept never-rejecting by the parked link below, so a plain
+  // `.then(fn)` always runs the next holder — no onRejected branch needed.
+  const run = adminMutations.then(fn)
+  // Park a link that swallows this run's outcome. It does two jobs: keeps the chain
+  // never-rejecting (a failed mutation must not wedge the next one), and stops
+  // `run`'s rejection — which belongs to the caller below — from ALSO surfacing here
+  // as an unhandledRejection.
   adminMutations = run.then(
     () => undefined,
     () => undefined,

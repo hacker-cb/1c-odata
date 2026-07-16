@@ -109,27 +109,57 @@ const METADATA_HOSTS = new Set([
   '169.254.169.254', // AWS IMDS / Azure IMDS / GCP / OpenStack / Oracle
   'fd00:ec2::254', // AWS IMDS over IPv6
   'metadata.google.internal', // GCP
+  'metadata', // GCP's documented short alias (resolves via the GCE search domain)
 ])
+
+/** An IPv4-mapped IPv6 host as the WHATWG parser serializes it: `::ffff:a9fe:a9fe`. */
+const V4_MAPPED_HEX = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/
+/** The dotted spelling of the same, in case a host reaches us un-normalized: `::ffff:169.254.169.254`. */
+const V4_MAPPED_DOTTED = /^::ffff:((?:\d{1,3}\.){3}\d{1,3})$/
+
+/**
+ * The URL host reduced to ONE spelling per address, so a single denylist entry can
+ * match every way of writing it. The WHATWG parser already folds most variants for
+ * us — decimal/octal IPv4 (`http://2852039166/`), an IPv4 trailing dot, IPv6
+ * zero-expansion, and case — but two survive and are handled here:
+ *   - a DNS name's root label (`metadata.google.internal.`), which the parser keeps, and
+ *   - an IPv4-mapped IPv6 literal (`[::ffff:169.254.169.254]` → `::ffff:a9fe:a9fe`),
+ *     which the kernel routes to the plain IPv4 address, so it must fold to it here.
+ */
+function canonicalHost(url: string): string | undefined {
+  let host: string
+  try {
+    // `hostname` keeps IPv6 in brackets — strip them so a literal can match.
+    host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  } catch {
+    return undefined // unparseable — the connectivity probe reports it far better
+  }
+  host = host.replace(/\.$/, '') // drop the DNS root label
+  const hex = V4_MAPPED_HEX.exec(host)
+  if (hex?.[1] !== undefined && hex[2] !== undefined) {
+    const hi = Number.parseInt(hex[1], 16)
+    const lo = Number.parseInt(hex[2], 16)
+    return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`
+  }
+  const dotted = V4_MAPPED_DOTTED.exec(host)
+  return dotted?.[1] ?? host
+}
 
 /**
  * Reject a probe aimed at a cloud-metadata endpoint, returning the refusal message
  * (or undefined when the target is fine). Applied to the RESOLVED credential's URL,
  * so it covers both a caller-typed URL and a reused stored one.
  *
- * Not SSRF-proof by design: a host that merely RESOLVES to a metadata IP is not
- * caught (that would need DNS resolution + a rebinding-safe re-check on connect).
- * The caller here is an authenticated admin who can already read the store, so this
- * is defence-in-depth against misconfiguration and casual abuse, not a hard boundary.
+ * Not SSRF-proof by design: a host that merely RESOLVES to a metadata IP (a DNS name
+ * an admin controls) is not caught — that would need resolution plus a
+ * rebinding-safe re-check at connect time. The caller is an authenticated admin who
+ * can already read the store, so this is defence-in-depth against misconfiguration
+ * and casual abuse, not a hard boundary. What it does guarantee is that every
+ * *spelling* of a listed address is refused, not just the canonical one.
  */
 function blockedProbeTarget(url: string): string | undefined {
-  let host: string
-  try {
-    // `hostname` keeps IPv6 in brackets — strip them so the literal matches the set.
-    host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  } catch {
-    return undefined // unparseable — the connectivity probe reports it far better
-  }
-  return METADATA_HOSTS.has(host)
+  const host = canonicalHost(url)
+  return host !== undefined && METADATA_HOSTS.has(host)
     ? `Refusing to probe ${host} — cloud instance-metadata endpoints are not valid 1С bases.`
     : undefined
 }
@@ -225,9 +255,10 @@ async function verifyBeforeSave(
   if ('error' in cred) {
     return cred.error === 'Password required.' ? 'Password required to verify before saving.' : cred.error
   }
-  // Refuse a cloud-metadata target BEFORE the probe. Because saving always verifies
-  // first, this also keeps such a URL out of the store — so the health job and the
-  // MCP query path can never be pointed at one either.
+  // Refuse a cloud-metadata target BEFORE the probe. Saving always verifies first,
+  // so this also keeps such a URL from entering the store THROUGH THE PANEL — but it
+  // is not retroactive: a row written out-of-band (direct SQL) or before this guard
+  // existed is still probed by the health job on its interval.
   const blocked = blockedProbeTarget(cred.baseUrl)
   if (blocked !== undefined) return blocked
   try {
@@ -280,13 +311,11 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
   // submits `shape`, so building the descriptor without it would upsert `shape: null`
   // and silently drop an override set out-of-band (SQL / import). A CREATE has no
   // prior row, hence no shape to preserve.
-  const existingShape = editName !== undefined ? (await deps.baseRepo.get(name))?.shape : undefined
   const descriptor: StoredConnection = {
     baseUrl: cleanBaseUrl,
     login,
     serverTimezone,
     ...(label !== '' ? { label } : {}),
-    ...(existingShape !== undefined ? { shape: existingShape } : {}),
   }
   try {
     await deps.db.transaction(async (tx) => {
@@ -296,7 +325,16 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
       const txDb = tx as unknown as typeof deps.db
       const baseRepo = new BaseRepo(txDb)
       if (editName !== undefined) {
-        await baseRepo.upsert(name, descriptor)
+        // Carry an existing DataShape override across the edit: the form never renders
+        // or submits `shape`, so upserting the form's descriptor alone would write
+        // shape:null and silently drop an override set out-of-band (SQL / import).
+        // Read it INSIDE the transaction so a concurrent write can't be lost between
+        // the read and this upsert. A CREATE has no prior row, hence nothing to carry.
+        const existingShape = (await baseRepo.get(name))?.shape
+        await baseRepo.upsert(name, {
+          ...descriptor,
+          ...(existingShape !== undefined ? { shape: existingShape } : {}),
+        })
       } else if (!(await baseRepo.create(name, descriptor))) {
         // Concurrent create won the race after our pre-check — roll back rather
         // than overwrite (the atomic enforcement of the invariant above).
