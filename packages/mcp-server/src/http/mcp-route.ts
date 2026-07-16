@@ -192,6 +192,11 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
     // configured, so sessions are not resumable — a dropped stream means the
     // client must re-initialize anyway.
     res.on('close', () => {
+      // Reclaim ONLY when this GET actually became the session's SSE stream (200).
+      // A second/racing GET on a session that already owns a stream gets an SDK
+      // error response (409 Conflict / 406 / …); that error response closing must
+      // NOT tear down the still-live first stream and delete the session.
+      if (res.statusCode !== 200) return
       // Fire-and-forget reclaim: swallow any close failure — an async rejection OR
       // a sync throw — so it can't become an unhandledRejection/uncaughtException
       // and crash the process (same hardening as the failed-init path above).

@@ -50,6 +50,18 @@ describe('crypto', () => {
     expect(() => decrypt(kr, 'Trade', sealed)).toThrow(DecryptionError)
   })
 
+  it('collapses a malformed-LENGTH nonce/tag to DecryptionError, not a raw crypto error (C4: no oracle)', () => {
+    const kr = keyringFrom(KEY_A)
+    // A truncated tag/nonce (corruption or a tampered DB column) makes setAuthTag /
+    // createDecipheriv throw a generic TypeError — it must be collapsed to the same
+    // coarse DecryptionError as a wrong-value tag, so the two are indistinguishable
+    // (no oracle) and no raw crypto message leaks.
+    const shortTag = { ...encrypt(kr, 'Trade', 'secret'), tag: Buffer.alloc(8) }
+    expect(() => decrypt(kr, 'Trade', shortTag)).toThrow(DecryptionError)
+    const shortNonce = { ...encrypt(kr, 'Trade', 'secret'), nonce: Buffer.alloc(0) }
+    expect(() => decrypt(kr, 'Trade', shortNonce)).toThrow(DecryptionError)
+  })
+
   it('the coarse DecryptionError leaks no plaintext or key material', () => {
     const kr = keyringFrom(KEY_A)
     const sealed = encrypt(kr, 'Trade', 'super-secret-value')

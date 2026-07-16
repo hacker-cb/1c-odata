@@ -76,20 +76,66 @@ async function storedPassword(deps: AdminDeps, name: string): Promise<string> {
   }
 }
 
+/**
+ * Drop any embedded `user:pass@` before persisting a base URL. A base password
+ * belongs in the sealed secret, never in the stored `base_url` — a userinfo URL
+ * would both leak the password (list view / list_connections) and be rejected by
+ * ConnectionPool. Mirrors verifyConnectivity's internal stripping.
+ */
+function stripUserinfo(url: string): string {
+  try {
+    const u = new URL(url)
+    if (u.username === '' && u.password === '') return url
+    u.username = ''
+    u.password = ''
+    return u.toString()
+  } catch {
+    return url // not parseable — leave as-is; name/url validation elsewhere handles it
+  }
+}
+
+type ProbeCredential = { baseUrl: string; login: string; password: string }
+
+/**
+ * Resolve the (baseUrl, login, password) to probe. A typed password always
+ * verifies against the request-supplied pair. A BLANK password reuses the base's
+ * stored secret ONLY when the request's baseUrl+login still match the stored
+ * descriptor — so a reused secret can never be sent to a caller-changed target,
+ * which would exfiltrate a credential the panel is designed never to reveal.
+ * Changing the URL/login therefore requires re-entering the password.
+ */
+async function resolveProbeCredential(
+  deps: AdminDeps,
+  name: string,
+  reqBaseUrl: string,
+  reqLogin: string,
+  reqPassword: string,
+): Promise<ProbeCredential | { error: string }> {
+  if (reqPassword !== '') return { baseUrl: reqBaseUrl, login: reqLogin, password: reqPassword }
+  if (name === '') return { error: 'Password required.' }
+  const stored = await deps.baseRepo.get(name)
+  const secret = await storedPassword(deps, name)
+  if (stored === undefined || secret === '') return { error: 'Password required.' }
+  if (reqBaseUrl !== stored.baseUrl || reqLogin !== stored.login) {
+    return { error: 'Re-enter the password to verify a changed URL or login.' }
+  }
+  // Reuse the stored secret against the base's OWN stored pair — never the request's.
+  return { baseUrl: stored.baseUrl, login: stored.login, password: secret }
+}
+
 /** POST /admin/bases/verify — probe only, no persistence. */
 export async function verifyBase(req: Request, res: Response, deps: AdminDeps): Promise<void> {
   const baseUrl = String(req.body.baseUrl ?? '').trim()
   const login = String(req.body.login ?? '').trim()
-  let password = String(req.body.password ?? '')
-  if (password === '' && typeof req.body.name === 'string' && req.body.name !== '') {
-    password = await storedPassword(deps, String(req.body.name))
-  }
-  if (password === '') {
-    partial(res, '_verify_result', { ok: false, error: 'password required' })
+  const reqPassword = String(req.body.password ?? '')
+  const name = typeof req.body.name === 'string' ? req.body.name : ''
+  const cred = await resolveProbeCredential(deps, name, baseUrl, login, reqPassword)
+  if ('error' in cred) {
+    partial(res, '_verify_result', { ok: false, error: cred.error })
     return
   }
   try {
-    await verifyConnectivity({ baseUrl, login, password })
+    await verifyConnectivity(cred)
     partial(res, '_verify_result', { ok: true })
   } catch (err) {
     partial(res, '_verify_result', { ok: false, error: redact(err) })
@@ -141,29 +187,31 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
     return
   }
 
-  // Determine the password to verify (and possibly store). On edit with a blank
-  // field, reuse the stored secret so verify runs against the exact live pair.
-  let verifyPassword = password
-  if (verifyPassword === '' && editName !== undefined) {
-    verifyPassword = await storedPassword(deps, name)
-  }
-  if (verifyPassword === '') {
-    reform(res, req.body, 'Password required to verify before saving.', editName)
+  // Determine the credential to verify. A typed password verifies the request
+  // pair; a blank field reuses the stored secret ONLY against the base's own
+  // stored URL+login (never a request-changed target — that would exfiltrate it).
+  const cred = await resolveProbeCredential(deps, name, baseUrl, login, password)
+  if ('error' in cred) {
+    const msg = cred.error === 'Password required.' ? 'Password required to verify before saving.' : cred.error
+    reform(res, req.body, msg, editName)
     return
   }
 
   // VERIFY FIRST — never persist an unverified credential pair.
   try {
-    await verifyConnectivity({ baseUrl, login, password: verifyPassword })
+    await verifyConnectivity(cred)
   } catch (err) {
     reform(res, req.body, `Verification failed: ${redact(err)}`, editName)
     return
   }
 
   // Persist descriptor + (only if a new password was typed) the sealed secret,
-  // atomically. Ordering: base row before secret row (FK).
+  // atomically. Ordering: base row before secret row (FK). Strip any embedded
+  // userinfo so the base password never lands in the stored base_url — and reuse
+  // the SAME stripped value for the success-row render so the DOM matches the DB.
+  const cleanBaseUrl = stripUserinfo(baseUrl)
   const descriptor: StoredConnection = {
-    baseUrl,
+    baseUrl: cleanBaseUrl,
     login,
     serverTimezone,
     ...(label !== '' ? { label } : {}),
@@ -203,7 +251,7 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
   // one, and the edit-with-blank path only passed the verify gate by successfully
   // loading the stored secret above — no extra query needed. health is 'ok': we
   // only reach persistence after verifyConnectivity resolved, and we just seeded it.
-  const base = { name, baseUrl, login, serverTimezone, label, hasSecret: true, health: 'ok' }
+  const base = { name, baseUrl: cleanBaseUrl, login, serverTimezone, label, hasSecret: true, health: 'ok' }
   // On success the drawer closes (OOB) and a toast shows, for BOTH new and edit.
   const chrome = render('_drawer_close') + render('_flash', { kind: 'ok', message: `Base "${name}" saved.` })
   if (editName !== undefined) {

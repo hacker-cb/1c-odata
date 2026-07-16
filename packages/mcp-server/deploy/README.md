@@ -10,7 +10,7 @@ A single-command, self-contained production stack for `@1c-odata/mcp-server`:
 
 ## Prerequisites
 
-- Docker + Docker Compose v2 on the host.
+- Docker + Docker Compose **v2.24+** on the host (the published-image overlay uses the `!reset` merge tag, added in Compose 2.24).
 - A domain (`MCP_PUBLIC_DOMAIN`) with a DNS record pointing at the host, and inbound **80/443** open — Caddy needs both to solve the default ACME (HTTP-01) challenge and serve HTTPS. Serving an **internal-only host** (LAN/VPN clients, no public 80/443) or bringing **your own certificate**? See [TLS certificate options](#tls-certificate-options).
 
 ## 1. Configure

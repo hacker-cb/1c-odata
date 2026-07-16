@@ -4,8 +4,11 @@
  * property: AAD = [FORMAT_VERSION, keyId, utf8(baseName)], so a sealed row is
  * cryptographically bound to its base — an attacker with DB write access cannot
  * move base A's (nonce, ciphertext, tag) into base B's row; decrypt-as-B fails
- * the GCM tag. keyId enables key rotation (decrypt-old / encrypt-current) with no
- * data migration.
+ * the GCM tag. Each sealed row records the `keyId` that sealed it, so the on-disk
+ * format is rotation-ready — but loadKeyring currently loads a SINGLE KEK (there
+ * is no env input for prior keys), so multi-KEK rotation is NOT yet wired: today,
+ * changing the KEK makes existing rows undecryptable. The keyId + `byId` seam is
+ * where future decrypt-old / encrypt-current rotation would plug in.
  */
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 
@@ -36,7 +39,11 @@ export interface Kek {
 export interface Keyring {
   /** KEK used for new encryptions. */
   current: Kek
-  /** Every KEK by id (includes current) — for decrypting historical rows. */
+  /**
+   * KEKs by id — decrypt() selects one by the row's `keyId`. Today loadKeyring
+   * populates this with ONLY the current KEK (rotation is not yet wired); the map
+   * is the seam where historical KEKs would live once it is.
+   */
   byId: ReadonlyMap<number, Kek>
 }
 
@@ -69,6 +76,11 @@ export class DecryptionError extends Error {
  * `ONEC_MCP_ENC_KEY_ID` (default 1) = its id. Throws {@link MissingEncryptionKeyError}
  * at boot if absent or not exactly 32 bytes — a bad KEK must fail, not silently
  * corrupt writes. In prod the raw material comes from a KMS/Vault-injected env var.
+ *
+ * Single-KEK only: `byId` holds just this key, so rotating `ONEC_MCP_ENC_KEY`
+ * (with or without bumping `ONEC_MCP_ENC_KEY_ID`) leaves existing rows — sealed
+ * under the previous key — undecryptable. Real rotation (loading prior KEKs) is
+ * future work; do NOT rotate the key against a store that already holds secrets.
  */
 export function loadKeyring(env: NodeJS.ProcessEnv = process.env): Keyring {
   const raw = env.ONEC_MCP_ENC_KEY?.trim()
@@ -130,10 +142,15 @@ export function decrypt(keyring: Keyring, baseName: string, sealed: SealedSecret
   if (kek === undefined) {
     throw new DecryptionError(`No KEK for key_id ${sealed.keyId}`, baseName)
   }
-  const decipher = createDecipheriv('aes-256-gcm', kek.key, sealed.nonce, { authTagLength: TAG_LEN })
-  decipher.setAAD(aad(sealed.keyId, baseName))
-  decipher.setAuthTag(sealed.tag)
   try {
+    // Inside the try: a malformed-LENGTH nonce or tag (corruption / a tampered
+    // DB column) makes createDecipheriv/setAuthTag throw a generic TypeError, not
+    // a tag-mismatch. Collapsing every such failure to one DecryptionError keeps
+    // the no-oracle contract (a length error must be indistinguishable from a
+    // wrong-key/tampered-bytes error) and never leaks a raw crypto message.
+    const decipher = createDecipheriv('aes-256-gcm', kek.key, sealed.nonce, { authTagLength: TAG_LEN })
+    decipher.setAAD(aad(sealed.keyId, baseName))
+    decipher.setAuthTag(sealed.tag)
     return Buffer.concat([decipher.update(sealed.ciphertext), decipher.final()]).toString('utf8')
   } catch (cause) {
     throw new DecryptionError('Secret authentication failed', baseName, cause)
