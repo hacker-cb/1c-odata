@@ -98,7 +98,9 @@ function stripUserinfo(url: string): string {
  * Cloud instance-metadata endpoints, which a probe must never reach: they answer
  * unauthenticated to anything running on the host and hand out cloud credentials, so
  * an admin pointing a "base" at one turns the probe into an SSRF exfiltration
- * channel. Matched on the URL host verbatim.
+ * channel. Entries are the CANONICAL spelling of each address — {@link canonicalHost}
+ * folds the equivalent spellings onto these before the lookup, so one entry covers
+ * every way of writing its address.
  *
  * Deliberately a POINTED denylist, not an allowlist or a private-range block:
  * admins legitimately host 1С on RFC1918 addresses and internal DNS names, so
