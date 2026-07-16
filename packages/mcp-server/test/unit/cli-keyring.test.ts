@@ -6,13 +6,13 @@
 // ONEC_MCP_ENC_KEYS_PREVIOUS — with the docs telling operators to rotate, that would
 // have stranded every secret sealed under the retired key.
 import { describe, expect, it } from 'vitest'
-import type { ServeOptions } from '../../src/cli.js'
 import { resolveKeyring } from '../../src/cli.js'
 import { decrypt, encrypt, loadKeyring } from '../../src/store/crypto.js'
 
 const KEY_OLD = Buffer.alloc(32, 1).toString('base64')
 const KEY_NEW = Buffer.alloc(32, 2).toString('base64')
-const noOpts = {} as ServeOptions
+/** resolveKeyring's param is a `Pick<ServeOptions, 'encKey'>`, so no cast is needed. */
+const noOpts = {}
 
 describe('resolveKeyring (serve startup)', () => {
   it('is undefined without a key — tenancy stays off', () => {
@@ -53,7 +53,7 @@ describe('resolveKeyring (serve startup)', () => {
         ONEC_MCP_ENC_KEY_ID: '2',
         ONEC_MCP_ENC_KEYS_PREVIOUS: `1:${KEY_OLD}`,
       } as NodeJS.ProcessEnv,
-      { encKey: KEY_NEW } as ServeOptions,
+      { encKey: KEY_NEW },
     )
     expect(kr?.current.key.toString('base64')).toBe(KEY_NEW)
     expect(decrypt(kr!, 'Trade', sealed)).toBe('s')

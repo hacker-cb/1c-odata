@@ -68,7 +68,7 @@ interface AuthContext {
  * tenancy, the Slice-2 file source). `loadKeyring` throws {@link MissingEncryptionKeyError}
  * loudly on a malformed/short key, failing boot rather than corrupting writes.
  */
-export function resolveKeyring(env: NodeJS.ProcessEnv, opts: ServeOptions): Keyring | undefined {
+export function resolveKeyring(env: NodeJS.ProcessEnv, opts: Pick<ServeOptions, 'encKey'>): Keyring | undefined {
   const encKey = opts.encKey ?? env.ONEC_MCP_ENC_KEY
   if (encKey === undefined || encKey === '') return undefined
   // Pass the WHOLE env through and override only the current key (so `--enc-key`
