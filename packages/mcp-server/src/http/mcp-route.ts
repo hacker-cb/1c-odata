@@ -242,6 +242,11 @@ export function createMcpRouter(opts: McpRouteOptions): McpRouter {
       } catch {
         // ignore — best-effort reclaim of a dropped SSE stream
       }
+      // Defensively drop the registry entry too: `transport.close()` is fire-and-
+      // forget here, so if it rejects (or fires `onclose` late) the session — and its
+      // per-sub quota slot — would otherwise linger until the idle sweeper. `remove`
+      // is idempotent, so a later `onclose` is a harmless no-op.
+      sessions.remove(sessionId)
     })
     await transport.handleRequest(req, res)
   })
