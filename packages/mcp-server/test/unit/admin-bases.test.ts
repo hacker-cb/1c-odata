@@ -399,4 +399,77 @@ describe('admin base CRUD', () => {
       expect(r.body).toContain('Verification failed')
     })
   })
+
+  describe('cloud-metadata targets are refused (SSRF)', () => {
+    // An authenticated admin must not be able to aim the probe at an instance
+    // metadata endpoint: those answer unauthenticated and hand out cloud creds.
+    it.each([
+      ['AWS/Azure/GCP IMDS', 'http://169.254.169.254/latest/meta-data/'],
+      ['AWS IMDS over IPv6', 'http://[fd00:ec2::254]/latest/meta-data/'],
+      ['GCP metadata host', 'http://metadata.google.internal/computeMetadata/v1/'],
+    ])('createBase refuses %s — never probes, never persists', async (_label, baseUrl) => {
+      const d = deps(handle, keyring)
+      const req = {
+        body: { name: 'imds', baseUrl, login: 'u', password: 'p', serverTimezone: 'Europe/Moscow' },
+        params: {},
+      } as unknown as Request
+      const r = res()
+      await createBase(d)(req, r as unknown as Response)
+      expect(verifyConnectivity).not.toHaveBeenCalled()
+      expect(await d.baseRepo.get('imds')).toBeUndefined()
+      expect(r.body).toContain('cloud instance-metadata')
+    })
+
+    it('verifyBase refuses a metadata target without probing', async () => {
+      const d = deps(handle, keyring)
+      const req = {
+        body: { baseUrl: 'http://169.254.169.254/', login: 'u', password: 'p' },
+        params: {},
+      } as unknown as Request
+      const r = res()
+      await verifyBase(req, r as unknown as Response, d)
+      expect(verifyConnectivity).not.toHaveBeenCalled()
+      expect(r.body).toContain('cloud instance-metadata')
+    })
+
+    it('an ordinary private-network base is NOT blocked (the denylist is pointed, not a private-range block)', async () => {
+      vi.mocked(verifyConnectivity).mockResolvedValue()
+      const d = deps(handle, keyring)
+      const req = {
+        body: {
+          name: 'lan',
+          baseUrl: 'http://192.168.1.50/trade/odata/standard.odata',
+          login: 'u',
+          password: 'p',
+          serverTimezone: 'Europe/Moscow',
+        },
+        params: {},
+      } as unknown as Request
+      await createBase(d)(req, res() as unknown as Response)
+      // RFC1918 is the NORMAL case for a self-hosted 1С — it must still verify+persist.
+      expect(verifyConnectivity).toHaveBeenCalled()
+      expect(await d.baseRepo.get('lan')).toBeDefined()
+    })
+  })
+
+  it('an edit preserves an out-of-band DataShape override (the form never submits one)', async () => {
+    vi.mocked(verifyConnectivity).mockResolvedValue()
+    const d = deps(handle, keyring)
+    // A shape set outside the UI (SQL / import) — the edit form has no `shape` field,
+    // so a descriptor built without it would upsert shape:null and silently drop this.
+    await d.baseRepo.create('trade', {
+      baseUrl: 'http://1c/odata',
+      login: 'u',
+      serverTimezone: 'Europe/Moscow',
+      shape: { int64Mode: 'bigint' },
+    })
+    const req = {
+      body: { baseUrl: 'http://1c/odata', login: 'u', password: 'p', serverTimezone: 'Europe/Moscow', label: 'Trade' },
+      params: { name: 'trade' },
+    } as unknown as Request
+    await updateBase(d)(req, res() as unknown as Response)
+    const stored = await d.baseRepo.get('trade')
+    expect(stored?.shape).toEqual({ int64Mode: 'bigint' })
+    expect(stored?.label).toBe('Trade') // the edit still applied
+  })
 })

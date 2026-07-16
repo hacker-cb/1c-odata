@@ -62,11 +62,41 @@ function userRowOob(id: string, row: Record<string, unknown>): string {
 type Guard = { ok: true; target: UserRow } | { ok: false; status: number; message: string; target?: UserRow }
 
 /**
+ * Serializes the admin-count-affecting mutations (demote / ban / delete). Each one
+ * is a read ({@link guardTarget}'s "is another active admin left?" count) followed
+ * by a write, two separate round-trips — so two concurrent admins can both read `2`,
+ * both pass the gate, and both commit, leaving ZERO sign-in-capable admins (a
+ * permanent lockout). Chaining them through one in-process promise makes read+write
+ * atomic for this process, which is exactly the "one writer assumed" model the rest
+ * of the server is built on (CLAUDE.md; pglite is single-process).
+ *
+ * LIMIT: process-local. A multi-replica Postgres deployment would need a DB-level
+ * lock (`SELECT … FOR UPDATE` / advisory lock) — out of scope here.
+ */
+let adminMutations: Promise<unknown> = Promise.resolve()
+
+function withAdminLock<T>(fn: () => Promise<T>): Promise<T> {
+  // `.then(fn, fn)` — run once the previous holder SETTLES, success or failure, so a
+  // rejected mutation can never wedge the chain.
+  const run = adminMutations.then(fn, fn)
+  // Park a never-rejecting link: `run`'s rejection belongs to the caller, and an
+  // unhandled one here would surface as an unhandledRejection.
+  adminMutations = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
+/**
  * Resolve the precondition for a destructive mutation on user `id`, run by every
  * ban/delete/demote handler so the "protect the acting user and the last usable
  * admin" invariant lives in ONE place. `blockSelf` is off for role changes:
  * self-demotion is legitimate (the UI keeps the role select enabled) and is
  * caught only by the last-admin count.
+ *
+ * Callers MUST run this and their mutation inside {@link withAdminLock} — the count
+ * it reads is only meaningful if nothing else mutates before the write lands.
  */
 async function guardTarget(
   deps: AdminDeps,
@@ -236,31 +266,39 @@ export async function updateUser(req: Request, res: Response, deps: AdminDeps): 
 export async function setUserRole(req: Request, res: Response, deps: AdminDeps): Promise<void> {
   const id = String(req.params.id)
   const role = req.body.role === 'admin' ? 'admin' : 'user'
-  if (role !== 'admin') {
-    const g = await guardTarget(deps, actorId(res), id, 'demote', { blockSelf: false })
-    if (!g.ok) {
-      // The role <select> is showing the refused value; it must snap back to
-      // server truth. When we have the target row (last-admin refusal), re-render
-      // it (200) plus an OOB error toast — every cell is accurate (getUserById
-      // selects them all). A 404 has no row to restore, so just flash.
-      if (g.target !== undefined) {
-        res
-          .type('html')
-          .send(
-            render('_user_row', rowData(g.target, actorId(res))) +
-              render('_flash', { kind: 'err', message: g.message }),
-          )
-      } else {
-        flash(res, g.status, g.message)
-      }
-      return
+  // Demotion is the lockout-capable direction, so its last-admin count and the
+  // setRole that acts on it must be atomic. Promotion only ADDS an admin and can
+  // never lock the panel out; it rides the same lock purely for simplicity (admin
+  // mutations are rare, so the serialization costs nothing).
+  const outcome = await withAdminLock(async () => {
+    if (role !== 'admin') {
+      const g = await guardTarget(deps, actorId(res), id, 'demote', { blockSelf: false })
+      if (!g.ok) return { refused: g }
     }
-  }
-  const { user } = await deps.auth.api.setRole({
-    headers: fromNodeHeaders(req.headers),
-    body: { userId: id, role },
+    const { user } = await deps.auth.api.setRole({
+      headers: fromNodeHeaders(req.headers),
+      body: { userId: id, role },
+    })
+    return { user }
   })
-  partial(res, '_user_row', rowData(user, actorId(res)))
+  if ('refused' in outcome) {
+    const g = outcome.refused
+    // The role <select> is showing the refused value; it must snap back to
+    // server truth. When we have the target row (last-admin refusal), re-render
+    // it (200) plus an OOB error toast — every cell is accurate (getUserById
+    // selects them all). A 404 has no row to restore, so just flash.
+    if (g.target !== undefined) {
+      res
+        .type('html')
+        .send(
+          render('_user_row', rowData(g.target, actorId(res))) + render('_flash', { kind: 'err', message: g.message }),
+        )
+    } else {
+      flash(res, g.status, g.message)
+    }
+    return
+  }
+  partial(res, '_user_row', rowData(outcome.user, actorId(res)))
 }
 
 /** GET /admin/users/:id/password — the set-password form (into the drawer). */
@@ -307,17 +345,21 @@ export async function setUserPassword(req: Request, res: Response, deps: AdminDe
 /** POST /admin/users/:id/ban — refuse self and the last admin; sessions are revoked. */
 export async function banUser(req: Request, res: Response, deps: AdminDeps): Promise<void> {
   const id = String(req.params.id)
-  const g = await guardTarget(deps, actorId(res), id, 'ban', { blockSelf: true })
-  if (!g.ok) {
-    flash(res, g.status, g.message)
+  const outcome = await withAdminLock(async () => {
+    const g = await guardTarget(deps, actorId(res), id, 'ban', { blockSelf: true })
+    if (!g.ok) return { refused: g }
+    const headers = fromNodeHeaders(req.headers)
+    const { user } = await deps.auth.api.banUser({ headers, body: { userId: id } })
+    // banUser already revokes sessions in better-auth; keep the explicit call so the
+    // invariant doesn't silently depend on plugin-internal behavior.
+    await deps.auth.api.revokeUserSessions({ headers, body: { userId: id } })
+    return { user }
+  })
+  if ('refused' in outcome) {
+    flash(res, outcome.refused.status, outcome.refused.message)
     return
   }
-  const headers = fromNodeHeaders(req.headers)
-  const { user } = await deps.auth.api.banUser({ headers, body: { userId: id } })
-  // banUser already revokes sessions in better-auth; keep the explicit call so the
-  // invariant doesn't silently depend on plugin-internal behavior.
-  await deps.auth.api.revokeUserSessions({ headers, body: { userId: id } })
-  partial(res, '_user_row', rowData(user, actorId(res)))
+  partial(res, '_user_row', rowData(outcome.user, actorId(res)))
 }
 
 /** POST /admin/users/:id/unban. */
@@ -333,18 +375,21 @@ export async function unbanUser(req: Request, res: Response, deps: AdminDeps): P
 /** DELETE /admin/users/:id — refuse self and the last admin; grants are cleaned up. */
 export async function deleteUser(req: Request, res: Response, deps: AdminDeps): Promise<void> {
   const id = String(req.params.id)
-  const g = await guardTarget(deps, actorId(res), id, 'delete', { blockSelf: true })
-  if (!g.ok) {
-    flash(res, g.status, g.message)
+  const outcome = await withAdminLock(async () => {
+    const g = await guardTarget(deps, actorId(res), id, 'delete', { blockSelf: true })
+    if (!g.ok) return { refused: g }
+    // `grants.sub` FKs `user.id` ON DELETE CASCADE, so removeUser would clear this
+    // user's grants on its own; clearing them explicitly FIRST keeps the cleanup
+    // independent of that cascade and ordered — if removeUser then fails we've only
+    // dropped an existing user's grants (retryable), never orphaned rows.
+    await deps.grantRepo.revokeAll(id)
+    await deps.auth.api.removeUser({ headers: fromNodeHeaders(req.headers), body: { userId: id } })
+    return { target: g.target }
+  })
+  if ('refused' in outcome) {
+    flash(res, outcome.refused.status, outcome.refused.message)
     return
   }
-  const target = g.target
-  // Clear grants BEFORE removing the user: if removeUser then fails, we've only
-  // cleared an existing user's grants (retryable), not orphaned grant rows whose
-  // owning user is already gone. The grants table has no FK into better-auth's
-  // user table, so nothing cascades on its own.
-  await deps.grantRepo.revokeAll(id)
-  await deps.auth.api.removeUser({ headers: fromNodeHeaders(req.headers), body: { userId: id } })
   // OOB-only body: the row's outerHTML swap receives '' (row removed), the toast shows.
-  okFlashOob(res, `User ${target.email} deleted.`)
+  okFlashOob(res, `User ${outcome.target.email} deleted.`)
 }

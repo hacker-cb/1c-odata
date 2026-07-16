@@ -94,6 +94,46 @@ function stripUserinfo(url: string): string {
   }
 }
 
+/**
+ * Cloud instance-metadata endpoints, which a probe must never reach: they answer
+ * unauthenticated to anything running on the host and hand out cloud credentials, so
+ * an admin pointing a "base" at one turns the probe into an SSRF exfiltration
+ * channel. Matched on the URL host verbatim.
+ *
+ * Deliberately a POINTED denylist, not an allowlist or a private-range block:
+ * admins legitimately host 1С on RFC1918 addresses and internal DNS names, so
+ * blanket-blocking internal targets would break the product's normal case. This only
+ * removes the endpoints that are never a 1С base under any topology.
+ */
+const METADATA_HOSTS = new Set([
+  '169.254.169.254', // AWS IMDS / Azure IMDS / GCP / OpenStack / Oracle
+  'fd00:ec2::254', // AWS IMDS over IPv6
+  'metadata.google.internal', // GCP
+])
+
+/**
+ * Reject a probe aimed at a cloud-metadata endpoint, returning the refusal message
+ * (or undefined when the target is fine). Applied to the RESOLVED credential's URL,
+ * so it covers both a caller-typed URL and a reused stored one.
+ *
+ * Not SSRF-proof by design: a host that merely RESOLVES to a metadata IP is not
+ * caught (that would need DNS resolution + a rebinding-safe re-check on connect).
+ * The caller here is an authenticated admin who can already read the store, so this
+ * is defence-in-depth against misconfiguration and casual abuse, not a hard boundary.
+ */
+function blockedProbeTarget(url: string): string | undefined {
+  let host: string
+  try {
+    // `hostname` keeps IPv6 in brackets — strip them so the literal matches the set.
+    host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  } catch {
+    return undefined // unparseable — the connectivity probe reports it far better
+  }
+  return METADATA_HOSTS.has(host)
+    ? `Refusing to probe ${host} — cloud instance-metadata endpoints are not valid 1С bases.`
+    : undefined
+}
+
 type ProbeCredential = { baseUrl: string; login: string; password: string }
 
 /**
@@ -134,12 +174,68 @@ export async function verifyBase(req: Request, res: Response, deps: AdminDeps): 
     partial(res, '_verify_result', { ok: false, error: cred.error })
     return
   }
+  const blocked = blockedProbeTarget(cred.baseUrl)
+  if (blocked !== undefined) {
+    partial(res, '_verify_result', { ok: false, error: blocked })
+    return
+  }
   try {
     await verifyConnectivity(cred)
     partial(res, '_verify_result', { ok: true })
   } catch (err) {
     partial(res, '_verify_result', { ok: false, error: redact(err) })
   }
+}
+
+/**
+ * The free, local-only form validations as one gate: the connection-name shape and
+ * the IANA `serverTimezone` (REQUIRED with no default per CLAUDE.md — a wrong or
+ * blank zone silently shifts DateTime parsing). Returns the refusal message, or
+ * undefined when the input is well-formed. Both run before any query or probe.
+ */
+function validateBaseForm(name: string, serverTimezone: string): string | undefined {
+  try {
+    assertValidConnectionName(name)
+  } catch {
+    return `Invalid base name "${name}" — must start with an ASCII letter or digit, then letters, digits, hyphens or underscores.`
+  }
+  if (!isValidTimezone(serverTimezone)) {
+    return `Invalid server timezone "${serverTimezone}" — use an IANA zone (e.g. "Europe/Moscow").`
+  }
+  return undefined
+}
+
+/**
+ * The whole pre-persist gate: resolve which credential to probe, refuse a
+ * cloud-metadata target, then actually verify connectivity. Returns the refusal
+ * message, or undefined once the pair is verified — saving must NEVER persist an
+ * unverified credential, so every early exit here aborts the save.
+ */
+async function verifyBeforeSave(
+  deps: AdminDeps,
+  name: string,
+  baseUrl: string,
+  login: string,
+  password: string,
+): Promise<string | undefined> {
+  // A typed password verifies the request pair; a blank field reuses the stored
+  // secret ONLY against the base's own stored URL+login (never a request-changed
+  // target — that would exfiltrate it).
+  const cred = await resolveProbeCredential(deps, name, baseUrl, login, password)
+  if ('error' in cred) {
+    return cred.error === 'Password required.' ? 'Password required to verify before saving.' : cred.error
+  }
+  // Refuse a cloud-metadata target BEFORE the probe. Because saving always verifies
+  // first, this also keeps such a URL out of the store — so the health job and the
+  // MCP query path can never be pointed at one either.
+  const blocked = blockedProbeTarget(cred.baseUrl)
+  if (blocked !== undefined) return blocked
+  try {
+    await verifyConnectivity(cred)
+  } catch (err) {
+    return `Verification failed: ${redact(err)}`
+  }
+  return undefined
 }
 
 /** Shared create/update. `editName` set on PUT (name is the path param, immutable). */
@@ -151,28 +247,9 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
   const serverTimezone = String(req.body.serverTimezone ?? '').trim()
   const label = String(req.body.label ?? '').trim()
 
-  try {
-    assertValidConnectionName(name)
-  } catch {
-    reform(
-      res,
-      req.body,
-      `Invalid base name "${name}" — must start with an ASCII letter or digit, then letters, digits, hyphens or underscores.`,
-      editName,
-    )
-    return
-  }
-
-  // serverTimezone is REQUIRED with no default (CLAUDE.md): a wrong/blank zone
-  // silently shifts DateTime parsing. Reject a blank or non-IANA value before any
-  // persistence, mirroring the connection-name gate above.
-  if (!isValidTimezone(serverTimezone)) {
-    reform(
-      res,
-      req.body,
-      `Invalid server timezone "${serverTimezone}" — use an IANA zone (e.g. "Europe/Moscow").`,
-      editName,
-    )
+  const invalid = validateBaseForm(name, serverTimezone)
+  if (invalid !== undefined) {
+    reform(res, req.body, invalid, editName)
     return
   }
 
@@ -187,21 +264,10 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
     return
   }
 
-  // Determine the credential to verify. A typed password verifies the request
-  // pair; a blank field reuses the stored secret ONLY against the base's own
-  // stored URL+login (never a request-changed target — that would exfiltrate it).
-  const cred = await resolveProbeCredential(deps, name, baseUrl, login, password)
-  if ('error' in cred) {
-    const msg = cred.error === 'Password required.' ? 'Password required to verify before saving.' : cred.error
-    reform(res, req.body, msg, editName)
-    return
-  }
-
   // VERIFY FIRST — never persist an unverified credential pair.
-  try {
-    await verifyConnectivity(cred)
-  } catch (err) {
-    reform(res, req.body, `Verification failed: ${redact(err)}`, editName)
+  const failure = await verifyBeforeSave(deps, name, baseUrl, login, password)
+  if (failure !== undefined) {
+    reform(res, req.body, failure, editName)
     return
   }
 
@@ -210,11 +276,17 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
   // userinfo so the base password never lands in the stored base_url — and reuse
   // the SAME stripped value for the success-row render so the DOM matches the DB.
   const cleanBaseUrl = stripUserinfo(baseUrl)
+  // Carry an existing DataShape override across an edit. The form never renders or
+  // submits `shape`, so building the descriptor without it would upsert `shape: null`
+  // and silently drop an override set out-of-band (SQL / import). A CREATE has no
+  // prior row, hence no shape to preserve.
+  const existingShape = editName !== undefined ? (await deps.baseRepo.get(name))?.shape : undefined
   const descriptor: StoredConnection = {
     baseUrl: cleanBaseUrl,
     login,
     serverTimezone,
     ...(label !== '' ? { label } : {}),
+    ...(existingShape !== undefined ? { shape: existingShape } : {}),
   }
   try {
     await deps.db.transaction(async (tx) => {
