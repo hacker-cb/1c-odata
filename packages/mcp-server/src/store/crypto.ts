@@ -4,11 +4,10 @@
  * property: AAD = [FORMAT_VERSION, keyId, utf8(baseName)], so a sealed row is
  * cryptographically bound to its base — an attacker with DB write access cannot
  * move base A's (nonce, ciphertext, tag) into base B's row; decrypt-as-B fails
- * the GCM tag. Each sealed row records the `keyId` that sealed it, so the on-disk
- * format is rotation-ready — but loadKeyring currently loads a SINGLE KEK (there
- * is no env input for prior keys), so multi-KEK rotation is NOT yet wired: today,
- * changing the KEK makes existing rows undecryptable. The keyId + `byId` seam is
- * where future decrypt-old / encrypt-current rotation would plug in.
+ * the GCM tag. Each sealed row records the `keyId` that sealed it, so rotation is
+ * decrypt-old / encrypt-current: {@link loadKeyring} loads the current KEK plus any
+ * retired ones, {@link decrypt} picks the KEK by the row's `keyId`, and
+ * {@link encrypt} always seals with the current one.
  */
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 
@@ -39,11 +38,7 @@ export interface Kek {
 export interface Keyring {
   /** KEK used for new encryptions. */
   current: Kek
-  /**
-   * KEKs by id — decrypt() selects one by the row's `keyId`. Today loadKeyring
-   * populates this with ONLY the current KEK (rotation is not yet wired); the map
-   * is the seam where historical KEKs would live once it is.
-   */
+  /** Every KEK this process can decrypt with — the current one plus any retired ones. */
   byId: ReadonlyMap<number, Kek>
 }
 
@@ -72,15 +67,21 @@ export class DecryptionError extends Error {
 }
 
 /**
- * Build the keyring from env. `ONEC_MCP_ENC_KEY` = current KEK (base64 32-byte);
- * `ONEC_MCP_ENC_KEY_ID` (default 1) = its id. Throws {@link MissingEncryptionKeyError}
- * at boot if absent or not exactly 32 bytes — a bad KEK must fail, not silently
- * corrupt writes. In prod the raw material comes from a KMS/Vault-injected env var.
+ * Build the keyring from env:
+ *   - `ONEC_MCP_ENC_KEY` — the CURRENT KEK (base64 32-byte); everything new is
+ *     sealed with it. `ONEC_MCP_ENC_KEY_ID` (default 1) is its id.
+ *   - `ONEC_MCP_ENC_KEYS_PREVIOUS` — optional `id:key[,id:key…]` of RETIRED KEKs,
+ *     loaded for decryption only. This is what makes rotation possible: point
+ *     `ONEC_MCP_ENC_KEY` at the new key (with a new id), move the old one here, and
+ *     rows sealed under it stay readable.
  *
- * Single-KEK only: `byId` holds just this key, so rotating `ONEC_MCP_ENC_KEY`
- * (with or without bumping `ONEC_MCP_ENC_KEY_ID`) leaves existing rows — sealed
- * under the previous key — undecryptable. Real rotation (loading prior KEKs) is
- * future work; do NOT rotate the key against a store that already holds secrets.
+ * Throws {@link MissingEncryptionKeyError} at boot on anything malformed — a bad KEK
+ * must fail loudly, never silently corrupt writes or strand secrets. In prod the raw
+ * material comes from a KMS/Vault-injected env var.
+ *
+ * Rotation is lazy: a row is re-sealed under the current KEK when its password is
+ * next saved. A retired key must therefore stay in `ONEC_MCP_ENC_KEYS_PREVIOUS`
+ * until every base has been re-saved — dropping it early strands those secrets.
  */
 export function loadKeyring(env: NodeJS.ProcessEnv = process.env): Keyring {
   const raw = env.ONEC_MCP_ENC_KEY?.trim()
@@ -93,7 +94,53 @@ export function loadKeyring(env: NodeJS.ProcessEnv = process.env): Keyring {
   const key = decodeKey(raw, 'ONEC_MCP_ENC_KEY')
   const id = parseKeyId(env.ONEC_MCP_ENC_KEY_ID)
   const current: Kek = { id, key }
-  return { current, byId: new Map([[id, current]]) }
+  const byId = new Map<number, Kek>([[id, current]])
+  for (const kek of parsePreviousKeys(env.ONEC_MCP_ENC_KEYS_PREVIOUS)) {
+    // A retired id colliding with the current one is always a config mistake: it
+    // would silently shadow (or be shadowed by) the encrypting key. Fail loudly
+    // rather than guess which the operator meant.
+    if (byId.has(kek.id)) {
+      throw new MissingEncryptionKeyError(
+        `ONEC_MCP_ENC_KEYS_PREVIOUS repeats key id ${kek.id}, which is already in use ` +
+          '(ids must be unique across ONEC_MCP_ENC_KEY_ID and the retired keys).',
+      )
+    }
+    byId.set(kek.id, kek)
+  }
+  return { current, byId }
+}
+
+/**
+ * Parse `ONEC_MCP_ENC_KEYS_PREVIOUS` — `id:base64key` pairs, comma-separated. Absent
+ * or blank ⇒ no retired keys (the pre-rotation default). The `id:` prefix is required
+ * because the id is what the sealed row records; it cannot be inferred from the key.
+ */
+function parsePreviousKeys(raw: string | undefined): Kek[] {
+  const trimmed = raw?.trim()
+  if (trimmed === undefined || trimmed === '') return []
+  return trimmed.split(',').map((entry) => {
+    // Split on the FIRST colon only: base64 never contains ':', but being explicit
+    // keeps a stray one in the key from being read as a separator.
+    const at = entry.indexOf(':')
+    if (at === -1) {
+      throw new MissingEncryptionKeyError(
+        `ONEC_MCP_ENC_KEYS_PREVIOUS entry ${JSON.stringify(entry.trim())} is not "id:key" ` +
+          '(expected e.g. "1:BASE64KEY,0:OLDERBASE64KEY").',
+      )
+    }
+    // A retired id must be spelled out: parseKeyId's blank→1 default belongs to
+    // ONEC_MCP_ENC_KEY_ID, so letting `:key` through here would silently load the key
+    // under id 1 and leave rows sealed under the OMITTED id undecryptable.
+    const rawId = entry.slice(0, at).trim()
+    if (rawId === '') {
+      throw new MissingEncryptionKeyError(
+        `ONEC_MCP_ENC_KEYS_PREVIOUS entry ${JSON.stringify(entry.trim())} has no key id ` +
+          '(expected "id:key" — the id is what the sealed row records, so it cannot be inferred).',
+      )
+    }
+    const id = parseKeyId(rawId, 'ONEC_MCP_ENC_KEYS_PREVIOUS')
+    return { id, key: decodeKey(entry.slice(at + 1).trim(), `ONEC_MCP_ENC_KEYS_PREVIOUS key id ${id}`) }
+  })
 }
 
 function decodeKey(b64: string, varName: string): Buffer {
@@ -107,11 +154,16 @@ function decodeKey(b64: string, varName: string): Buffer {
   return key
 }
 
-function parseKeyId(raw: string | undefined): number {
+/**
+ * A KEK id: an integer 0..255 (the `key_id` column's width, and it is folded into the
+ * AAD as one byte). Blank ⇒ 1, the default for `ONEC_MCP_ENC_KEY_ID` on a store that
+ * predates any rotation.
+ */
+function parseKeyId(raw: string | undefined, varName = 'ONEC_MCP_ENC_KEY_ID'): number {
   const trimmed = raw?.trim()
   const id = trimmed ? Number(trimmed) : 1
   if (!Number.isInteger(id) || id < 0 || id > 255) {
-    throw new MissingEncryptionKeyError(`ONEC_MCP_ENC_KEY_ID must be an integer 0..255 (got ${JSON.stringify(raw)}).`)
+    throw new MissingEncryptionKeyError(`${varName} must be an integer 0..255 (got ${JSON.stringify(raw)}).`)
   }
   return id
 }
