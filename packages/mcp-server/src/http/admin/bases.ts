@@ -328,8 +328,13 @@ async function saveBase(req: Request, res: Response, deps: AdminDeps, editName?:
         // Carry an existing DataShape override across the edit: the form never renders
         // or submits `shape`, so upserting the form's descriptor alone would write
         // shape:null and silently drop an override set out-of-band (SQL / import).
-        // Read it INSIDE the transaction so a concurrent write can't be lost between
-        // the read and this upsert. A CREATE has no prior row, hence nothing to carry.
+        // A CREATE has no prior row, hence nothing to carry.
+        //
+        // Still read-then-write: a plain SELECT takes no row lock, so under READ
+        // COMMITTED a `shape` committed by another writer between this read and the
+        // upsert below is lost. Closing that would need `SELECT … FOR UPDATE`, which
+        // buys nothing today — `shape` has no writer in the product (no UI field), so
+        // the only "concurrent writer" is a human running SQL during an edit.
         const existingShape = (await baseRepo.get(name))?.shape
         await baseRepo.upsert(name, {
           ...descriptor,
