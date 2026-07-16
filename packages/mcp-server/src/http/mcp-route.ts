@@ -4,9 +4,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import { type Request, type Response, Router } from 'express'
-
-/** Hard ceiling on concurrent live sessions — a burst of abandoned inits can't OOM the process. */
-const DEFAULT_MAX_SESSIONS = 1024
+import { SessionRegistry, type SessionTuning } from './session-registry.js'
 
 /** The JSON-RPC `id` of a single request, echoed on error responses for client correlation (null otherwise). */
 function requestId(body: unknown): string | number | null {
@@ -28,15 +26,6 @@ function authSub(req: Request): string | undefined {
   return typeof sub === 'string' && sub !== '' ? sub : undefined
 }
 
-/** One live session: its transport + the subject that opened it (undefined on the no-auth path). */
-interface SessionEntry {
-  transport: StreamableHTTPServerTransport
-  // `| undefined` (not just optional): authSub() yields string | undefined, and
-  // under exactOptionalPropertyTypes an optional-only field rejects an explicit
-  // undefined value. The no-auth path stores undefined here deliberately.
-  sub: string | undefined
-}
-
 export interface McpRouteOptions {
   /**
    * Builds a fresh McpServer per session, given the authenticated subject. Auth
@@ -54,8 +43,14 @@ export interface McpRouteOptions {
    * disable (e.g. in tests). A reverse-proxy deployment MUST include its public host.
    */
   allowedHosts?: string[]
-  /** Max concurrent live sessions; a new `initialize` past this gets 503. Default {@link DEFAULT_MAX_SESSIONS}. */
-  maxSessions?: number
+  /** Session cap + idle-sweep tuning; every field defaults (see session-registry.ts). */
+  sessions?: SessionTuning
+}
+
+/** A mounted MCP router plus the {@link SessionRegistry} backing it (exposed so callers can `stop()` its sweeper). */
+export interface McpRouter {
+  router: Router
+  sessions: SessionRegistry
 }
 
 /**
@@ -66,35 +61,43 @@ export interface McpRouteOptions {
  *   - `GET /`    — server→client SSE stream
  *   - `DELETE /` — terminate the session
  *
- * Each session is pinned to the `sub` that opened it (auth path). A request whose
- * token `sub` differs from the session owner's is rejected with 403 — a different
- * valid token cannot hijack a session whose McpServer/ScopedPool is closed over the
- * OWNER's grants. On the no-auth path both subs are `undefined` and the check is inert.
+ * Session accounting (per-`sub` quota, global cap, idle reclaim) lives in the
+ * {@link SessionRegistry}. Each session is pinned to the `sub` that opened it (auth
+ * path). A request whose token `sub` differs from the session owner's is rejected
+ * with 403 — a different valid token cannot hijack a session whose McpServer/
+ * ScopedPool is closed over the OWNER's grants. On the no-auth path both subs are
+ * `undefined` and the check is inert.
  */
-export function createMcpRouter(opts: McpRouteOptions): Router {
+export function createMcpRouter(opts: McpRouteOptions): McpRouter {
   const router = Router()
-  const transports = new Map<string, SessionEntry>()
-  // In-flight initializations not yet registered in `transports`. A session only
-  // lands in the map when `onsessioninitialized` fires (during handleRequest), so
-  // a burst of concurrent inits would otherwise slip past a `transports.size`-only
-  // cap during the `await connect()` gap. Counting these makes the cap immediate.
-  let pendingInits = 0
-  const maxSessions = opts.maxSessions ?? DEFAULT_MAX_SESSIONS
+  const sessions = new SessionRegistry(opts.sessions ?? {})
+  sessions.start()
   // When allowedHosts is given, turn on the SDK's Host/Origin validation.
   const rebindGuard =
     opts.allowedHosts !== undefined ? { enableDnsRebindingProtection: true, allowedHosts: opts.allowedHosts } : {}
 
   /**
-   * Resolve the session AND verify the caller owns it. Returns the transport, or
-   * undefined after answering (400 unknown session / 403 sub mismatch). Binding a
-   * session to its opener's `sub` stops a DIFFERENT valid token from hijacking an
-   * already-initialized McpServer whose ScopedPool is closed over the OWNER's sub.
+   * Resolve the session AND verify the caller owns it, stamping activity on success.
+   * Returns the transport, or undefined after answering:
+   *   - 400 when the `Mcp-Session-Id` header is absent (a malformed non-init request), vs
+   *   - 404 when the id is present but unknown — a swept idle session or a post-DELETE
+   *     id — so the client re-initializes per the Streamable-HTTP spec (404 = "no such
+   *     session, start a new one"; safe because no eventStore ⇒ sessions aren't resumable), vs
+   *   - 403 when a DIFFERENT valid token replays the owner's live session id.
    */
   const resolveOwnedSession = (req: Request, res: Response): StreamableHTTPServerTransport | undefined => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined
-    const entry = sessionId !== undefined ? transports.get(sessionId) : undefined
+    if (sessionId === undefined) {
+      res.status(400).send('Missing Mcp-Session-Id header')
+      return undefined
+    }
+    const entry = sessions.get(sessionId)
     if (entry === undefined) {
-      res.status(400).send('Invalid or missing session ID')
+      res.status(404).json({
+        jsonrpc: '2.0',
+        error: { code: -32001, message: 'Session not found' },
+        id: requestId(req.body),
+      })
       return undefined
     }
     // No-auth path: entry.sub === undefined and authSub() === undefined → equal.
@@ -106,7 +109,74 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
       })
       return undefined
     }
+    sessions.touch(sessionId) // an owned request keeps the session fresh so the sweeper won't reap it
     return entry.transport
+  }
+
+  /**
+   * Open a NEW session for an `initialize` POST: reserve against the caps (503 when
+   * over), build the transport + McpServer, and drive the init handshake. On any
+   * failure the transport is closed and its registry entry defensively dropped so
+   * nothing leaks; the in-flight reservation is always released.
+   */
+  const openNewSession = async (req: Request, res: Response): Promise<void> => {
+    const sub = authSub(req) // subject that owns this session
+    // Reserve against the global cap AND this sub's quota (both count in-flight
+    // inits). undefined → over a cap → 503.
+    const reservation = sessions.reserve(sub)
+    if (reservation === undefined) {
+      res.status(503).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Too many active sessions' },
+        id: requestId(req.body),
+      })
+      return
+    }
+    try {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sid) => {
+          reservation.commit(sid, transport)
+        },
+        ...rebindGuard,
+      })
+      transport.onclose = () => {
+        const sid = transport.sessionId
+        if (sid !== undefined) sessions.remove(sid)
+      }
+      // connect() calls transport.start() and takes ownership of the transport.
+      // Cast to Transport: the SDK's StreamableHTTPServerTransport types `onclose`
+      // as `(() => void) | undefined`, which trips the repo's exactOptionalPropertyTypes
+      // against Transport's exact-optional `onclose?: () => void`. It nominally
+      // implements Transport — the mismatch is purely the upstream `| undefined`.
+      try {
+        await opts.buildServer({ sub }).connect(transport as Transport)
+        await transport.handleRequest(req, res, req.body)
+      } catch (err) {
+        // Init failed after the transport was created: close it so a half-open
+        // session can't linger in the registry (when onsessioninitialized already
+        // fired) or leak the connected McpServer/pool. Swallow any close failure —
+        // sync throw OR async rejection — so it can never mask the original init error.
+        try {
+          await transport.close()
+        } catch {
+          // ignore — the original init error below takes precedence
+        }
+        // Defensively drop the registry entry rather than relying solely on
+        // `onclose`: if the session was already committed (onsessioninitialized
+        // fired) and `transport.close()` rejected BEFORE firing `onclose`, the live
+        // entry (and its per-sub quota slot) would otherwise leak until the idle
+        // sweeper. `remove` is idempotent + guards an absent sid, so it is safe
+        // whether or not `onclose` ran and whether or not the session was committed.
+        const sid = transport.sessionId
+        if (sid !== undefined) sessions.remove(sid)
+        throw err
+      }
+    } finally {
+      // Drop the in-flight reservation. On success the session is now committed in
+      // the registry (via onsessioninitialized), so this only clears `pending`.
+      reservation.release()
+    }
   }
 
   router.post('/', async (req: Request, res: Response) => {
@@ -124,54 +194,7 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
     }
 
     if (isInitializeRequest(req.body)) {
-      // Cap against live + in-flight sessions (see `pendingInits`).
-      if (transports.size + pendingInits >= maxSessions) {
-        res.status(503).json({
-          jsonrpc: '2.0',
-          error: { code: -32000, message: 'Too many active sessions' },
-          id: requestId(req.body),
-        })
-        return
-      }
-      const sub = authSub(req) // subject that owns this session
-      pendingInits += 1
-      try {
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (sid) => {
-            transports.set(sid, { transport, sub })
-          },
-          ...rebindGuard,
-        })
-        transport.onclose = () => {
-          const sid = transport.sessionId
-          if (sid !== undefined) transports.delete(sid)
-        }
-        // connect() calls transport.start() and takes ownership of the transport.
-        // Cast to Transport: the SDK's StreamableHTTPServerTransport types `onclose`
-        // as `(() => void) | undefined`, which trips the repo's exactOptionalPropertyTypes
-        // against Transport's exact-optional `onclose?: () => void`. It nominally
-        // implements Transport — the mismatch is purely the upstream `| undefined`.
-        try {
-          await opts.buildServer({ sub }).connect(transport as Transport)
-          await transport.handleRequest(req, res, req.body)
-        } catch (err) {
-          // Init failed after the transport was created: close it so a half-open
-          // session can't linger in `transports` (when onsessioninitialized already
-          // fired) or leak the connected McpServer/pool. onclose drops the map entry.
-          // Swallow any close failure — sync throw OR async rejection — so it can
-          // never mask the original init error.
-          try {
-            await transport.close()
-          } catch {
-            // ignore — the original init error below takes precedence
-          }
-          throw err
-        }
-      } finally {
-        // The session (on success) is now in `transports`; drop the in-flight count.
-        pendingInits -= 1
-      }
+      await openNewSession(req, res)
       return
     }
 
@@ -185,13 +208,27 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
   router.get('/', async (req: Request, res: Response) => {
     const transport = resolveOwnedSession(req, res)
     if (transport === undefined) return
+    // resolveOwnedSession returns a transport only for a present, known session id,
+    // so the header is a valid string here.
+    const sessionId = req.headers['mcp-session-id'] as string
+    // This GET holds a live SSE connection: mark the session stream-open so the idle
+    // sweeper won't reap a connected-but-quiet client (a client that keeps the stream
+    // open but sends no tool-call for `idleMs` is NOT abandoned). A counter, so a
+    // racing second GET can't clear the first stream's exemption.
+    sessions.streamOpened(sessionId)
+    // TCP keepalive on the SSE socket: our server sends no application-level pings, so
+    // without this a half-open connection (peer vanished, no FIN) would keep the
+    // session stream-open — hence exempt from idle-reaping — forever. Keepalive lets
+    // the OS detect the dead peer (~idleMs later) and fire `close`, which reclaims it.
+    res.socket?.setKeepAlive(true, sessions.idleMs)
     // The GET stream is the session's long-lived SSE channel. The SDK's `onclose`
     // fires ONLY on an explicit `DELETE /` (1.29), so a client that just drops its
-    // socket would otherwise leak its transport + McpServer forever. Reclaim the
-    // session when this stream closes. Safe here because no `eventStore` is
-    // configured, so sessions are not resumable — a dropped stream means the
-    // client must re-initialize anyway.
+    // socket would otherwise leak its transport + McpServer. Reclaim the session
+    // eagerly when this stream closes. Safe because no `eventStore` is configured, so
+    // sessions are not resumable — a dropped stream means the client must re-initialize.
     res.on('close', () => {
+      // This stream is no longer open — drop the exemption (idempotent-safe).
+      sessions.streamClosed(sessionId)
       // Reclaim ONLY when this GET actually became the session's SSE stream (200).
       // A second/racing GET on a session that already owns a stream gets an SDK
       // error response (409 Conflict / 406 / …); that error response closing must
@@ -205,6 +242,11 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
       } catch {
         // ignore — best-effort reclaim of a dropped SSE stream
       }
+      // Defensively drop the registry entry too: `transport.close()` is fire-and-
+      // forget here, so if it rejects (or fires `onclose` late) the session — and its
+      // per-sub quota slot — would otherwise linger until the idle sweeper. `remove`
+      // is idempotent, so a later `onclose` is a harmless no-op.
+      sessions.remove(sessionId)
     })
     await transport.handleRequest(req, res)
   })
@@ -215,5 +257,5 @@ export function createMcpRouter(opts: McpRouteOptions): Router {
     await transport.handleRequest(req, res)
   })
 
-  return router
+  return { router, sessions }
 }

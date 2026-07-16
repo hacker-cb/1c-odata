@@ -43,6 +43,12 @@ services:
       # timeout); the timeout is clamped below the interval. See .env.example.
       ONEC_MCP_HEALTH_INTERVAL_MS: ${ONEC_MCP_HEALTH_INTERVAL_MS:-}
       ONEC_MCP_HEALTH_TIMEOUT_MS: ${ONEC_MCP_HEALTH_TIMEOUT_MS:-}
+      # Optional session limits. Empty → defaults (1024 global / 32 per-principal /
+      # 30m idle TTL / 60s sweep). See .env.example and the package README.
+      ONEC_MCP_MAX_SESSIONS: ${ONEC_MCP_MAX_SESSIONS:-}
+      ONEC_MCP_MAX_SESSIONS_PER_SUB: ${ONEC_MCP_MAX_SESSIONS_PER_SUB:-}
+      ONEC_MCP_SESSION_IDLE_MS: ${ONEC_MCP_SESSION_IDLE_MS:-}
+      ONEC_MCP_SESSION_SWEEP_MS: ${ONEC_MCP_SESSION_SWEEP_MS:-}
     # No published ports — only Caddy reaches it on the internal compose network.
     expose:
       - "3000"

@@ -10,6 +10,7 @@ import { createAccountRouter } from './account/router.js'
 import { createAdminRouter } from './admin/router.js'
 import { createDiscoveryRouter } from './discovery.js'
 import { createMcpRouter } from './mcp-route.js'
+import type { SessionRegistry, SessionTuning } from './session-registry.js'
 import { createSetupRouter } from './setup/router.js'
 
 /** Optional auth wiring. When present, /mcp is gated and discovery + BA are mounted. */
@@ -42,10 +43,16 @@ export interface CreateAppOptions {
   buildServer: (ctx: { sub: string | undefined }) => McpServer
   /** Forwarded to the MCP router — `Host` allowlist for DNS-rebinding protection. */
   allowedHosts?: string[]
-  /** Forwarded to the MCP router — max concurrent sessions. */
-  maxSessions?: number
+  /** Forwarded to the MCP router — session cap + idle-sweep tuning. */
+  sessions?: SessionTuning
   /** When set, mounts the auth layer (Slice 2). Omit to keep the no-auth server. */
   auth?: AppAuthOptions
+}
+
+/** The built Express app plus the {@link SessionRegistry} backing /mcp (caller `stop()`s its sweeper on shutdown). */
+export interface BuiltApp {
+  app: Express
+  sessions: SessionRegistry
 }
 
 /**
@@ -56,7 +63,7 @@ export interface CreateAppOptions {
  *   3. root discovery routers (PRM + AS metadata, CORS-open).
  *   4. /mcp: requireBearerAuth THEN the MCP router.
  */
-export function createApp(opts: CreateAppOptions): Express {
+export function createApp(opts: CreateAppOptions): BuiltApp {
   const app = express()
 
   // (1) Raw-body auth handler must precede the JSON parser.
@@ -114,15 +121,12 @@ export function createApp(opts: CreateAppOptions): Express {
 
   // (4) /mcp: bearer gate before the MCP router (when auth is enabled).
   const mcpMiddleware: RequestHandler[] = opts.auth !== undefined ? [opts.auth.bearerMiddleware] : []
-  app.use(
-    '/mcp',
-    ...mcpMiddleware,
-    createMcpRouter({
-      buildServer: opts.buildServer,
-      ...(opts.allowedHosts !== undefined ? { allowedHosts: opts.allowedHosts } : {}),
-      ...(opts.maxSessions !== undefined ? { maxSessions: opts.maxSessions } : {}),
-    }),
-  )
+  const mcp = createMcpRouter({
+    buildServer: opts.buildServer,
+    ...(opts.allowedHosts !== undefined ? { allowedHosts: opts.allowedHosts } : {}),
+    ...(opts.sessions !== undefined ? { sessions: opts.sessions } : {}),
+  })
+  app.use('/mcp', ...mcpMiddleware, mcp.router)
 
-  return app
+  return { app, sessions: mcp.sessions }
 }

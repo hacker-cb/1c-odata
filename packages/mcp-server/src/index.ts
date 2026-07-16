@@ -7,6 +7,7 @@ import { resolveCanonicalUrls } from './auth/config.js'
 import { type HealthJob, startHealthJob } from './http/admin/health-job.js'
 import { createApp } from './http/app.js'
 import { createAuthMount } from './http/auth-mount.js'
+import type { SessionTuning } from './http/session-registry.js'
 import { logger } from './logger.js'
 import { buildMcpServer } from './server-factory.js'
 import type { Keyring } from './store/crypto.js'
@@ -40,6 +41,28 @@ function healthJobEnvConfig(): { intervalMs?: number; probeTimeoutMs?: number } 
   }
 }
 
+/**
+ * Session cap + idle-sweep overrides from process-wide env (positive ints only;
+ * anything else falls back to the DEFAULT_* constants in session-registry.ts). Kept
+ * beside {@link healthJobEnvConfig} so all the runtime tuning env lives in one place.
+ */
+function sessionEnvConfig(): SessionTuning {
+  const posInt = (v: string | undefined): number | undefined => {
+    const n = v !== undefined ? Number(v) : Number.NaN
+    return Number.isInteger(n) && n > 0 ? n : undefined
+  }
+  const maxSessions = posInt(process.env.ONEC_MCP_MAX_SESSIONS)
+  const maxSessionsPerSub = posInt(process.env.ONEC_MCP_MAX_SESSIONS_PER_SUB)
+  const idleMs = posInt(process.env.ONEC_MCP_SESSION_IDLE_MS)
+  const sweepIntervalMs = posInt(process.env.ONEC_MCP_SESSION_SWEEP_MS)
+  return {
+    ...(maxSessions !== undefined ? { maxSessions } : {}),
+    ...(maxSessionsPerSub !== undefined ? { maxSessionsPerSub } : {}),
+    ...(idleMs !== undefined ? { idleMs } : {}),
+    ...(sweepIntervalMs !== undefined ? { sweepIntervalMs } : {}),
+  }
+}
+
 /** Auth configuration for the HTTP server. Absent → the no-auth Slice-1 server. */
 export interface AuthServerOptions {
   /** External public origin (https). Derives `iss`, `aud`, PRM, discovery. */
@@ -67,7 +90,8 @@ export interface CreateHttpServerOptions {
   version?: string
   limits?: Limits
   allowedHosts?: string[]
-  maxSessions?: number
+  /** Session cap + idle-sweep tuning; overridden per-field by env (see sessionEnvConfig). */
+  sessions?: SessionTuning
   /** When set, mount the auth layer (Slice 2); supply `auth.keyring` to add tenancy (Slice 3). */
   auth?: AuthServerOptions
 }
@@ -125,12 +149,17 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
         dataDir: opts.dataDir,
         ...(opts.limits !== undefined ? { limits: opts.limits } : {}),
       })
-    const app = createApp({
+    const { app, sessions } = createApp({
       buildServer,
       ...(opts.allowedHosts !== undefined ? { allowedHosts: opts.allowedHosts } : {}),
-      ...(opts.maxSessions !== undefined ? { maxSessions: opts.maxSessions } : {}),
+      sessions: { ...opts.sessions, ...sessionEnvConfig() },
     })
-    return { server: createServer(app), async close() {} }
+    return {
+      server: createServer(app),
+      async close() {
+        sessions.stop() // stop the idle-session sweeper (no DB to drain on this path)
+      },
+    }
   }
 
   // ---- Auth path. ----
@@ -206,10 +235,10 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
       })
     }
 
-    const app = createApp({
+    const { app, sessions } = createApp({
       buildServer,
       ...(opts.allowedHosts !== undefined ? { allowedHosts: opts.allowedHosts } : {}),
-      ...(opts.maxSessions !== undefined ? { maxSessions: opts.maxSessions } : {}),
+      sessions: { ...opts.sessions, ...sessionEnvConfig() },
       // Carry `db`/`keyring`/`sharedPool`/`version` (+ the health job's guarded
       // runOnce) on the auth options only when tenancy is on — the admin routes read
       // them; the MCP route never does (see app.ts). `sharedPool` MUST be the
@@ -236,6 +265,7 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
       async close() {
         if (closed) return
         closed = true
+        sessions.stop() // stop the idle-session sweeper (touches no DB — safe in any order)
         // Stop the timer AND await any in-flight sweep (incl. the runOnce seed)
         // BEFORE the DB handle closes, so a probe/upsert can't race dbHandle.close().
         await healthJob?.stop()
