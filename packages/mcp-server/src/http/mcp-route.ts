@@ -113,6 +113,72 @@ export function createMcpRouter(opts: McpRouteOptions): McpRouter {
     return entry.transport
   }
 
+  /**
+   * Open a NEW session for an `initialize` POST: reserve against the caps (503 when
+   * over), build the transport + McpServer, and drive the init handshake. On any
+   * failure the transport is closed and its registry entry defensively dropped so
+   * nothing leaks; the in-flight reservation is always released.
+   */
+  const openNewSession = async (req: Request, res: Response): Promise<void> => {
+    const sub = authSub(req) // subject that owns this session
+    // Reserve against the global cap AND this sub's quota (both count in-flight
+    // inits). undefined → over a cap → 503.
+    const reservation = sessions.reserve(sub)
+    if (reservation === undefined) {
+      res.status(503).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Too many active sessions' },
+        id: requestId(req.body),
+      })
+      return
+    }
+    try {
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sid) => {
+          reservation.commit(sid, transport)
+        },
+        ...rebindGuard,
+      })
+      transport.onclose = () => {
+        const sid = transport.sessionId
+        if (sid !== undefined) sessions.remove(sid)
+      }
+      // connect() calls transport.start() and takes ownership of the transport.
+      // Cast to Transport: the SDK's StreamableHTTPServerTransport types `onclose`
+      // as `(() => void) | undefined`, which trips the repo's exactOptionalPropertyTypes
+      // against Transport's exact-optional `onclose?: () => void`. It nominally
+      // implements Transport — the mismatch is purely the upstream `| undefined`.
+      try {
+        await opts.buildServer({ sub }).connect(transport as Transport)
+        await transport.handleRequest(req, res, req.body)
+      } catch (err) {
+        // Init failed after the transport was created: close it so a half-open
+        // session can't linger in the registry (when onsessioninitialized already
+        // fired) or leak the connected McpServer/pool. Swallow any close failure —
+        // sync throw OR async rejection — so it can never mask the original init error.
+        try {
+          await transport.close()
+        } catch {
+          // ignore — the original init error below takes precedence
+        }
+        // Defensively drop the registry entry rather than relying solely on
+        // `onclose`: if the session was already committed (onsessioninitialized
+        // fired) and `transport.close()` rejected BEFORE firing `onclose`, the live
+        // entry (and its per-sub quota slot) would otherwise leak until the idle
+        // sweeper. `remove` is idempotent + guards an absent sid, so it is safe
+        // whether or not `onclose` ran and whether or not the session was committed.
+        const sid = transport.sessionId
+        if (sid !== undefined) sessions.remove(sid)
+        throw err
+      }
+    } finally {
+      // Drop the in-flight reservation. On success the session is now committed in
+      // the registry (via onsessioninitialized), so this only clears `pending`.
+      reservation.release()
+    }
+  }
+
   router.post('/', async (req: Request, res: Response) => {
     const sessionId = req.headers['mcp-session-id'] as string | undefined
 
@@ -128,56 +194,7 @@ export function createMcpRouter(opts: McpRouteOptions): McpRouter {
     }
 
     if (isInitializeRequest(req.body)) {
-      const sub = authSub(req) // subject that owns this session
-      // Reserve against the global cap AND this sub's quota (both count in-flight
-      // inits). undefined → over a cap → 503.
-      const reservation = sessions.reserve(sub)
-      if (reservation === undefined) {
-        res.status(503).json({
-          jsonrpc: '2.0',
-          error: { code: -32000, message: 'Too many active sessions' },
-          id: requestId(req.body),
-        })
-        return
-      }
-      try {
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (sid) => {
-            reservation.commit(sid, transport)
-          },
-          ...rebindGuard,
-        })
-        transport.onclose = () => {
-          const sid = transport.sessionId
-          if (sid !== undefined) sessions.remove(sid)
-        }
-        // connect() calls transport.start() and takes ownership of the transport.
-        // Cast to Transport: the SDK's StreamableHTTPServerTransport types `onclose`
-        // as `(() => void) | undefined`, which trips the repo's exactOptionalPropertyTypes
-        // against Transport's exact-optional `onclose?: () => void`. It nominally
-        // implements Transport — the mismatch is purely the upstream `| undefined`.
-        try {
-          await opts.buildServer({ sub }).connect(transport as Transport)
-          await transport.handleRequest(req, res, req.body)
-        } catch (err) {
-          // Init failed after the transport was created: close it so a half-open
-          // session can't linger in the registry (when onsessioninitialized already
-          // fired) or leak the connected McpServer/pool. onclose drops the map entry.
-          // Swallow any close failure — sync throw OR async rejection — so it can
-          // never mask the original init error.
-          try {
-            await transport.close()
-          } catch {
-            // ignore — the original init error below takes precedence
-          }
-          throw err
-        }
-      } finally {
-        // Drop the in-flight reservation. On success the session is now committed in
-        // the registry (via onsessioninitialized), so this only clears `pending`.
-        reservation.release()
-      }
+      await openNewSession(req, res)
       return
     }
 
