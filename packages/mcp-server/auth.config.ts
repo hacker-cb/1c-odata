@@ -26,7 +26,10 @@ const db = drizzle(new PGlite())
 export const auth: unknown = betterAuth({
   baseURL: 'http://localhost:3000',
   secret: 'schema-generation-only-not-a-real-secret-0123456789',
-  emailAndPassword: { enabled: true },
+  // Mirrors the runtime's options verbatim. `disableSignUp` has no effect on schema
+  // generation, but keeping the two literally identical is the point of this file —
+  // a reader comparing them should find nothing that differs for an unstated reason.
+  emailAndPassword: { enabled: true, disableSignUp: true },
   database: drizzleAdapter(db, { provider: 'pg' }),
   plugins: [
     jwt(),

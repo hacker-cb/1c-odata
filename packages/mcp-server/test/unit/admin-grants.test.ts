@@ -1,7 +1,7 @@
 // test/unit/admin-grants.test.ts
 import { eq } from 'drizzle-orm'
 import type { Request, Response } from 'express'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { toggleGrant } from '../../src/http/admin/grants.js'
 import type { AdminDeps } from '../../src/http/admin/router.js'
 import { createDb, type DbHandle } from '../../src/store/db.js'
@@ -42,6 +42,12 @@ describe('grant editor', () => {
         { id: 'alice', name: 'A', email: 'a@x', emailVerified: true, createdAt: new Date(), updatedAt: new Date() },
       ])
     await new BaseRepo(handle.db).upsert('trade', { baseUrl: 'http://x', login: 'u', serverTimezone: 'Europe/Moscow' })
+  })
+
+  // pglite is a full WASM Postgres per handle and `beforeEach` makes a NEW one for
+  // every test — without this the suite piles them up for the whole file.
+  afterEach(async () => {
+    await handle.close()
   })
 
   it('set then list then revoke', async () => {

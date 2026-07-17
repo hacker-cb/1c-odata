@@ -52,11 +52,6 @@ export function makeSignInPage(firstRunCheck?: FirstRunCheck) {
   }
 }
 
-/** Back-compat default handler (no first-run probe). */
-export function signInPage(req: Request, res: Response): void {
-  void makeSignInPage()(req, res)
-}
-
 // The first-run hint is STATIC markup — it names no token and interpolates no
 // request data, so it carries no injection risk. It points the operator at the
 // server log, which is where the `/setup?token=…` URL was printed at boot.

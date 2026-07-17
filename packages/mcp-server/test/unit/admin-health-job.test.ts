@@ -1,5 +1,5 @@
 // test/unit/admin-health-job.test.ts
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@1c-odata/mcp/internal', async (orig) => {
   const actual = await orig<typeof import('@1c-odata/mcp/internal')>()
@@ -25,6 +25,12 @@ describe('health job', () => {
     vi.mocked(verifyReachability).mockReset()
   })
 
+  // pglite is a full WASM Postgres per handle and `beforeEach` makes a NEW one for
+  // every test — without this the suite piles them up for the whole file.
+  afterEach(async () => {
+    await handle.close()
+  })
+
   it('writes ok / auth_failed / unreachable rows', async () => {
     const db = handle.db
     const bases = new BaseRepo(db)
@@ -48,7 +54,7 @@ describe('health job', () => {
       intervalMs: 1_000_000,
     })
     await job.runOnce()
-    job.stop()
+    await job.stop()
 
     const rows = Object.fromEntries((await health.list()).map((h) => [h.baseName, h.status]))
     expect(rows).toEqual({ good: 'ok', nopass: 'auth_failed', down: 'unreachable' })
@@ -181,7 +187,7 @@ describe('health job', () => {
       keyring,
       intervalMs: 1_000_000,
     })
-    job.stop()
+    await job.stop()
     expect(clearSpy).toHaveBeenCalled()
     clearSpy.mockRestore()
   })

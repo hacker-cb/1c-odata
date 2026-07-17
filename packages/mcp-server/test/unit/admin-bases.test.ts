@@ -1,7 +1,7 @@
 // test/unit/admin-bases.test.ts
 import type { ReadPool } from '@1c-odata/mcp/internal'
 import type { Request, Response } from 'express'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock the reachability probe: assert verify-before-save without a live 1С base.
 vi.mock('@1c-odata/mcp/internal', async (orig) => {
@@ -77,6 +77,12 @@ describe('admin base CRUD', () => {
     await runAuthMigrations(handle)
     keyring = loadKeyring({ ONEC_MCP_ENC_KEY: KEY } as NodeJS.ProcessEnv)
     vi.mocked(verifyConnectivity).mockReset()
+  })
+
+  // pglite is a full WASM Postgres per handle and `beforeEach` makes a NEW one for
+  // every test — without this the suite piles them up for the whole file.
+  afterEach(async () => {
+    await handle.close()
   })
 
   it('persists descriptor + encrypts secret + refreshes on create', async () => {
