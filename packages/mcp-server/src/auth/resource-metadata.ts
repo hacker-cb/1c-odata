@@ -7,7 +7,7 @@ import type { CanonicalUrls } from './config.js'
  * below advertises it, so the two can never drift — a client reading discovery asks
  * for exactly the scope the gate will check.
  */
-export const DEFAULT_REQUIRED_SCOPES = ['mcp:read']
+export const DEFAULT_REQUIRED_SCOPES: readonly string[] = Object.freeze(['mcp:read'])
 
 /**
  * RFC 9728 Protected Resource Metadata document for our MCP resource. Hand-built
@@ -30,7 +30,7 @@ export interface ProtectedResourceMetadata {
  */
 export function buildResourceMetadata(
   urls: CanonicalUrls,
-  requiredScopes: string[] = DEFAULT_REQUIRED_SCOPES,
+  requiredScopes: readonly string[] = DEFAULT_REQUIRED_SCOPES,
 ): ProtectedResourceMetadata {
   return {
     resource: urls.mcpResourceUrl,

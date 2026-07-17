@@ -75,7 +75,9 @@ export function createAuthMount(opts: AuthMountOptions): AuthMount {
 
   const bearerMiddleware = requireBearerAuth({
     verifier,
-    requiredScopes: opts.requiredScopes ?? DEFAULT_REQUIRED_SCOPES,
+    // Copy the frozen default into a fresh mutable array — requireBearerAuth types
+    // `requiredScopes` as `string[]`, and the const is readonly/frozen.
+    requiredScopes: opts.requiredScopes ?? [...DEFAULT_REQUIRED_SCOPES],
     resourceMetadataUrl: resourceMetadataUrl(urls),
   })
 

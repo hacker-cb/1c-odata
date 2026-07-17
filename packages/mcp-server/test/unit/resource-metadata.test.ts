@@ -15,6 +15,10 @@ describe('buildResourceMetadata', () => {
     expect(DEFAULT_REQUIRED_SCOPES).toEqual(['mcp:read'])
   })
 
+  it('the default is frozen — a stray mutation cannot silently change auth behavior', () => {
+    expect(Object.isFrozen(DEFAULT_REQUIRED_SCOPES)).toBe(true)
+  })
+
   it('advertises the CONFIGURED scopes verbatim, not the hard-coded default', () => {
     // An operator requiring a non-default scope: the PRM must reflect it, or a
     // client would ask for `mcp:read` and be rejected by the gate.
