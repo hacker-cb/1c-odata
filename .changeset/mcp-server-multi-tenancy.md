@@ -12,14 +12,16 @@ encryption key). Without auth, the server is unchanged: the file-backed
 
 - **Encrypted secrets at rest.** 1С passwords are sealed with AES-256-GCM
   (`src/store/crypto.ts`). The base name is the AAD, so a stored secret is
-  cryptographically bound to its base — a swapped ciphertext fails to decrypt. A
-  `key_id` column enables future key rotation without a data migration. Supply
-  the KEK via `--enc-key` or `ONEC_MCP_ENC_KEY` (base64 32-byte;
-  `openssl rand -base64 32`); a missing/malformed key fails boot loudly.
+  cryptographically bound to its base — a swapped ciphertext fails to decrypt. Each
+  row records the `key_id` that sealed it, so the KEK can be rotated: supply the
+  current key via `--enc-key` or `ONEC_MCP_ENC_KEY` (base64 32-byte;
+  `openssl rand -base64 32`) and any retired keys via `ONEC_MCP_ENC_KEYS_PREVIOUS`.
+  A missing/malformed key fails boot loudly.
 - **Our tables** (`bases`, `base_secrets`, `grants`, `health`) live in a
   hand-written `src/store/tenancy-schema.ts`, merged with better-auth's generated
-  schema. `grants.sub` FKs `user.id`. Regenerated `drizzle/0001_*.sql` ships the
-  DDL; pglite dev/test picks it up via `pushSchema`.
+  schema. `grants.sub` FKs `user.id`. The committed `drizzle/0001_*.sql` ships the
+  DDL and is applied by the drizzle-orm migrator on BOTH paths — pglite (dev/tests)
+  and Postgres (prod) run the exact same SQL.
 - **Per-user scoping.** A `DbConnectionSource` decrypts secrets at read time; a
   per-session `ScopedPool` fronts the shared pool and restricts every operation
   to the caller's granted bases, resolving grants **fresh on every tool-call** so
