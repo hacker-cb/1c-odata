@@ -16,8 +16,19 @@
  * those are admin operations, not part of the remote read surface.
  */
 
+// The pool's canonical "no such connection" error. Re-exported so a scoped host
+// (`@1c-odata/mcp-server`'s ScopedPool) can throw the SAME error the pool throws
+// for an absent base — an ungranted base is then byte-identical to a missing one,
+// no existence leak, and no direct `@1c-odata/client` dependency on the host.
+export { InvalidArgumentError } from '@1c-odata/client'
 // On-disk descriptor shape + secret-store escape hatch (for tests/tooling).
 export type { StoredConnection } from './config.js'
+// Shared data-dir resolver: honors `ONEC_MCP_DATA_DIR` + the absolute-path guard,
+// so an alternate host (`@1c-odata/mcp-server`) locates the SAME config.json +
+// credentials as the `1c-odata-mcp` CLI instead of diverging on a bare resolve().
+// The connection-name validator travels alongside so a DB-backed admin write path
+// (`@1c-odata/mcp-server`) enforces the SAME ASCII alias rule as the file store.
+export { assertValidConnectionName, isValidConnectionName, resolveDataDir } from './config.js'
 // Connection pool + its read-facing contract.
 export {
   ConnectionPool,
@@ -33,11 +44,15 @@ export type { ConnectionSource, ListedConnection } from './connection-source.js'
 // and in a health job. The connection-MANAGEMENT functions in the same module
 // (`upsertConnection`/`removeConnection`/`updateConnectionCredentials`/
 // `setConnectionLabel`) stay private: they are bound to the file-backed config.
-export { verifyConnectivity } from './connections.js'
+export { verifyConnectivity, verifyReachability } from './connections.js'
 export { FileConnectionSource, type FileConnectionSourceOptions } from './file-connection-source.js'
 // Response limits.
 export { clampTop, DEFAULT_LIMITS, type Limits, resolveLimits } from './limits.js'
 export { passwordEnvVar, type SecretSource, SecretStore } from './secret-store.js'
+// The uniform tool-result wrapper — so a scoped remote server can register its own
+// small read-only tools (e.g. a redacted, DB-aware `server_info`) with the same
+// success/error envelope the built-in tools use.
+export { toolResult } from './tools/_result.js'
 // Read-only tool registrators — reused verbatim by a scoped remote server.
 export { registerDataTools } from './tools/data.js'
 export { registerSchemaTools } from './tools/schema.js'

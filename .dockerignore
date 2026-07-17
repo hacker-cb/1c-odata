@@ -1,0 +1,25 @@
+# Keep the mcp-server Docker build context lean + hermetic — dependencies and
+# every package's dist/ are reinstalled/rebuilt inside the image, not copied.
+
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+**/*.tsbuildinfo
+**/*.log
+
+# VCS / CI / editor / agent noise
+.git
+.github
+.claude
+.vscode
+.DS_Store
+
+# Large trees not needed to build the server (kept out of context)
+docs
+snapshots
+
+# Never bake local env/secrets into image layers (but keep the templates)
+**/.env
+**/.env.*
+!**/.env.example

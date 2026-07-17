@@ -1,0 +1,16 @@
+# deploy/ci/Caddyfile.ci — CI-only Caddy config.
+#
+# Keeps the shipped deploy/Caddyfile BYTE-IDENTICAL: that file is mounted here at
+# /etc/caddy/site.caddy and imported unchanged, so the ONLY prod-vs-CI delta is the
+# cert ISSUER — the one thing that provably cannot run on a GitHub runner (real
+# ACME needs public DNS + inbound 80/443). Everything else (auto-HTTPS wiring, the
+# reverse_proxy, Host preservation) is exercised exactly as in prod.
+{
+	# Every site uses Caddy's internal CA instead of Let's Encrypt — so site.caddy
+	# needs no per-site edit. skip_install_trust: don't try to add the root to the
+	# container's system trust store (unprivileged, and we extract root.crt instead).
+	local_certs
+	skip_install_trust
+}
+
+import /etc/caddy/site.caddy

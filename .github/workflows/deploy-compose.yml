@@ -1,0 +1,105 @@
+name: Deploy compose smoke
+
+# Brings up the FULL shipped Docker Compose stack (db + mcp + caddy) and drives it
+# through Caddy over real TLS (Caddy's internal CA, verified chain — never -k). The
+# ONLY prod-vs-CI delta is the cert issuer: real ACME/Let's Encrypt needs public
+# DNS + inbound 80/443, which a hosted runner cannot provide. Everything else — the
+# image, compose orchestration, auto-HTTPS wiring, Host preservation through the
+# proxy, the wizard, the break-glass CLI — is exercised as shipped.
+#
+# Path-scoped + nightly + manual, NOT a required check: a path-scoped required
+# check skips-and-blocks on unrelated PRs, so it lives in its own file rather than
+# in ci.yml's required matrix.
+#
+# SECURITY — READ BEFORE EDITING (mirrors ci.yml's maintainer warning):
+#   This job BUILDS AND RUNS fork-PR code (Dockerfile RUN steps + the app). It is
+#   safe ONLY because it uses `pull_request` (never pull_request_target),
+#   `permissions: contents: read`, and references ZERO secrets. Do NOT add
+#   `pull_request_target`. Do NOT add any `secrets.*` — a secret-bearing variant
+#   (e.g. a live-1С egress overlay) belongs in a SEPARATE file with the
+#   detect-secrets owner gate.
+on:
+  pull_request:
+    paths:
+      - "packages/mcp-server/deploy/**"
+      - "packages/mcp-server/drizzle/**"
+      - "packages/mcp-server/src/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/deploy-compose.yml"
+  push:
+    branches: [dev, master, "umbrella/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false # the job never uses the git token
+      - uses: docker/setup-buildx-action@v3
+      - name: Lint both Caddyfiles (compensating control for un-runnable real ACME)
+        # Validate the SHIPPED Caddyfile AND the CI-only root config that actually
+        # drives this run (Caddyfile.ci imports the shipped file as /etc/caddy/site.caddy)
+        # — else a syntax error in the file that DIFFERS from prod would only surface
+        # as a slow crash-loop that times out `up --wait`, not a fast, attributed error.
+        # MCP_PUBLIC_DOMAIN MUST be set: the shipped Caddyfile's site address is
+        # {$MCP_PUBLIC_DOMAIN}{…}; unset → empty → a leading {…} parsed as a bogus
+        # global-options block → validate fails for the WRONG reason.
+        run: |
+          d=packages/mcp-server/deploy
+          docker run --rm -e MCP_PUBLIC_DOMAIN=mcp.test \
+            -v "$PWD/$d/Caddyfile:/f:ro" \
+            caddy:2 caddy validate --config /f --adapter caddyfile
+          docker run --rm -e MCP_PUBLIC_DOMAIN=mcp.test \
+            -v "$PWD/$d/ci/Caddyfile.ci:/etc/caddy/Caddyfile:ro" \
+            -v "$PWD/$d/Caddyfile:/etc/caddy/site.caddy:ro" \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+      - name: Build the image (GHA-cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: . # repo root — the workspace build needs the sibling packages
+          file: packages/mcp-server/deploy/Dockerfile
+          load: true
+          tags: onec-mcp:ci
+          cache-from: type=gha
+          # Restrict cache WRITE to trusted push events — on a fork PR, mode=max
+          # would cache builder stages built from PR-controlled RUN steps.
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max' || '' }}
+      - name: Up (internal-CA TLS) + smoke through Caddy
+        working-directory: packages/mcp-server/deploy
+        run: |
+          # POSTGRES_PASSWORD must be URL-safe: compose.yml interpolates it RAW into
+          # DATABASE_URL, so `openssl rand -hex` (never -base64, which can emit '/').
+          {
+            echo "MCP_PUBLIC_DOMAIN=mcp.test"
+            echo "MCP_PUBLIC_URL=https://mcp.test"
+            echo "BETTER_AUTH_SECRET=$(openssl rand -base64 32)"
+            echo "ONEC_MCP_ENC_KEY=$(openssl rand -base64 32)"
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"
+          } > .env
+          # The smoke reaches Caddy's base 0.0.0.0:443 publish via curl --resolve,
+          # so no /etc/hosts entry is needed.
+          docker compose -f compose.yml -f ci/compose.ci.yml up -d --wait --wait-timeout 300
+          bash ci/compose-smoke.sh
+      - name: Dump compose logs on failure
+        if: failure()
+        working-directory: packages/mcp-server/deploy
+        run: |
+          # Redact the first-run setup token: a failure before the wizard POST
+          # consumes it would otherwise print a still-live one-time token.
+          docker compose -f compose.yml -f ci/compose.ci.yml logs --no-color 2>&1 \
+            | sed -E 's/token=[A-Za-z0-9_-]+/token=REDACTED/g' || true
+          docker compose -f compose.yml -f ci/compose.ci.yml ps || true
+      - name: Tear down
+        if: always()
+        working-directory: packages/mcp-server/deploy
+        run: docker compose -f compose.yml -f ci/compose.ci.yml down -v || true

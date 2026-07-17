@@ -1,14 +1,21 @@
 name: CI
 
 on:
+  # Gate every PR regardless of base — no base-branch allow-list. A multi-PR
+  # feature's slice PRs target their `umbrella/**` branch, not the trunk, so a
+  # `branches: [master]` filter would silently skip them (see
+  # .claude/rules/git-branches.md § Recommended CI triggers), yet the branch
+  # ruleset still requires these checks there. `workflow_dispatch` allows manual
+  # re-runs (flaky CI / on-demand).
   pull_request:
-    branches: [master]
+  workflow_dispatch:
 
-# CI validates pull requests only. Pushes to master are handled by release.yml,
-# which re-runs typecheck plus the core build/test gates (Ubuntu only) before any
-# publish — not the full PR matrix here (no Biome lint, no Windows leg, no live
-# tests), since every change reaches master through a PR that already ran this
-# workflow in full. The changesets release PR is a normal PR, covered here too.
+# CI validates pull requests against any base. Pushes to master are handled by
+# release.yml, which re-runs typecheck plus the core build/test gates (Ubuntu
+# only) before any publish — not the full PR matrix here (no Biome lint, no
+# Windows leg, no live tests), since every change reaches master through a PR
+# that already ran this workflow in full. The changesets release PR is a normal
+# PR, covered here too.
 
 # One in-flight run per PR ref: a new push to a PR branch (arriving as
 # `pull_request: synchronize`) cancels the previous run for that PR. Different
@@ -114,6 +121,26 @@ jobs:
         run: |
           pnpm --filter basic-example typecheck
           pnpm --filter dynamic-example typecheck
+      - name: Drizzle migrations in sync with schema (gate 2c)
+        # packages/mcp-server/drizzle/*.sql is the SINGLE source of truth applied at
+        # runtime by BOTH dev/tests (pglite) and prod (pg) — see
+        # src/store/migrate.ts. Guard against it drifting from the TS schema: a
+        # stale committed SQL would only surface as a prod boot failure otherwise.
+        # Regenerate and fail if anything changed (a schema edit without a
+        # regenerated migration). Ubuntu-only — deterministic, OS-independent.
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          # stdin from /dev/null: `drizzle-kit generate` prompts interactively only
+          # on an ambiguous rename — with no TTY that read gets EOF and fails fast
+          # instead of hanging to the job timeout. The common add/modify drift case
+          # (what this guard targets) never prompts.
+          pnpm -F @1c-odata/mcp-server exec drizzle-kit generate < /dev/null
+          if [ -n "$(git status --porcelain packages/mcp-server/drizzle)" ]; then
+            echo "::error::drizzle migrations out of sync with src/store/schema.ts — run 'pnpm -F @1c-odata/mcp-server auth:schema' and commit packages/mcp-server/drizzle"
+            git status --porcelain packages/mcp-server/drizzle
+            git --no-pager diff packages/mcp-server/drizzle
+            exit 1
+          fi
 
   test-and-build:
     runs-on: ${{ matrix.os }}
@@ -134,6 +161,22 @@ jobs:
           coverage: ${{ matrix.os == 'ubuntu-latest' }}
       - name: E2E tests (gate 8)
         run: pnpm turbo test:e2e --filter='./packages/*'
+      - name: mcp-server bin boots on Windows (gate 8b)
+        # The Linux deploy tiers (deploy-pg-smoke / deploy-package-smoke) never run
+        # on Windows, yet the bin's OS-sensitive bits regress on NTFS: the shebang +
+        # realpathSync entry guard, and migrationsFolder()'s dirname/join walk over
+        # backslash paths. admin-create exercises exactly those — it drives
+        # runAuthMigrations from the built dist against a throwaway pglite store,
+        # with NO port bind (so no server/curl flake). `gates` already built dist/.
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        env:
+          BETTER_AUTH_SECRET: ci-windows-secret-not-for-prod-0123456789
+        run: |
+          node packages/mcp-server/dist/cli.js --help | grep -q admin-create
+          node packages/mcp-server/dist/cli.js admin-create \
+            --auth-data-dir "$RUNNER_TEMP/mcp-store" --public-url http://127.0.0.1:3000 \
+            --email a@b.co --password 'Password123!' | grep -qi 'admin user created'
       - name: Upload coverage
         if: success() && matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v7
@@ -143,6 +186,72 @@ jobs:
           # Fail loudly if coverage vanished — a silent empty upload previously
           # masked the fact that coverage was never generated at all.
           if-no-files-found: error
+
+  deploy-pg-smoke:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    timeout-minutes: 10
+    # Boots the shipped `pnpm deploy --prod` tree against a REAL Postgres and walks
+    # the deploy paths the pglite unit/e2e suite structurally cannot: the
+    # node-postgres migrator, the setup token's single-use guarantee under TRUE
+    # concurrency (pglite serializes; a prod pg.Pool does not), the Host guard
+    # end-to-end, and SIGTERM + idempotent re-migration.
+    #
+    # SECRET-FREE by construction: a throwaway `services:` Postgres + app secrets
+    # from `openssl rand`; no 1С base, no proxy. => NO `needs: detect-secrets`; runs
+    # on fork PRs; CAN be a required check.
+    # GUARDRAIL: never add any `secrets.*` here — that demands the owner gate and
+    # forfeits fork coverage. A secret-bearing deploy variant belongs in its own file.
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: mcp
+          POSTGRES_PASSWORD: mcp
+          POSTGRES_DB: mcp
+        ports:
+          - 5433:5432 # host 5433 dodges any preinstalled pg on 5432
+        options: >-
+          --health-cmd "pg_isready -U mcp -d mcp"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: Emit the --prod deploy tree
+        run: pnpm --filter @1c-odata/mcp-server deploy --prod --legacy /tmp/app
+      - name: Boot on real pg + walk security-critical paths
+        env:
+          APP_DIR: /tmp/app
+          DATABASE_URL: postgres://mcp:mcp@127.0.0.1:5433/mcp
+          ONEC_MCP_PUBLIC_URL: http://127.0.0.1:3000
+        run: bash packages/mcp-server/deploy/ci/smoke.sh
+      - name: Dump server logs on failure
+        if: failure()
+        # Redact the first-run setup token: a failure BEFORE the race consumes it
+        # would otherwise print a still-live one-time token into the CI log.
+        run: cat /tmp/mcp1.log /tmp/mcp2.log 2>/dev/null | sed -E 's/token=[A-Za-z0-9_-]+/token=REDACTED/g' || true
+
+  deploy-package-smoke:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    timeout-minutes: 10
+    # Sole owner of the published-package path: pack the four @1c-odata/* tarballs,
+    # install them into a scratch project (pinned to the local tarballs so npm never
+    # hits the registry for the unpublished siblings), and drive the AUTH path so
+    # the migrator resolves `drizzle/` from the real node_modules layout. Catches a
+    # dropped `files` entry / broken `bin` / misfiled runtime dep that `package:lint`
+    # (types + exports only) cannot. Secret-free; fork-safe.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: Pack + install the tarball, boot the bin
+        env:
+          REPO: ${{ github.workspace }}
+          TMP: ${{ runner.temp }}/pkgsmoke
+        run: bash packages/mcp-server/deploy/ci/package-smoke.sh
+      - name: Dump boot log on failure
+        if: failure()
+        run: cat "${{ runner.temp }}/pkgsmoke/pk.log" 2>/dev/null || true
 
   test-example:
     runs-on: ubuntu-latest

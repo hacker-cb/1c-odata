@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { request } from '@1c-odata/client/internal'
 import { fetchMetadataXml } from '@1c-odata/metadata'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadConfig } from '../../src/config.js'
@@ -11,6 +12,7 @@ import {
   updateConnectionCredentials,
   upsertConnection,
   verifyConnectivity,
+  verifyReachability,
 } from '../../src/connections.js'
 import { SecretStore } from '../../src/secret-store.js'
 
@@ -27,8 +29,18 @@ vi.mock('@napi-rs/keyring', () => ({
   },
 }))
 
-// verifyConnectivity is the only path that touches the network — stub the fetch.
+// Two paths touch the network: verifyConnectivity (via fetchMetadataXml, stubbed
+// here) and verifyReachability (via the client transport `request`, stubbed below).
 vi.mock('@1c-odata/metadata', () => ({ fetchMetadataXml: vi.fn().mockResolvedValue('<edmx/>') }))
+
+// verifyReachability GETs the service root through the client transport — stub it.
+vi.mock('@1c-odata/client/internal', async (orig) => {
+  const actual = await orig<typeof import('@1c-odata/client/internal')>()
+  return {
+    ...actual,
+    request: vi.fn().mockResolvedValue({ status: 200, statusText: 'OK', headers: {}, body: '{}', durationMs: 1 }),
+  }
+})
 
 let dir: string
 beforeEach(() => {
@@ -275,6 +287,95 @@ describe('verifyConnectivity', () => {
     await expect(verifyConnectivity({ baseUrl: 'http://host/odata', login: 'u', password: 'bad' })).rejects.toThrow(
       /401/,
     )
+  })
+})
+
+describe('verifyReachability', () => {
+  it('GETs the OData service ROOT with basic auth (not $metadata)', async () => {
+    vi.mocked(request).mockClear()
+    await verifyReachability({ baseUrl: 'http://user:secret@host/odata/', login: '  u  ', password: 'pw' })
+    expect(vi.mocked(request)).toHaveBeenCalledTimes(1)
+    const [req] = vi.mocked(request).mock.calls[0] ?? []
+    expect(req?.method).toBe('GET')
+    expect(req?.url).toBe('http://host/odata/') // root + trailing slash, userinfo stripped
+    expect(req?.url).not.toContain('$metadata') // light probe — never downloads the schema
+    expect(String(req?.headers?.Authorization)).toMatch(/^Basic /)
+  })
+
+  it('propagates a non-2xx (auth/network) failure', async () => {
+    vi.mocked(request).mockRejectedValueOnce(new Error('401 Unauthorized'))
+    await expect(verifyReachability({ baseUrl: 'http://host/odata/', login: 'u', password: 'bad' })).rejects.toThrow(
+      /401/,
+    )
+  })
+
+  it('rejects a 2xx HTML response (sign-in portal / wrong URL) instead of reporting healthy', async () => {
+    vi.mocked(request).mockResolvedValueOnce({
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+      body: '<!doctype html><html><body>Please sign in</body></html>',
+      durationMs: 1,
+    })
+    await expect(verifyReachability({ baseUrl: 'http://host/odata/', login: 'u', password: 'pw' })).rejects.toThrow(
+      /OData document/,
+    )
+  })
+
+  it('rejects a 2xx non-JSON/non-XML body (proxy plain-text page) instead of reporting healthy', async () => {
+    vi.mocked(request).mockResolvedValueOnce({
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'text/plain' },
+      body: 'Service temporarily unavailable',
+      durationMs: 1,
+    })
+    await expect(verifyReachability({ baseUrl: 'http://host/odata/', login: 'u', password: 'pw' })).rejects.toThrow(
+      /OData document/,
+    )
+  })
+
+  it('rejects a bare `<…>` HTML fragment that is not an OData service document', async () => {
+    // A missing/misleading content-type + a body like `<body>…` must NOT pass just
+    // because it starts with `<` — only an Atom <service> document is a valid XML root.
+    vi.mocked(request).mockResolvedValueOnce({
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      body: '<body>Welcome to the portal</body>',
+      durationMs: 1,
+    })
+    await expect(verifyReachability({ baseUrl: 'http://host/odata/', login: 'u', password: 'pw' })).rejects.toThrow(
+      /OData document/,
+    )
+  })
+
+  it('accepts an Atom <service> document (behind an XML declaration)', async () => {
+    vi.mocked(request).mockResolvedValueOnce({
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/atomsvc+xml' },
+      body: '<?xml version="1.0" encoding="UTF-8"?><service xmlns="http://www.w3.org/2007/app"><workspace/></service>',
+      durationMs: 1,
+    })
+    await expect(
+      verifyReachability({ baseUrl: 'http://host/odata/', login: 'u', password: 'pw' }),
+    ).resolves.toBeUndefined()
+  })
+
+  it('accepts a <service> document behind a long prolog/comment (head slice is not too short)', async () => {
+    // A >256-byte leading comment would push <service> out of an over-tight slice.
+    const longComment = `<!-- ${'x'.repeat(400)} -->`
+    vi.mocked(request).mockResolvedValueOnce({
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      body: `<?xml version="1.0"?>${longComment}<service xmlns="http://www.w3.org/2007/app"><workspace/></service>`,
+      durationMs: 1,
+    })
+    await expect(
+      verifyReachability({ baseUrl: 'http://host/odata/', login: 'u', password: 'pw' }),
+    ).resolves.toBeUndefined()
   })
 })
 
