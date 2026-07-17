@@ -248,6 +248,9 @@ export async function createHttpServer(opts: CreateHttpServerOptions): Promise<H
         urls,
         authRouter,
         bearerMiddleware,
+        // Same scopes the bearerMiddleware enforces — the discovery router advertises
+        // them in the PRM, so a non-default scope config can't make the two disagree.
+        ...(opts.auth.requiredScopes !== undefined ? { requiredScopes: opts.auth.requiredScopes } : {}),
         ...(keyring !== undefined ? { db, keyring, sharedPool, version } : {}),
         // Present only on the tenancy path (healthJob is built iff keyring is set).
         ...(healthJob !== undefined ? { onDemandHealthCheck: healthJob.runOnce } : {}),

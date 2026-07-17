@@ -22,6 +22,11 @@ export interface AppAuthOptions {
   /** requireBearerAuth; mounted on /mcp BEFORE the MCP router. */
   bearerMiddleware: RequestHandler
   /**
+   * Scopes required on /mcp — forwarded to the discovery router so the PRM's
+   * `scopes_supported` matches what `bearerMiddleware` enforces. Omit for the default.
+   */
+  requiredScopes?: string[]
+  /**
    * Tenancy handles carried through app.ts UNTOUCHED (the route never reads them —
    * index.ts owns the db lifecycle and builds the per-session ScopedPool closure
    * directly). Present only on the tenancy path; kept on this type so future admin
@@ -80,7 +85,13 @@ export function createApp(opts: CreateAppOptions): BuiltApp {
 
   // (3) Discovery at root (public, CORS-open).
   if (opts.auth !== undefined) {
-    app.use(createDiscoveryRouter({ auth: opts.auth.auth, urls: opts.auth.urls }))
+    app.use(
+      createDiscoveryRouter({
+        auth: opts.auth.auth,
+        urls: opts.auth.urls,
+        ...(opts.auth.requiredScopes !== undefined ? { requiredScopes: opts.auth.requiredScopes } : {}),
+      }),
+    )
   }
 
   // (3.5) Admin panel + first-run setup wizard — only on the tenancy path (needs

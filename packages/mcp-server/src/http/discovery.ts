@@ -8,6 +8,11 @@ import { buildResourceMetadata } from '../auth/resource-metadata.js'
 export interface DiscoveryOptions {
   auth: Auth
   urls: CanonicalUrls
+  /**
+   * Scopes required on `/mcp` — advertised verbatim in the PRM's `scopes_supported`.
+   * MUST match what the bearer gate enforces (createAuthMount). Omit for the default.
+   */
+  requiredScopes?: string[]
 }
 
 /**
@@ -29,7 +34,7 @@ export interface DiscoveryOptions {
  */
 export function createDiscoveryRouter(opts: DiscoveryOptions): Router {
   const router = Router()
-  const prm = buildResourceMetadata(opts.urls)
+  const prm = buildResourceMetadata(opts.urls, opts.requiredScopes)
   const asMetadataHandler = oauthProviderAuthServerMetadata(opts.auth)
 
   // Permissive CORS for the well-known docs only.
