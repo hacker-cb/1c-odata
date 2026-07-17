@@ -1,5 +1,5 @@
 // test/unit/admin-server-info.test.ts
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { adminServerInfo } from '../../src/http/admin/server-info.js'
 import { createDb, type DbHandle } from '../../src/store/db.js'
 import { runAuthMigrations } from '../../src/store/migrate.js'
@@ -10,6 +10,12 @@ describe('DB-aware admin server_info', () => {
   beforeEach(async () => {
     handle = createDb({ kind: 'pglite' })
     await runAuthMigrations(handle)
+  })
+
+  // pglite is a full WASM Postgres per handle and `beforeEach` makes a NEW one for
+  // every test — without this the suite piles them up for the whole file.
+  afterEach(async () => {
+    await handle.close()
   })
 
   it('counts bases from the DB, not config.json', async () => {

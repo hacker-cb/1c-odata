@@ -6,7 +6,7 @@
 import type { ReadPool } from '@1c-odata/mcp/internal'
 import { eq } from 'drizzle-orm'
 import type { Request, Response } from 'express'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { user } from '../../auth-schema.js'
 import type { AdminDeps } from '../../src/http/admin/router.js'
 import {
@@ -108,6 +108,12 @@ describe('admin user management guards', () => {
     api.revokeUserSessions.mockResolvedValue({})
     api.removeUser.mockResolvedValue({})
     api.adminUpdateUser.mockResolvedValue({})
+  })
+
+  // pglite is a full WASM Postgres per handle and `beforeEach` makes a NEW one for
+  // every test — without this the suite piles them up for the whole file.
+  afterEach(async () => {
+    await handle.close()
   })
 
   it('refuses to demote the LAST admin (select snaps back via a 200 row + error toast)', async () => {

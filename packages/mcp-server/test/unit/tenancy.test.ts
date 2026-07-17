@@ -1,7 +1,7 @@
 // test/unit/tenancy.test.ts
 import type { ConnectionSummary, PoolEntry, ReadPool } from '@1c-odata/mcp/internal'
 import { InvalidArgumentError } from '@1c-odata/mcp/internal'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encrypt, type Keyring, loadKeyring } from '../../src/store/crypto.js'
 import { createDb, type DbHandle } from '../../src/store/db.js'
 import { runAuthMigrations } from '../../src/store/migrate.js'
@@ -47,6 +47,12 @@ describe('DbConnectionSource + grant scoping', () => {
 
   beforeEach(async () => {
     ;({ handle, keyring } = await freshDb())
+  })
+
+  // pglite is a full WASM Postgres per handle and `beforeEach` makes a NEW one for
+  // every test — without this the suite piles them up for the whole file.
+  afterEach(async () => {
+    await handle.close()
   })
 
   async function seed(): Promise<{ src: DbConnectionSource; alice: string; bob: string }> {

@@ -202,7 +202,7 @@ export function buildProgram(): Command {
         // host var unset) must fall through to AUTH_SECRET, not shadow it.
         const secret = process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET
         if (secret === undefined || secret === '') {
-          throw new Error('BETTER_AUTH_SECRET is required when --public-url enables auth')
+          throw new Error('BETTER_AUTH_SECRET (or AUTH_SECRET) is required when --public-url enables auth')
         }
         // Multi-tenancy is opt-in on the auth path: supply a KEK (flag or env) to
         // switch from the file source to DB-backed, per-user-scoped bases. Absent
@@ -286,7 +286,7 @@ export function buildProgram(): Command {
       // `||` not `??`: an empty-string BETTER_AUTH_SECRET must fall through to AUTH_SECRET.
       const secret = process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET
       if (secret === undefined || secret === '') {
-        throw new Error('BETTER_AUTH_SECRET is required')
+        throw new Error('BETTER_AUTH_SECRET (or AUTH_SECRET) is required')
       }
       const dialect = resolveDialect(process.env, { ...opts, port: '', host: '' } as ServeOptions)
       // A bootstrapped admin must OUTLIVE this process. An in-memory pglite (no
@@ -350,7 +350,7 @@ export function buildProgram(): Command {
       // `||` not `??`: an empty-string BETTER_AUTH_SECRET must fall through to AUTH_SECRET.
       const secret = process.env.BETTER_AUTH_SECRET || process.env.AUTH_SECRET
       if (secret === undefined || secret === '') {
-        throw new Error('BETTER_AUTH_SECRET is required')
+        throw new Error('BETTER_AUTH_SECRET (or AUTH_SECRET) is required')
       }
       const dialect = resolveDialect(process.env, { ...opts, port: '', host: '' } as ServeOptions)
       // Same guard as admin-create: an in-memory pglite is discarded on close, so a
