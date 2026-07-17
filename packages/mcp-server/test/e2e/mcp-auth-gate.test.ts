@@ -30,6 +30,8 @@ describe('e2e: /mcp requires a valid Bearer JWT', () => {
     const prm = await res.json()
     expect(prm.resource).toBe(mcpUrl)
     expect(prm.authorization_servers).toContain(as.base)
+    // The advertised scopes must match what the gate enforces (default here).
+    expect(prm.scopes_supported).toEqual(['mcp:read'])
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
   })
 

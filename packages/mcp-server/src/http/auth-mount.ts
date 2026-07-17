@@ -6,7 +6,7 @@ import type { Auth } from '../auth/better-auth.js'
 import type { CanonicalUrls } from '../auth/config.js'
 import { consentPage } from '../auth/pages/consent.js'
 import { type FirstRunCheck, makeSignInPage } from '../auth/pages/sign-in.js'
-import { resourceMetadataUrl } from '../auth/resource-metadata.js'
+import { DEFAULT_REQUIRED_SCOPES, resourceMetadataUrl } from '../auth/resource-metadata.js'
 import { createJwtVerifier } from '../auth/verifier.js'
 
 /**
@@ -75,7 +75,9 @@ export function createAuthMount(opts: AuthMountOptions): AuthMount {
 
   const bearerMiddleware = requireBearerAuth({
     verifier,
-    requiredScopes: opts.requiredScopes ?? ['mcp:read'],
+    // Copy the frozen default into a fresh mutable array — requireBearerAuth types
+    // `requiredScopes` as `string[]`, and the const is readonly/frozen.
+    requiredScopes: opts.requiredScopes ?? [...DEFAULT_REQUIRED_SCOPES],
     resourceMetadataUrl: resourceMetadataUrl(urls),
   })
 
