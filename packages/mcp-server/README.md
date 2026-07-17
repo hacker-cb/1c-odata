@@ -114,13 +114,15 @@ token is only ever in the log, never in a page).
 Break-glass alternatives, both requiring a PERSISTENT store:
 
 ```bash
-# Non-interactive first-admin seed (equivalent to the wizard, for automation):
-BETTER_AUTH_SECRET=... \
+# Non-interactive first-admin seed (equivalent to the wizard, for automation).
+# Both commands build the auth store, so they need the same public URL + secret
+# `serve` uses (or pass --public-url instead of the env var):
+BETTER_AUTH_SECRET=... ONEC_MCP_PUBLIC_URL=https://mcp.example.com \
 1c-odata-mcp-server admin-create --email admin@example.com --password '…' \
   --pg-url postgres://…
 
 # Reset a forgotten password for an existing user:
-BETTER_AUTH_SECRET=... \
+BETTER_AUTH_SECRET=... ONEC_MCP_PUBLIC_URL=https://mcp.example.com \
 1c-odata-mcp-server set-password --email admin@example.com --password '…' \
   --pg-url postgres://…
 ```
