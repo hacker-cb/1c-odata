@@ -255,9 +255,13 @@ export function createAdminRouter(opts: CreateAdminRouterOptions): Router {
 }
 
 /** Terminal error handler for the admin router. Never leaks the raw error to the DOM. */
-const adminErrorHandler: ErrorRequestHandler = (err, req, res, _next) => {
+const adminErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
   logger.error({ err: err instanceof Error ? err.message : String(err), path: req.originalUrl }, 'admin handler failed')
-  if (res.headersSent) return // a partial response already started — nothing safe to add
+  // A partial response already went out: nothing safe to append (the status and
+  // some body are committed). Hand it to Express's default handler rather than
+  // returning — that one destroys the socket, so the client sees a broken response
+  // instead of hanging on a half-written one until its timeout.
+  if (res.headersSent) return next(err)
   if (isHtmx(req)) {
     flash(res, 500, 'Internal error — the operation did not complete.')
     return

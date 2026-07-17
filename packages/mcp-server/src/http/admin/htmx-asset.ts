@@ -14,3 +14,11 @@ const HTMX_MIN_JS_B64 =
 
 /** The decoded htmx@2.0.4 minified source, served verbatim at /admin/assets/htmx.min.js. */
 export const HTMX_JS: string = Buffer.from(HTMX_MIN_JS_B64, 'base64').toString('utf8')
+
+/**
+ * The pinned version, used as the asset URL's cache key (see shell.ts). The route
+ * serves these bytes with `immutable` + a one-year max-age, which is only honest
+ * while the URL changes with the bytes — bump this in the same edit as the base64
+ * above and every cached copy is superseded at once.
+ */
+export const HTMX_VERSION = '2.0.4'

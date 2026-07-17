@@ -1,4 +1,6 @@
 // src/ui/shell.ts
+import { HTMX_VERSION } from '../http/admin/htmx-asset.js'
+
 //
 // The one design system for every server-rendered surface — the admin panel
 // (app chrome: top-bar nav) and the pre-auth pages (sign-in, consent, first-run
@@ -225,7 +227,13 @@ dialog::backdrop{background:rgba(10,12,18,.5)}
 .btn-row{display:flex;gap:9px;margin-top:4px}.btn-row button{flex:1;justify-content:center}
 `
 
-const HTMX_SRC = '/admin/assets/htmx.min.js'
+// Version-keyed: the route serves htmx with `immutable` + a one-year max-age, which
+// would otherwise pin browsers to a stale copy for a YEAR across an htmx upgrade
+// (the path alone never changes). The query string is part of the cache key, so
+// bumping HTMX_VERSION supersedes every cached copy. Express ignores it when
+// matching the route, so the handler is unchanged. admin.js needs no key — it ships
+// `no-cache` because it changes with the package.
+const HTMX_SRC = `/admin/assets/htmx.min.js?v=${HTMX_VERSION}`
 const ADMIN_JS_SRC = '/admin/assets/admin.js'
 
 /**
