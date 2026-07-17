@@ -19,7 +19,8 @@ Express + Eta + a vendored, CSP-safe htmx (no CDN; `script-src 'self'`).
   `listByBase`); toggling a cell grants/revokes immediately.
 - **User management** via the better-auth admin API (`createUser` / `setRole`).
 - **Health job** — a single-instance `setInterval` that periodically probes each
-  base with `verifyConnectivity` and records `ok`/`auth_failed`/`unreachable`;
+  base with `verifyReachability` (a light GET on the OData service root, not a full
+  `$metadata` download) and records `ok`/`auth_failed`/`unreachable`;
   started/stopped with the server lifecycle.
 - **`admin-create` CLI subcommand** — header-less first-admin bootstrap seed
   (better-auth ships no CLI for this).
