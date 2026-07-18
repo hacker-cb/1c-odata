@@ -30,6 +30,12 @@ export interface AuthHarness {
    * token.
    */
   mintToken(o?: { resource?: string; scope?: string }): Promise<string>
+  /**
+   * Close ONLY the AS's HTTP socket, leaving its better-auth instance (and the
+   * key material behind it) alive. Simulates a deploy where the server cannot
+   * reach its own public origin — see the JWKS-offline e2e.
+   */
+  closeHttp(): Promise<void>
   close(): Promise<void>
 }
 
@@ -250,6 +256,9 @@ export async function startAuthServer(extraResourcePaths: string[] = []): Promis
     mcpUrl,
     auth,
     mintToken: (o = {}) => runFlow(base, publicUrl, auth, o),
+    // `close()` is idempotent w.r.t. this: closing an already-closed server just
+    // hands the callback an error, which we ignore.
+    closeHttp: () => new Promise<void>((r) => srv.server.close(() => r())),
     async close() {
       await new Promise<void>((r) => srv.server.close(() => r()))
       await handle.close()

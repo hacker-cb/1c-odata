@@ -55,13 +55,15 @@ TOKEN=$($DC logs --no-color --no-log-prefix mcp | grep 'FIRST-RUN' | grep -oE 't
 # the proxy hop without needing a token.
 #
 # The full AUTHENTICATED round-trip (bearer → Host guard → initialize 200) is
-# covered by Tier 1 direct, and is deliberately NOT repeated through Caddy here:
-# verifying a JWT makes the server fetch its own JWKS from the public issuer
-# (https://mcp.test/api/auth/...), which in the compose network the container can
-# neither resolve (mcp.test is only in the RUNNER's /etc/hosts) nor trust (Caddy's
-# internal CA). In a real deploy the public domain resolves and carries a
-# publicly-trusted cert, so that self-fetch works — it is a CI-topology artifact,
-# not a product defect.
+# covered by Tier 1 direct and is not repeated through Caddy here — driving the
+# whole OAuth dance (sign-in → DCR → authorize → consent → token, with PKCE) from
+# a shell script buys little over the TS e2e that already covers it.
+#
+# Note this is now purely a cost call, not a topology limit: verification reads
+# the AS's keys IN-PROCESS, so the container never has to resolve or trust its own
+# public origin (see #106). It used to fetch https://mcp.test/api/auth/... , which
+# in the compose network the container can neither resolve (mcp.test lives only in
+# the RUNNER's /etc/hosts) nor trust (Caddy's internal CA).
 mcp_headers=$($C -D - -o /dev/null -X POST https://mcp.test/mcp \
   -H 'accept: application/json, text/event-stream' -H 'content-type: application/json' --data '{}')
 grep -qi 'www-authenticate' <<<"$mcp_headers"

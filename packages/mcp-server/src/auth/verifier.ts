@@ -2,71 +2,84 @@
 import { InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js'
 import type { OAuthTokenVerifier } from '@modelcontextprotocol/sdk/server/auth/provider.js'
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js'
-import { createRemoteJWKSet, type JWTPayload, errors as joseErrors, jwtVerify } from 'jose'
+import { createLocalJWKSet, type JSONWebKeySet, type JWTPayload, errors as joseErrors, jwtVerify } from 'jose'
+
+/**
+ * Resolves the AS's public signing key for a given JWS header. This is exactly
+ * what jose's key-set helpers return, so a remote set is assignable too.
+ */
+export type KeyResolver = ReturnType<typeof createLocalJWKSet>
 
 export interface JwtVerifierOptions {
-  /** AS issuer (`iss`), e.g. https://mcp.example.com/api/auth. jwks_uri is derived from its metadata. */
+  /** AS issuer (`iss`) to pin, e.g. https://mcp.example.com/api/auth. */
   issuer: string
   /** Expected `aud` — our MCP resource id (RFC 8707), e.g. https://mcp.example.com/mcp. */
   audience: string
+  /** Public signing keys of the AS. See {@link createLocalJwks} for the in-process source. */
+  keys: () => Promise<KeyResolver>
   /** Restrict accepted signing algorithms. Default: the AS's EdDSA plus common asym algs. */
   algorithms?: string[]
 }
 
-/** Fail a hung AS-metadata fetch fast rather than hanging bearer checks (~undici 300s default). */
-const AS_METADATA_TIMEOUT_MS = 5_000
+/** Reads the JWKS straight out of the AS — no HTTP. See {@link createLocalJwks}. */
+export type JwksReader = () => Promise<JSONWebKeySet>
 
-interface AsMetadata {
-  issuer: string
-  jwks_uri: string
-}
-
-type JwksResolver = ReturnType<typeof createRemoteJWKSet>
+/** Minimum spacing between JWKS reloads triggered by an unknown `kid`. */
+const JWKS_REFRESH_COOLDOWN_MS = 30_000
 
 /**
- * Fetch the AS metadata (RFC 8414) once and build a cached remote-JWKS resolver
- * from its `jwks_uri`. We do NOT hardcode `/api/auth/jwks` — the location comes
- * from the AS document, so a config change on the AS side can't silently break us.
- * The cache is cleared on failure so a transient blip can be retried.
+ * Build the verifier's key source from an AS that lives in THIS process.
+ *
+ * The server is both the Authorization Server (better-auth) and the Resource
+ * Server, so its signing keys are already local — in the `jwks` table the AS
+ * reads through `auth.api.getJwks()`. Fetching them back over the network from
+ * our own public origin would make token verification depend on hairpin-NAT /
+ * split-horizon DNS, which a single-host deploy behind a reverse proxy often
+ * lacks; there, OAuth would break entirely. Reading in-process removes that
+ * dependency — and with it the SSRF surface a URL-driven fetch carries.
+ *
+ * Public discovery is unaffected: `/.well-known/*` still advertises the PUBLIC
+ * `jwks_uri`, because external clients do need to reach it over the network.
+ *
+ * The key set is cached and rebuilt on an unknown `kid` (bounded by a cooldown,
+ * mirroring jose's remote-set behaviour) so a rotated AS key is picked up
+ * without making every bearer check hit the database.
  */
-function makeJwksProvider(issuer: string): () => Promise<JwksResolver> {
-  let cached: Promise<JwksResolver> | undefined
-  return () => {
+export function createLocalJwks(
+  readJwks: JwksReader,
+  cooldownMs = JWKS_REFRESH_COOLDOWN_MS,
+): () => Promise<KeyResolver> {
+  let cached: Promise<KeyResolver> | undefined
+  let lastLoadedAt = Number.NEGATIVE_INFINITY
+
+  const load = (): Promise<KeyResolver> => {
     if (cached === undefined) {
-      cached = (async () => {
-        const base = issuer.replace(/\/+$/, '')
-        const metadataUrl = `${base}/.well-known/oauth-authorization-server`
-        // Bound the metadata fetch (jose bounds the JWKS fetch, but this one is
-        // ours): a hung AS-metadata endpoint must fail fast — the promise is cached
-        // and shared, so without a timeout every concurrent bearer check would hang
-        // on it for undici's ~300s default instead of surfacing a prompt 500.
-        const res = await fetch(metadataUrl, {
-          headers: { accept: 'application/json' },
-          signal: AbortSignal.timeout(AS_METADATA_TIMEOUT_MS),
+      lastLoadedAt = Date.now()
+      cached = readJwks()
+        .then((jwks) => createLocalJWKSet(jwks))
+        .catch((err: unknown) => {
+          cached = undefined // don't poison the cache on a transient failure
+          lastLoadedAt = Number.NEGATIVE_INFINITY
+          throw err
         })
-        if (!res.ok) {
-          throw new Error(`Failed to fetch AS metadata (${res.status} ${res.statusText}) from ${metadataUrl}`)
-        }
-        const meta = (await res.json()) as AsMetadata
-        if (typeof meta.jwks_uri !== 'string' || meta.jwks_uri === '') {
-          throw new Error(`AS metadata at ${metadataUrl} has no jwks_uri`)
-        }
-        // Constrain jwks_uri to the pinned issuer's origin: a misdirected metadata
-        // fetch (proxy/DNS misconfig, SSRF, an unexpected redirect) must never be
-        // able to point the verifier at attacker-controlled signing keys on
-        // another origin — that would let a forged token verify.
-        const jwksUrl = new URL(meta.jwks_uri)
-        const issuerOrigin = new URL(base).origin
-        if (jwksUrl.origin !== issuerOrigin) {
-          throw new Error(`AS jwks_uri origin ${jwksUrl.origin} does not match issuer origin ${issuerOrigin}`)
-        }
-        return createRemoteJWKSet(jwksUrl)
-      })().catch((err: unknown) => {
-        cached = undefined // don't poison the cache on a transient failure
-        throw err
-      })
     }
     return cached
+  }
+
+  return async () => {
+    const resolver = await load()
+    // Wrap so a `kid` miss triggers ONE reload (the AS rotated a key) and retries
+    // against the fresh set. The cooldown keeps a stream of bogus-`kid` tokens
+    // from turning into a database read per request.
+    return async (protectedHeader, token) => {
+      try {
+        return await resolver(protectedHeader, token)
+      } catch (err) {
+        if (!(err instanceof joseErrors.JWKSNoMatchingKey) || Date.now() - lastLoadedAt < cooldownMs) throw err
+        cached = undefined
+        return await (await load())(protectedHeader, token)
+      }
+    }
   }
 }
 
@@ -91,7 +104,7 @@ function extractClientId(payload: JWTPayload, sub: string): string {
 
 /**
  * jose-6-backed OAuthTokenVerifier for MCP's requireBearerAuth. Verifies the
- * signature against the AS's remote JWKS and pins BOTH `iss` and `aud`. JWT-only:
+ * signature against the AS's signing keys and pins BOTH `iss` and `aud`. JWT-only:
  * an opaque (resource-less) token has no valid signature here and fails loudly —
  * exactly the guard against the silent-downgrade trap.
  *
@@ -100,15 +113,14 @@ function extractClientId(payload: JWTPayload, sub: string): string {
  * as long as our resource id is a member — so array `aud` verifies correctly.
  */
 export function createJwtVerifier(opts: JwtVerifierOptions): OAuthTokenVerifier {
-  const getJwks = makeJwksProvider(opts.issuer)
   const algorithms = opts.algorithms ?? ['EdDSA', 'RS256', 'ES256']
 
   return {
     async verifyAccessToken(token: string): Promise<AuthInfo> {
       let payload: JWTPayload
       try {
-        const jwks = await getJwks()
-        const result = await jwtVerify(token, jwks, {
+        const keys = await opts.keys()
+        const result = await jwtVerify(token, keys, {
           issuer: opts.issuer,
           audience: opts.audience,
           algorithms,
@@ -127,14 +139,14 @@ export function createJwtVerifier(opts: JwtVerifierOptions): OAuthTokenVerifier 
           err instanceof joseErrors.JOSEAlgNotAllowed
         ) {
           // Token-shape / claim / signature / alg failures → 401 invalid_token.
-          // Infra failures (JWKSTimeout, fetch/metadata) are NOT listed here and
-          // propagate as 500 — an outage must not read to the client as a bad token.
+          // Infra failures (a failed JWKS read) are NOT listed here and propagate
+          // as 500 — an outage must not read to the client as a bad token.
           throw new InvalidTokenError(
             err instanceof joseErrors.JOSEError ? `${err.code}: ${err.message}` : 'Invalid token',
           )
         }
-        // JWKSTimeout / network / metadata-fetch failures: surface as 500, not 401,
-        // so an infra blip isn't reported to the client as a bad token.
+        // Database / key-material failures: surface as 500, not 401, so an infra
+        // blip isn't reported to the client as a bad token.
         throw err
       }
 
