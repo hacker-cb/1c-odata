@@ -50,10 +50,16 @@ describe('e2e: /mcp verifies JWTs with the AS origin unreachable (#106)', () => 
   })
 
   it('an invalid token is still rejected — the gate did not degrade to open', async () => {
+    // Flip the FIRST character of the signature segment: deterministic (the result
+    // always differs from the original) and always significant (that character
+    // carries six signature bits, unlike the padding-heavy final one).
+    const dot = token.lastIndexOf('.')
+    const signature = token.slice(dot + 1)
+    const tampered = `${token.slice(0, dot + 1)}${signature.startsWith('A') ? 'B' : 'A'}${signature.slice(1)}`
     const res = await fetch(`${app.appBase}/mcp`, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${token.slice(0, -2)}xx`, // tampered signature
+        authorization: `Bearer ${tampered}`,
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
       },

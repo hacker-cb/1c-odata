@@ -28,6 +28,13 @@ export type JwksReader = () => Promise<JSONWebKeySet>
 const JWKS_REFRESH_COOLDOWN_MS = 30_000
 
 /**
+ * How long a loaded key set is used before it is refreshed. This is what bounds
+ * how long a key the operator REMOVED from the AS keeps verifying tokens (an
+ * unknown-`kid` reload only ever picks keys UP). Matches jose's remote-set default.
+ */
+const JWKS_MAX_AGE_MS = 600_000
+
+/**
  * Build the verifier's key source from an AS that lives in THIS process.
  *
  * The server is both the Authorization Server (better-auth) and the Resource
@@ -41,44 +48,71 @@ const JWKS_REFRESH_COOLDOWN_MS = 30_000
  * Public discovery is unaffected: `/.well-known/*` still advertises the PUBLIC
  * `jwks_uri`, because external clients do need to reach it over the network.
  *
- * The key set is cached and rebuilt on an unknown `kid` (bounded by a cooldown,
- * mirroring jose's remote-set behaviour) so a rotated AS key is picked up
- * without making every bearer check hit the database.
+ * The set is cached, so a bearer check does not hit the database. Staleness is
+ * handled the way jose's `RemoteJWKSet` handles it: a set older than `maxAgeMs`
+ * is refreshed before use, and an unknown `kid` — the AS rotated a key in —
+ * forces one extra reload, rate-limited by `cooldownMs` so a stream of bogus
+ * `kid`s cannot turn into a read per request. Reloads are DEDUPED: concurrent
+ * misses share one read and all retry against the set it installs, so the
+ * requests in flight when a rotation lands are not spuriously rejected.
+ *
+ * Unlike jose we degrade gracefully on a stale refresh: this read is a local
+ * database query, and failing auth over a blip when a perfectly good (merely
+ * aging) key set is already in hand would trade the availability this whole
+ * change is about. A failed refresh keeps the last good set; only the very first
+ * load has no fallback and propagates.
  */
 export function createLocalJwks(
   readJwks: JwksReader,
   cooldownMs = JWKS_REFRESH_COOLDOWN_MS,
+  maxAgeMs = JWKS_MAX_AGE_MS,
 ): () => Promise<KeyResolver> {
-  let cached: Promise<KeyResolver> | undefined
-  let lastLoadedAt = Number.NEGATIVE_INFINITY
+  let keys: KeyResolver | undefined
+  let pending: Promise<void> | undefined
+  let loadedAt = Number.NEGATIVE_INFINITY
 
-  const load = (): Promise<KeyResolver> => {
-    if (cached === undefined) {
-      lastLoadedAt = Date.now()
-      cached = readJwks()
-        .then((jwks) => createLocalJWKSet(jwks))
-        .catch((err: unknown) => {
-          cached = undefined // don't poison the cache on a transient failure
-          lastLoadedAt = Number.NEGATIVE_INFINITY
-          throw err
-        })
-    }
-    return cached
+  // One shared read per reload (jose's `#pendingFetch`). `loadedAt` is stamped on
+  // COMPLETION, not on entry: stamping it up front would close the cooldown window
+  // on every concurrent miss the moment one of them started a reload, so all the
+  // others would 401 on a valid, freshly-rotated token instead of retrying.
+  const reload = (): Promise<void> => {
+    pending ??= readJwks()
+      .then((jwks) => {
+        keys = createLocalJWKSet(jwks)
+        loadedAt = Date.now()
+        pending = undefined
+      })
+      .catch((err: unknown) => {
+        pending = undefined // don't poison the cache — a transient failure can be retried
+        throw err
+      })
+    return pending
   }
 
-  return async () => {
-    const resolver = await load()
-    // Wrap so a `kid` miss triggers ONE reload (the AS rotated a key) and retries
-    // against the fresh set. The cooldown keeps a stream of bogus-`kid` tokens
-    // from turning into a database read per request.
-    return async (protectedHeader, token) => {
-      try {
-        return await resolver(protectedHeader, token)
-      } catch (err) {
-        if (!(err instanceof joseErrors.JWKSNoMatchingKey) || Date.now() - lastLoadedAt < cooldownMs) throw err
-        cached = undefined
-        return await (await load())(protectedHeader, token)
-      }
+  const loadedWithin = (windowMs: number): boolean => Date.now() - loadedAt < windowMs
+
+  /** The set to verify against: loaded if absent, refreshed if past `maxAgeMs`. */
+  const currentKeys = async (): Promise<KeyResolver> => {
+    if (keys === undefined) {
+      await reload() // nothing to fall back on — a failure here must surface
+    } else if (!loadedWithin(maxAgeMs)) {
+      await reload().catch(() => {}) // best-effort: keep the aging set if the read fails
+    }
+    const current = keys
+    if (current === undefined) throw new Error('JWKS unavailable') // unreachable once reload resolves
+    return current
+  }
+
+  return async () => async (protectedHeader, token) => {
+    const current = await currentKeys()
+    try {
+      return await current(protectedHeader, token)
+    } catch (err) {
+      if (!(err instanceof joseErrors.JWKSNoMatchingKey) || loadedWithin(cooldownMs)) throw err
+      await reload()
+      const refreshed = keys
+      if (refreshed === undefined) throw err
+      return await refreshed(protectedHeader, token)
     }
   }
 }

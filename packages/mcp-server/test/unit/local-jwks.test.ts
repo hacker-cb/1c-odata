@@ -120,6 +120,59 @@ describe('createLocalJwks', () => {
     expect(reader.calls()).toBe(2) // it DID try a reload
   })
 
+  it('a rotation lands without rejecting the requests in flight, on ONE shared reload', async () => {
+    // The requests in flight when a key rotates in all miss on the new `kid`. They
+    // must share a single reload and all retry against the set it installs —
+    // rate-limiting the RETRY instead would 401 valid, correctly-signed tokens.
+    const a = await makeSigner('key-a')
+    const b = await makeSigner('key-b')
+    const reader = countingReader([a.jwk])
+    const jwks = createLocalJwks(reader.read, 0)
+
+    await verify(await a.sign(), await jwks()) // warm the cache with key-a only
+    reader.set([a.jwk, b.jwk]) // the AS rotates key-b in
+
+    const tokens = await Promise.all(Array.from({ length: 25 }, () => b.sign()))
+    const results = await Promise.allSettled(tokens.map(async (t) => verify(t, await jwks())))
+
+    expect(results.filter((r) => r.status === 'rejected')).toEqual([])
+    expect(reader.calls()).toBe(2) // the initial load + ONE shared reload, not 25
+  })
+
+  it('refreshes a stale set, so a key the operator removed stops verifying', async () => {
+    // An unknown-kid reload only ever picks keys UP; the max-age refresh is what
+    // bounds how long a REVOKED key keeps verifying.
+    const a = await makeSigner('key-a')
+    const b = await makeSigner('key-b')
+    const reader = countingReader([a.jwk, b.jwk])
+    const jwks = createLocalJwks(reader.read, 60_000, 0) // maxAge 0 → always stale
+
+    await verify(await b.sign(), await jwks()) // key-b verifies while it is published
+    expect(reader.calls()).toBe(1)
+
+    reader.set([a.jwk]) // key-b revoked at the AS
+    await expect(verify(await b.sign(), await jwks())).rejects.toThrow(joseErrors.JWKSNoMatchingKey)
+    expect(reader.calls()).toBe(2)
+  })
+
+  it('keeps the last good set when a stale refresh fails', async () => {
+    const a = await makeSigner('key-a')
+    let fail = false
+    const jwks = createLocalJwks(
+      async () => {
+        if (fail) throw new Error('db down')
+        return { keys: [a.jwk] }
+      },
+      60_000,
+      0, // always stale → every verification attempts a refresh
+    )
+
+    await verify(await a.sign(), await jwks())
+    fail = true
+    const { payload } = await verify(await a.sign(), await jwks()) // refresh fails, old set survives
+    expect(payload.sub).toBe('user-1')
+  })
+
   it('does not poison the cache when the read fails', async () => {
     const a = await makeSigner('key-a')
     let fail = true
@@ -128,7 +181,8 @@ describe('createLocalJwks', () => {
       return { keys: [a.jwk] }
     })
 
-    await expect(jwks()).rejects.toThrow('db down')
+    // The first load has nothing to fall back on, so its failure propagates.
+    await expect(verify(await a.sign(), await jwks())).rejects.toThrow('db down')
     fail = false
     const { payload } = await verify(await a.sign(), await jwks())
     expect(payload.sub).toBe('user-1')
