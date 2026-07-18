@@ -63,7 +63,10 @@ Client Registration + PKCE) alongside the resource server. A user adds the
 connector to Claude with **just the URL** — Claude self-registers via DCR, the
 user logs in on `/sign-in`, consents on `/consent`, and `/mcp` then requires a
 valid JWT — verified locally against the AS's JWKS (no per-request introspection
-call; the JWKS itself is fetched once and cached). `BETTER_AUTH_SECRET` is required.
+call). The authorization server runs in the same process, so its signing keys are
+read in-process rather than fetched back over the network: verification works
+behind a reverse proxy even when the server cannot reach its own public URL (no
+hairpin-NAT or split-horizon DNS required). `BETTER_AUTH_SECRET` is required.
 
 Without a keyring (mode 3) this still uses the file data dir, so **every
 authenticated user sees every base** — sign-up is closed, so users are
