@@ -1,3 +1,12 @@
 packages:
   - 'packages/*'
   - 'examples/*'
+
+# Force the whole tree onto the @types/node major that matches the engines
+# floor. Without this, `autoInstallPeers` resolves msw's optional @types/node
+# peer against the newest major, leaving a type surface above the floor in the
+# lockfile. Nothing currently resolves types through that path — the compiler
+# loads only the root copy — but the override makes that a guarantee rather
+# than a property of the current hoisting layout.
+overrides:
+  '@types/node': '^24.13.3'
