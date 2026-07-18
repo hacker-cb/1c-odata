@@ -33,7 +33,7 @@ updates:
   # therefore batch nothing but breaking changes into a single PR, which is the
   # inverse of the usual convention (batch the boring, isolate the risky). One
   # PR per action major keeps each breaking bump individually reviewable and
-  # individually revertable; the cost is a handful of extra PRs a year across
+  # individually revertible; the cost is a handful of extra PRs a year across
   # ~11 actions, which is well under the default open-PR limit. If the pinning
   # policy ever changes to full SHA pins, revisit — grouping becomes correct
   # again the moment patch releases start producing diffs.
