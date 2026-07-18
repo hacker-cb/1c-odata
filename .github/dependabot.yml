@@ -6,9 +6,10 @@
 # mcp-server deploy tree's container images.
 #
 # NOT coverable by Dependabot, must be bumped by hand:
-#   - `services: postgres:17-bookworm` in .github/workflows/ci.yml. Service
-#     container images live inside a workflow file: `github-actions` only tracks
-#     `uses:` references, and the `docker` ecosystem never scans
+#   - the `deploy-pg-smoke` service container in .github/workflows/ci.yml, at
+#     `jobs.deploy-pg-smoke.services.postgres.image` (grep for `image: postgres`).
+#     Service container images live inside a workflow file: `github-actions`
+#     only tracks `uses:` references, and the `docker` ecosystem never scans
 #     .github/workflows. Keep it in lock-step with the `postgres` image in
 #     packages/mcp-server/deploy/compose.yml — a version skew there means the
 #     deploy-pg-smoke gate stops testing what production runs.
