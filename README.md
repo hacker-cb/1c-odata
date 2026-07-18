@@ -6,7 +6,7 @@
 
 TypeScript library for the standard OData interface of 1С:Enterprise 8 — OData protocol **version 3.0** (the dialect any modern 1С 8.3 base exposes; 1С does not offer an OData 4.0 interface). Ergonomic filter API, schema-driven date / Int64 / ValueStorage handling, and a single source of truth between schema and runtime. Codegen is the optional DX layer on top: generate types for full IDE completion, or [run against any base with zero generated files](#schema-sources).
 
-> **Server-side only.** Uses Node 22+ APIs (`globalThis.fetch`, `Buffer`, `fs`). Minimum Node: **22.21.0**. Pure ESM.
+> **Server-side only.** Built on server runtime APIs (`globalThis.fetch`, `Buffer`, `fs`), so it does not run in a browser. Minimum Node: **24.18.0** (active LTS). Pure ESM.
 >
 > ⚠️ **v0.x — pre-release.** API is unstable; see [`STABILITY.md`](./STABILITY.md).
 
@@ -248,7 +248,7 @@ On macOS: `git config --global core.precomposeunicode true`. On Windows: `chcp 6
 
 ## Development
 
-Requirements: Node 22.21+ (LTS Jod), pnpm 10+.
+Requirements: Node 24.18+ (LTS Krypton), pnpm 10+.
 
 ```bash
 pnpm install
