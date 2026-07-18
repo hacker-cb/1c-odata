@@ -1,18 +1,61 @@
-# Weekly grouped version bumps for GitHub Actions. For the github-actions
-# ecosystem `/` only covers .github/workflows + a root-level action.yml;
-# composite actions under .github/actions/ need their own directory entry,
-# hence the glob.
+# Dependabot version updates.
+#
+# Scope note: an entry is matched by (package-ecosystem, directory) — a manifest
+# is only covered when BOTH match. Everything this repo actually consumes is
+# enumerated below: workflows + composite actions, the pnpm workspace, and the
+# mcp-server deploy tree's container images.
+#
+# NOT coverable by Dependabot, must be bumped by hand:
+#   - `services: postgres:17-bookworm` in .github/workflows/ci.yml. Service
+#     container images live inside a workflow file: `github-actions` only tracks
+#     `uses:` references, and the `docker` ecosystem never scans
+#     .github/workflows. Keep it in lock-step with the `postgres` image in
+#     packages/mcp-server/deploy/compose.yml — a version skew there means the
+#     deploy-pg-smoke gate stops testing what production runs.
+#
+# Cooldown rationale (repeated per ecosystem below): this repo PUBLISHES five
+# npm packages and a GHCR image, so a compromised upstream release propagates
+# straight into artifacts other people install. Malicious npm versions are
+# typically detected and unpublished within a few days, so holding new releases
+# for a cooldown window is a cheap, high-value supply-chain mitigation. Cooldown
+# applies to VERSION updates only — Dependabot security updates (CVE fixes)
+# bypass it entirely, so this adds no delay to patching a known vulnerability.
 version: 2
 updates:
+  # GitHub Actions. For this ecosystem `/` only covers .github/workflows +
+  # a root-level action.yml; composite actions under .github/actions/ need their
+  # own directory entry, hence the glob.
+  #
+  # DELIBERATELY UNGROUPED. Every `uses:` in this repo is pinned to a floating
+  # MAJOR tag (`actions/checkout@v7`, not `@v7.0.1`), so minor and patch
+  # releases flow in silently and produce no diff at all — Dependabot can only
+  # ever raise a PR when a new MAJOR ships. A `patterns: ['*']` group would
+  # therefore batch nothing but breaking changes into a single PR, which is the
+  # inverse of the usual convention (batch the boring, isolate the risky). One
+  # PR per action major keeps each breaking bump individually reviewable and
+  # individually revertable; the cost is a handful of extra PRs a year across
+  # ~11 actions, which is well under the default open-PR limit. If the pinning
+  # policy ever changes to full SHA pins, revisit — grouping becomes correct
+  # again the moment patch releases start producing diffs.
   - package-ecosystem: github-actions
     directories:
       - /
       - /.github/actions/*
     schedule:
       interval: weekly
-    groups:
-      github-actions:
-        patterns: ['*']
+    # github-actions is not SemVer-aware for cooldown purposes: only
+    # `default-days` is honoured here, the per-semver-level keys are ignored.
+    cooldown:
+      default-days: 7
+    # Pinned explicitly rather than left to Dependabot's conventional-commit
+    # auto-detection, which infers the style from recent history and silently
+    # reverts to a bare `Bump …` subject if that heuristic ever misfires. The
+    # PR title becomes the squash commit subject on the trunk
+    # (.claude/rules/git-branches.md), so it must be deterministic.
+    # `prefix: chore` + `include: scope` yields `chore(deps): …`.
+    commit-message:
+      prefix: chore
+      include: scope
 
   # `npm` also covers pnpm: the workspace is resolved from the root
   # pnpm-lock.yaml + pnpm-workspace.yaml, so this single entry reaches
@@ -25,6 +68,40 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Default is 5, shared across this whole entry. Two groups plus a queue of
+    # individually-raised majors saturates that quickly and then silently
+    # starves the rest of the ecosystem — majors stop being offered at all until
+    # something merges. 10 keeps the tail visible.
+    open-pull-requests-limit: 10
+    # Only widen the manifest range when the new version does not already
+    # satisfy it. These are published libraries: rewriting `^1.2.0` to `^1.3.0`
+    # for a compatible minor would raise the floor consumers must install for no
+    # benefit. Lockfile-only bumps still exercise the new version in CI.
+    versioning-strategy: increase-if-necessary
+    cooldown:
+      default-days: 7
+      # Majors are reviewed by hand anyway; the extra week costs nothing and
+      # catches a bad first-of-major release. Patches get the shortest window
+      # because they are the ones worth taking promptly.
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    commit-message:
+      prefix: chore
+      include: scope
+    ignore:
+      # @types/node must track the ENGINES FLOOR declared in package.json, not
+      # the newest published major. Types describing a runtime above the floor
+      # let an API that does not exist there compile green and crash a consumer
+      # who installed at the advertised minimum — the floor is exactly what CI
+      # is supposed to protect.
+      #
+      # This rule only FREEZES the major wherever the manifest already sits; it
+      # cannot correct a drift that has already happened. So whenever the floor
+      # moves, move @types/node in the SAME commit (`pnpm add -D -w
+      # @types/node@^<floor-major>`) — this rule then holds the new value.
+      - dependency-name: '@types/node'
+        update-types: [version-update:semver-major]
     groups:
       npm-prod-minor-patch:
         dependency-type: production
@@ -32,3 +109,72 @@ updates:
       npm-dev-minor-patch:
         dependency-type: development
         update-types: [minor, patch]
+
+  # Container base images in the mcp-server deploy tree.
+  #
+  # `docker` and `docker-compose` are two DISTINCT ecosystems (Compose reached
+  # GA as its own ecosystem in Feb 2025) and both are needed here: `docker`
+  # fetches Dockerfile/Containerfile, `docker-compose` fetches
+  # compose*.y[a]ml. Pointing both at the same directory is safe — the `docker`
+  # fetcher's YAML branch only accepts Kubernetes manifests (it requires
+  # top-level `apiVersion` + `kind`), which a Compose file never has, so the
+  # compose files are not picked up twice and no duplicate PRs result.
+  #
+  # This entry covers packages/mcp-server/deploy/Dockerfile
+  # (`node:22-bookworm-slim`, builder + runtime stages).
+  - package-ecosystem: docker
+    directory: /packages/mcp-server/deploy
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+
+  # Compose files under the same directory: compose.yml
+  # (`postgres:17-bookworm`, `caddy:2`) and compose.prod.yml.
+  #
+  # deploy/ci/compose.ci.yml is intentionally NOT listed: its only image is the
+  # locally-built `onec-mcp:ci`, which resolves against no registry.
+  - package-ecosystem: docker-compose
+    directory: /packages/mcp-server/deploy
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    ignore:
+      # Our own published image, referenced as
+      # `ghcr.io/hacker-cb/1c-odata-mcp-server:${MCP_IMAGE_TAG:-latest}` in
+      # compose.prod.yml. Its tag is chosen by release-image.yml, not by
+      # Dependabot; listing it explicitly documents that rather than relying on
+      # the env-substitution happening to be unparseable as a version.
+      - dependency-name: ghcr.io/hacker-cb/1c-odata-mcp-server
+      # Postgres majors are a data migration (pg_upgrade / dump+restore), never
+      # a dependency bump — an auto-merged `postgres:17 -> 18` would break every
+      # existing self-host volume on restart. Minor/patch bumps still flow.
+      # When a major is genuinely wanted, do it as a deliberate PR that also
+      # moves the ci.yml service container in the same commit.
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
+# Not configured, deliberately:
+#   - `target-branch`: omitted, so updates land on the default branch (master),
+#     which is this repo's trunk. Nothing else exists to target — `umbrella/**`
+#     branches are short-lived feature integration points, not update targets.
+#   - `labels`: left at Dependabot's default (`dependencies`). The repo's label
+#     families in .claude/rules/github-issue-tracking.md classify ISSUES; a
+#     custom list here would replace the default rather than add to it.
+#   - `registries`: nothing to declare — every source is public (npmjs, Docker
+#     Hub, GHCR public image).
+#   - `insecure-external-code-execution`: not applicable; it is only honoured by
+#     bundler, mix and pip, none of which this repo uses.
+#
+# Note on CI interaction: ci.yml's `detect-secrets` job carries
+# `github.actor != 'dependabot[bot]'`, so Dependabot PRs deliberately skip the
+# secret-gated live/write/example jobs and run the same degraded-but-green
+# pipeline a fork PR gets. A dependency bump that only breaks a live-base test
+# will therefore go green here — push a human commit to the bot's branch to
+# re-arm the full pipeline before merging anything risky.
