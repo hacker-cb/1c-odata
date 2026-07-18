@@ -132,6 +132,20 @@ updates:
     commit-message:
       prefix: chore
       include: scope
+    ignore:
+      # The runtime image must track the Node line the packages declare in
+      # `engines`, and Node's release cadence makes an automated major bump
+      # actively unsafe: ODD majors are NEVER promoted to LTS and are supported
+      # for about eight months. The first PR this entry ever opened proposed
+      # node:24 -> node:25 — a line that had already reached end-of-life, which
+      # would have put the shipped GHCR image on an unsupported runtime.
+      #
+      # Minor/patch bumps still flow (that is where the CVE fixes are). A major
+      # move is a deliberate change that must happen in the same commit as the
+      # `engines.node` floor and .nvmrc — see the Node 24 migration for the full
+      # set of places that have to move together.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
 
   # Compose files under the same directory: compose.yml
   # (`postgres:17-bookworm`, `caddy:2`) and compose.prod.yml.
