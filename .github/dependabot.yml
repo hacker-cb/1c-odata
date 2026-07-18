@@ -104,12 +104,32 @@ updates:
       - dependency-name: '@types/node'
         update-types: [version-update:semver-major]
     groups:
+      # The better-auth family is excluded from BOTH groups — it is the one
+      # dependency set whose bumps can change GENERATED, COMMITTED artifacts.
+      # `packages/mcp-server/auth-schema.ts` is emitted from the betterAuth plugin
+      # set, so a version move on either side of that seam can alter the emitted
+      # tables and turn CI gate 2c red:
+      #   - runtime (`better-auth`, `@better-auth/drizzle-adapter`,
+      #     `@better-auth/oauth-provider`) declares WHICH tables the plugins need;
+      #   - `@better-auth/cli` (dev) is the generator that RENDERS them, and it is
+      #     versioned on its own line (1.4.x while the runtime is on 1.6.x), so the
+      #     two move independently.
+      # Batched into a group, such a bump arrives alongside biome/vitest/pino and a
+      # red gate 2c has an ambiguous cause and cannot be reverted in isolation. This
+      # is the same "batch the boring, isolate the risky" principle the
+      # github-actions entry above applies. Excluded from every group, these arrive
+      # as individual PRs with one unambiguous signal each.
       npm-prod-minor-patch:
         dependency-type: production
         update-types: [minor, patch]
+        exclude-patterns:
+          - better-auth
+          - '@better-auth/*'
       npm-dev-minor-patch:
         dependency-type: development
         update-types: [minor, patch]
+        exclude-patterns:
+          - '@better-auth/*'
 
   # Container base images in the mcp-server deploy tree.
   #
