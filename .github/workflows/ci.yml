@@ -150,6 +150,90 @@ jobs:
             git --no-pager diff packages/mcp-server/auth-schema.ts packages/mcp-server/drizzle
             exit 1
           fi
+      - name: Applied migrations are append-only (gate 2d)
+        # drizzle-orm decides what to apply from `created_at` ALONE. Its migrator
+        # (drizzle-orm/pg-core/dialect.js) reads only the newest applied row —
+        # `select ... order by created_at desc limit 1` — and runs a migration iff
+        # `lastDbMigration.created_at < migration.folderMillis`. It WRITES each
+        # migration's `hash` but never compares it again.
+        #
+        # So editing a migration a database has already applied is SILENTLY SKIPPED
+        # there, while a fresh database (CI, pglite, a new self-host) applies the
+        # edited version. Prod and CI then diverge with nothing failing — and since
+        # mcp-server ships `files: ["dist","drizzle",...]`, the blast radius includes
+        # other people's databases. Gate 2c cannot see this: it only proves the SQL
+        # re-derives from the schema, not that history stayed stable.
+        #
+        # Hence: migrations are APPEND-ONLY once merged. To change applied DDL, add
+        # a NEW migration; never edit or delete an existing one. `_journal.json` may
+        # only grow — its existing entries carry the `when`/folderMillis values the
+        # comparison above depends on.
+        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
+        env:
+          # Via env rather than inline `${{ }}`, so nothing from the event
+          # interpolates into the shell.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          d=packages/mcp-server/drizzle
+          # The PR checkout is shallow and sits on the merge ref, so the base commit
+          # is usually absent — fetch just that one object.
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          # ALLOWLIST the only legitimate status: `A` (added). Append-only means a
+          # new file is the sole permitted change, so everything else is rejected —
+          # modify, delete, rename (`R###`), copy, type-change. Enumerating the
+          # FORBIDDEN statuses instead would leak: rename detection is on by
+          # default since git 2.9, so `git mv` of an applied migration reports
+          # `R100` with no accompanying `D` line and would slip through an `^[MD]`
+          # test. No `|| true` on the diff itself either — a git failure must abort
+          # the step (set -e), never yield an empty result that reads as "clean".
+          changed=$(git diff --name-status "$BASE_SHA" HEAD -- "$d/*.sql" "$d/meta/*_snapshot.json")
+          illegal=$(printf '%s\n' "$changed" | grep -vE '^(A|$)' || true)
+          if [ -n "$illegal" ]; then
+            echo "::error::applied migrations are append-only — an existing migration or snapshot was modified, deleted or renamed. Add a NEW migration instead of touching one that databases may already have applied."
+            printf '%s\n' "$illegal"
+            exit 1
+          fi
+          # `_journal.json` may change, but only by appending, and an appended
+          # entry's `when` must be strictly greater than every entry before it.
+          # A merely-appended entry is NOT enough: `when` IS the folderMillis the
+          # migrator compares, so a migration generated before one already on the
+          # base branch (two concurrent migration PRs, the second rebased) carries
+          # a LOWER `when`. Databases that already applied the newer one would then
+          # skip it forever while fresh databases apply it — the very divergence
+          # this gate exists to stop, reached by an append rather than an edit.
+          # (Single-quoted node script: the `$`/backtick forms below are JS, not
+          # shell — nothing here is meant to expand.)
+          j="$d/meta/_journal.json"
+          if [ -n "$(git diff --name-only "$BASE_SHA" HEAD -- "$j")" ]; then
+            git show "$BASE_SHA:$j" > /tmp/journal-base.json
+            # shellcheck disable=SC2016
+            node -e '
+              const fs = require("node:fs")
+              const read = (p) => JSON.parse(fs.readFileSync(p, "utf8")).entries ?? []
+              const base = read("/tmp/journal-base.json")
+              const head = read(process.argv[1])
+              const fail = (msg) => { console.error("::error::" + msg); process.exit(1) }
+              if (head.length < base.length) {
+                fail("_journal.json lost entries (" + base.length + " -> " + head.length + ") — migrations are append-only")
+              }
+              for (let i = 0; i < base.length; i++) {
+                if (JSON.stringify(base[i]) !== JSON.stringify(head[i])) {
+                  fail("_journal.json entry " + i + " was modified — migrations are append-only. before: "
+                    + JSON.stringify(base[i]) + " after: " + JSON.stringify(head[i]))
+                }
+              }
+              for (let i = 1; i < head.length; i++) {
+                if (!(head[i].when > head[i - 1].when)) {
+                  fail("_journal.json entry " + i + " (" + head[i].tag + ", when=" + head[i].when
+                    + ") does not come strictly after entry " + (i - 1) + " (" + head[i - 1].tag
+                    + ", when=" + head[i - 1].when + "). drizzle applies a migration only when"
+                    + " created_at < folderMillis, so this one would be skipped on any database that"
+                    + " already applied the previous entry. Regenerate it so its timestamp is newest.")
+                }
+              }
+            ' "$j"
+          fi
 
   test-and-build:
     runs-on: ${{ matrix.os }}
