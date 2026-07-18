@@ -14,7 +14,7 @@ TypeScript library for the 1С:Enterprise REST/OData V3 interface. Five-package 
 | [`@1c-odata/mcp`](./packages/mcp/src) | Local (stdio) MCP server — `1c-odata-mcp` bin: read-only schema + query tools for AI agents against any base via live `$metadata`, plus a connection-manager CLI (keychain-backed secrets). Adds a `/internal` seam. Deps: client + metadata + `@modelcontextprotocol/sdk` |
 | [`@1c-odata/mcp-server`](./packages/mcp-server/src) | Remote Streamable-HTTP MCP server — `1c-odata-mcp-server` bin exposing mcp's read-only tools over HTTP (`/mcp`) for Claude custom connectors. Three modes: no-auth, better-auth OAuth 2.1 (DCR+PKCE), Postgres-backed multi-tenancy (per-user grants, AES-256-GCM secrets, `/admin` panel). Docker/Caddy deploy. Deps: mcp + better-auth, drizzle, express, pg |
 
-Server-side only. Pure ESM. Node ≥ 22.21.0, pnpm ≥ 10.
+Server-side only. Pure ESM. Node ≥ 24.18.0, pnpm ≥ 10.
 
 [README.md](./README.md) — public-facing intro, quickstart, network configuration, cross-platform setup (Cyrillic filenames).
 [STABILITY.md](./STABILITY.md) — what is and isn't covered by semver. The **public API surface** is exactly what `package.json#exports` reaches minus `@internal` JSDoc tags. JSDoc on public symbols is the canonical reference.

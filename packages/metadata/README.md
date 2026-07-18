@@ -7,7 +7,7 @@ Run [`@1c-odata/client`](https://www.npmjs.com/package/@1c-odata/client) against
 - `parseEdmx` / `buildMetadataIndex` — lower-level: EDMX XML → typed model → runtime `MetadataIndex` (the same structure codegen emits as `__metadata.json`).
 - Schema analysis helpers — entity kind classification (`Catalog_` / `Document_` / registers / …), tabular-part linking, ValueStorage detection, transitive closure.
 
-Pure ESM. Node ≥ 22.21.0.
+Pure ESM. Node ≥ 24.18.0.
 
 > ⚠️ **v0.x — pre-release.** API is unstable; see [STABILITY.md](https://github.com/hacker-cb/1c-odata/blob/master/STABILITY.md).
 
