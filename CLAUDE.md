@@ -55,7 +55,7 @@ pnpm changeset                         # add a release note (consumer-facing)
 
 **Single test**: `pnpm -F @1c-odata/client vitest run test/unit/filter.test.ts` (or any path glob). `-F` is the pnpm filter for workspace packages; replace with `@1c-odata/cli`, `@1c-odata/mcp`, or `@1c-odata/mcp-server` as needed.
 
-**mcp-server dev**: `pnpm -F @1c-odata/mcp-server dev serve …` runs `src/cli.ts` via tsx; `… start serve …` runs the built `dist/`. After editing `src/store/schema.ts`, run `pnpm -F @1c-odata/mcp-server auth:schema` and commit `packages/mcp-server/drizzle/` — a CI gate fails if the migrations drift from the schema.
+**mcp-server dev**: `pnpm -F @1c-odata/mcp-server dev serve …` runs `src/cli.ts` via tsx; `… start serve …` runs the built `dist/`. After editing the better-auth plugin set (`src/auth/better-auth.ts`) or the hand-written tenancy tables (`src/store/tenancy-schema.ts`), run `pnpm -F @1c-odata/mcp-server auth:schema` and commit both `packages/mcp-server/auth-schema.ts` and `packages/mcp-server/drizzle/` — `auth:schema` regenerates `auth-schema.ts` from `auth.config.ts` (which reuses `buildAuth`, so the plugin set never drifts) via the `@better-auth/cli` devDependency, then the drizzle SQL. CI gate 2c runs this same script and fails if either artifact drifts.
 
 **Live/write tests** need `.env.local` at repo root with `ONEC_TRADE_V11_5_URL`, `ONEC_BP_V3_0_URL`, and optionally `ONEC_TESTS_ALLOW_WRITES=true` — see [`snapshots/README.md`](./snapshots/README.md) for the full env contract. Without `.env.local` they skip cleanly.
 

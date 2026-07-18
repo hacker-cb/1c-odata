@@ -1,46 +1,29 @@
 // auth.config.ts
 /**
- * THROWAWAY config module for `@better-auth/cli generate` ONLY.
+ * Build-only config module for `@better-auth/cli generate`. The CLI needs a
+ * module exporting `auth` to introspect the plugin set and emit the Drizzle
+ * schema (auth-schema.ts).
  *
- * The CLI needs a module exporting `auth` to introspect the plugin set and emit
- * the Drizzle schema (auth-schema.ts). This mirrors src/auth/better-auth.ts's
- * plugin set EXACTLY — jwt() + admin() + oauthProvider(...) — so the generated
- * tables match what the runtime expects. It is NOT imported by any runtime code;
- * it exists purely as the schema-generation seam. Keep it in sync with
- * src/auth/better-auth.ts whenever the plugin set changes, then regenerate.
+ * It calls the SAME `buildAuth` factory the runtime uses (src/auth/better-auth.ts),
+ * so the plugin set (jwt + admin + oauthProvider) CANNOT drift from the runtime —
+ * there is nothing to keep in sync by hand. Not imported by any runtime code: this
+ * is the build side of CLAUDE.md's build-vs-runtime split.
+ *
+ * The urls/db/secret are throwaway. Schema generation reads the plugin and option
+ * shapes, never the database — the drizzle adapter is constructed but never
+ * queried during `generate` — so a localhost url, an in-memory PGlite, and a dummy
+ * secret are enough to reproduce the exact tables the runtime expects.
  */
-import { drizzleAdapter } from '@better-auth/drizzle-adapter'
-import { oauthProvider } from '@better-auth/oauth-provider'
 import { PGlite } from '@electric-sql/pglite'
-import { betterAuth } from 'better-auth'
-import { admin, jwt } from 'better-auth/plugins'
 import { drizzle } from 'drizzle-orm/pglite'
+import { buildAuth } from './src/auth/better-auth.js'
+import { resolveCanonicalUrls } from './src/auth/config.js'
+import type { AuthDb } from './src/store/db.js'
 
-const db = drizzle(new PGlite())
-
-// Annotated `unknown`: the betterAuth({...}) ARGUMENT is still fully type-checked
-// (so a drift in the oauthProvider/jwt/admin option shape fails typecheck here),
-// but the inferred instance type — which references zod's internal `$strip` and
-// is not declaration-portable (TS2883/TS7056) — is not exposed. @better-auth/cli
-// reads the runtime value, so the annotation doesn't affect schema generation.
-export const auth: unknown = betterAuth({
-  baseURL: 'http://localhost:3000',
+export const auth = buildAuth({
+  urls: resolveCanonicalUrls('http://localhost:3000'),
+  // `generate` never runs a query, so cast a schema-less PGlite handle to AuthDb
+  // rather than importing the (generated) schema barrel just to satisfy the type.
+  db: drizzle(new PGlite()) as unknown as AuthDb,
   secret: 'schema-generation-only-not-a-real-secret-0123456789',
-  // Mirrors the runtime's options verbatim. `disableSignUp` has no effect on schema
-  // generation, but keeping the two literally identical is the point of this file —
-  // a reader comparing them should find nothing that differs for an unstated reason.
-  emailAndPassword: { enabled: true, disableSignUp: true },
-  database: drizzleAdapter(db, { provider: 'pg' }),
-  plugins: [
-    jwt(),
-    admin(),
-    oauthProvider({
-      loginPage: '/sign-in',
-      consentPage: '/consent',
-      validAudiences: ['http://localhost:3000/mcp'],
-      allowDynamicClientRegistration: true,
-      allowUnauthenticatedClientRegistration: true,
-      scopes: ['openid', 'profile', 'email', 'offline_access', 'mcp:read'],
-    }),
-  ],
 })
