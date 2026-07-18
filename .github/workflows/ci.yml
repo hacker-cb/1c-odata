@@ -121,24 +121,33 @@ jobs:
         run: |
           pnpm --filter basic-example typecheck
           pnpm --filter dynamic-example typecheck
-      - name: Drizzle migrations in sync with schema (gate 2c)
-        # packages/mcp-server/drizzle/*.sql is the SINGLE source of truth applied at
-        # runtime by BOTH dev/tests (pglite) and prod (pg) — see
-        # src/store/migrate.ts. Guard against it drifting from the TS schema: a
-        # stale committed SQL would only surface as a prod boot failure otherwise.
-        # Regenerate and fail if anything changed (a schema edit without a
-        # regenerated migration). Ubuntu-only — deterministic, OS-independent.
+      - name: Auth schema + drizzle migrations re-derive clean (gate 2c)
+        # Both generated-and-committed artifacts must reproduce from their inputs:
+        #   auth.config.ts --(@better-auth/cli)--> auth-schema.ts --(drizzle-kit)--> drizzle/*.sql
+        # drizzle/*.sql is the SINGLE source of truth applied at runtime by BOTH
+        # dev/tests (pglite) and prod (pg) — see src/store/migrate.ts — so a stale
+        # committed SQL would only surface as a prod boot failure otherwise.
+        #
+        # This INVOKES the package's own `auth:schema` script rather than
+        # re-implementing a stage. The original defect was exactly a gate that ran
+        # `drizzle-kit generate` directly and skipped stage 1: the one command that
+        # would have exercised the (broken) generator was routed around, so the gate
+        # stayed green while `auth:schema` — the command its own error message tells
+        # you to run — could not run at all. A gate that runs the documented command
+        # cannot drift from the docs. Ubuntu-only — deterministic, OS-independent.
         if: matrix.os == 'ubuntu-latest'
         run: |
-          # stdin from /dev/null: `drizzle-kit generate` prompts interactively only
-          # on an ambiguous rename — with no TTY that read gets EOF and fails fast
+          # stdin from /dev/null covers BOTH generators in the script. `better-auth
+          # generate` would prompt before overwriting auth-schema.ts, which the
+          # script's `--yes` suppresses; `drizzle-kit generate` prompts only on an
+          # ambiguous rename. With no TTY either read gets EOF and fails fast
           # instead of hanging to the job timeout. The common add/modify drift case
           # (what this guard targets) never prompts.
-          pnpm -F @1c-odata/mcp-server exec drizzle-kit generate < /dev/null
-          if [ -n "$(git status --porcelain packages/mcp-server/drizzle)" ]; then
-            echo "::error::drizzle migrations out of sync with src/store/schema.ts — run 'pnpm -F @1c-odata/mcp-server auth:schema' and commit packages/mcp-server/drizzle"
-            git status --porcelain packages/mcp-server/drizzle
-            git --no-pager diff packages/mcp-server/drizzle
+          pnpm -F @1c-odata/mcp-server auth:schema < /dev/null
+          if [ -n "$(git status --porcelain packages/mcp-server/auth-schema.ts packages/mcp-server/drizzle)" ]; then
+            echo "::error::auth schema / drizzle migrations out of sync — run 'pnpm -F @1c-odata/mcp-server auth:schema' and commit packages/mcp-server/{auth-schema.ts,drizzle}"
+            git status --porcelain packages/mcp-server/auth-schema.ts packages/mcp-server/drizzle
+            git --no-pager diff packages/mcp-server/auth-schema.ts packages/mcp-server/drizzle
             exit 1
           fi
 
