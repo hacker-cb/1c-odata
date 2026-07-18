@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false # the job never uses the git token
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Lint both Caddyfiles (compensating control for un-runnable real ACME)
         # Validate the SHIPPED Caddyfile AND the CI-only root config that actually
         # drives this run (Caddyfile.ci imports the shipped file as /etc/caddy/site.caddy)
@@ -64,7 +64,7 @@ jobs:
             -v "$PWD/$d/Caddyfile:/etc/caddy/site.caddy:ro" \
             caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - name: Build the image (GHA-cached)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: . # repo root — the workspace build needs the sibling packages
           file: packages/mcp-server/deploy/Dockerfile
