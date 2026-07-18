@@ -6,7 +6,7 @@
 #   docker build -f packages/mcp-server/deploy/Dockerfile -t onec-mcp .
 
 # ── Builder: install the workspace, build, emit a self-contained deploy tree ────
-FROM node:24-bookworm-slim AS builder
+FROM node:25-bookworm-slim AS builder
 WORKDIR /repo
 # corepack pins pnpm from the root package.json "packageManager" field.
 RUN corepack enable
@@ -21,7 +21,7 @@ RUN pnpm turbo build
 RUN pnpm --filter @1c-odata/mcp-server deploy --prod --legacy /app
 
 # ── Runtime: just Node + the deploy tree, unprivileged ──────────────────────────
-FROM node:24-bookworm-slim AS runtime
+FROM node:25-bookworm-slim AS runtime
 ENV NODE_ENV=production
 # Static OCI labels so a local `docker compose --build` image is traceable and the
 # GHCR package auto-links to the repo. CI (docker/metadata-action in
