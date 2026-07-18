@@ -379,7 +379,7 @@ describe('admin panel over HTTP', () => {
       // Headers were forwarded (a Headers instance from fromNodeHeaders) — this is
       // what lets better-auth's admin() plugin run its OWN admin-session check.
       expect(arg?.headers).toBeInstanceOf(Headers)
-      expect((arg?.headers as Headers).get('cookie')).toContain('sess=abc')
+      expect((arg!.headers as Headers).get('cookie')).toContain('sess=abc')
     })
   })
 

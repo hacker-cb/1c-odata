@@ -41,7 +41,7 @@ describe('schema-less READ contract', () => {
     const row = value[0]
     // naive wall-clock 15:00 Moscow = 12:00 UTC
     expect(row?.Date).toBeInstanceOf(Date)
-    expect((row?.Date as Date).toISOString()).toBe('2025-03-15T12:00:00.000Z')
+    expect((row!.Date as Date).toISOString()).toBe('2025-03-15T12:00:00.000Z')
     expect(row?.Cleared).toBeNull()
     // Edm.Int64 needs a schema — stays a wire string without one.
     expect(row?.BigNum).toBe('9007199254740993')
