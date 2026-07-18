@@ -74,7 +74,7 @@ jobs:
           echo "mm=$(printf '%s' "$v" | cut -d. -f1,2)" >> "$GITHUB_OUTPUT"   # 0.7.0 → 0.7
           echo "image version: $v"
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -95,14 +95,14 @@ jobs:
           fi
       - name: Set up QEMU (arm64 emulation)
         if: steps.exists.outputs.skip != 'true'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
       - name: Set up Buildx
         if: steps.exists.outputs.skip != 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
       - name: Image metadata (tags + OCI labels)
         if: steps.exists.outputs.skip != 'true'
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE }}
           # type=raw with a pre-resolved value is unconditionally emitted on ANY event
@@ -124,7 +124,7 @@ jobs:
             org.opencontainers.image.licenses=MIT
       - name: Build & push (amd64 + arm64)
         if: steps.exists.outputs.skip != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: . # repo root — the workspace build needs the sibling packages
           file: packages/mcp-server/deploy/Dockerfile
