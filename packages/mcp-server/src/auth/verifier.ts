@@ -34,6 +34,21 @@ const JWKS_REFRESH_COOLDOWN_MS = 30_000
  */
 const JWKS_MAX_AGE_MS = 600_000
 
+/** How long one JWKS read may take before it is abandoned. */
+const JWKS_READ_TIMEOUT_MS = 5_000
+
+export interface LocalJwksOptions {
+  /**
+   * Minimum spacing between reloads forced by an unknown `kid`, and between
+   * retries of a FAILING stale refresh. Default 30s.
+   */
+  cooldownMs?: number
+  /** How long a loaded set is used before it is refreshed. Default 10 min. */
+  maxAgeMs?: number
+  /** How long one read of the key set may take before it is abandoned. Default 5s. */
+  timeoutMs?: number
+}
+
 /**
  * Build the verifier's key source from an AS that lives in THIS process.
  *
@@ -61,23 +76,50 @@ const JWKS_MAX_AGE_MS = 600_000
  * aging) key set is already in hand would trade the availability this whole
  * change is about. A failed refresh keeps the last good set; only the very first
  * load has no fallback and propagates.
+ *
+ * Every read is bounded by `timeoutMs`, because a read that never settles is not
+ * a failure any of the above recovers from — see {@link readWithin}.
  */
-export function createLocalJwks(
-  readJwks: JwksReader,
-  cooldownMs = JWKS_REFRESH_COOLDOWN_MS,
-  maxAgeMs = JWKS_MAX_AGE_MS,
-): () => Promise<KeyResolver> {
+export function createLocalJwks(readJwks: JwksReader, opts: LocalJwksOptions = {}): () => Promise<KeyResolver> {
+  const { cooldownMs = JWKS_REFRESH_COOLDOWN_MS, maxAgeMs = JWKS_MAX_AGE_MS, timeoutMs = JWKS_READ_TIMEOUT_MS } = opts
+
   let keys: KeyResolver | undefined
   let pending: Promise<void> | undefined
   let loadedAt = Number.NEGATIVE_INFINITY
   let staleRefreshAt = Number.NEGATIVE_INFINITY
+
+  /**
+   * Bound one read. `reload()` shares a SINGLE promise across every concurrent
+   * bearer check, so a read that hangs rather than fails would hold token
+   * verification for the life of the process — and none of the retry paths ever
+   * run, because they are all downstream of that promise settling. A hang is
+   * reachable: the pg pool has no checkout deadline by default, so a saturated
+   * pool waits indefinitely, and a lock can stall the query after checkout.
+   *
+   * Rejecting frees the waiters and clears `pending`, so the next request retries.
+   * The abandoned read is not cancelled — there is nothing to cancel it with — it
+   * is simply no longer awaited.
+   */
+  const readWithin = async (): Promise<JSONWebKeySet> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        readJwks(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Timed out reading the JWKS after ${timeoutMs}ms`)), timeoutMs)
+        }),
+      ])
+    } finally {
+      clearTimeout(timer) // never leave the timer holding the event loop open
+    }
+  }
 
   // One shared read per reload (jose's `#pendingFetch`). `loadedAt` is stamped on
   // COMPLETION, not on entry: stamping it up front would close the cooldown window
   // on every concurrent miss the moment one of them started a reload, so all the
   // others would 401 on a valid, freshly-rotated token instead of retrying.
   const reload = (): Promise<void> => {
-    pending ??= readJwks()
+    pending ??= readWithin()
       .then((jwks) => {
         keys = createLocalJWKSet(jwks)
         loadedAt = Date.now()

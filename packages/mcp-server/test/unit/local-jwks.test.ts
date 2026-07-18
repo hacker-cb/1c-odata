@@ -7,7 +7,7 @@ import {
   jwtVerify,
   SignJWT,
 } from 'jose'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createLocalJwks } from '../../src/auth/verifier.js'
 
 const ISSUER = 'https://mcp.example.com/api/auth'
@@ -84,7 +84,7 @@ describe('createLocalJwks', () => {
     const a = await makeSigner('key-a')
     const b = await makeSigner('key-b')
     const reader = countingReader([a.jwk])
-    const jwks = createLocalJwks(reader.read, 0) // no cooldown
+    const jwks = createLocalJwks(reader.read, { cooldownMs: 0 }) // no cooldown
 
     await verify(await a.sign(), await jwks()) // warm the cache with key-a only
     expect(reader.calls()).toBe(1)
@@ -100,7 +100,7 @@ describe('createLocalJwks', () => {
     const a = await makeSigner('key-a')
     const stranger = await makeSigner('key-unknown')
     const reader = countingReader([a.jwk])
-    const jwks = createLocalJwks(reader.read, 60_000)
+    const jwks = createLocalJwks(reader.read, { cooldownMs: 60_000 })
 
     await verify(await a.sign(), await jwks())
     await expect(verify(await stranger.sign(), await jwks())).rejects.toThrow(joseErrors.JWKSNoMatchingKey)
@@ -113,7 +113,7 @@ describe('createLocalJwks', () => {
     const a = await makeSigner('key-a')
     const stranger = await makeSigner('key-unknown')
     const reader = countingReader([a.jwk])
-    const jwks = createLocalJwks(reader.read, 0)
+    const jwks = createLocalJwks(reader.read, { cooldownMs: 0 })
 
     await verify(await a.sign(), await jwks())
     await expect(verify(await stranger.sign(), await jwks())).rejects.toThrow(joseErrors.JWKSNoMatchingKey)
@@ -127,7 +127,7 @@ describe('createLocalJwks', () => {
     const a = await makeSigner('key-a')
     const b = await makeSigner('key-b')
     const reader = countingReader([a.jwk])
-    const jwks = createLocalJwks(reader.read, 0)
+    const jwks = createLocalJwks(reader.read, { cooldownMs: 0 })
 
     await verify(await a.sign(), await jwks()) // warm the cache with key-a only
     reader.set([a.jwk, b.jwk]) // the AS rotates key-b in
@@ -145,7 +145,7 @@ describe('createLocalJwks', () => {
     const a = await makeSigner('key-a')
     const b = await makeSigner('key-b')
     const reader = countingReader([a.jwk, b.jwk])
-    const jwks = createLocalJwks(reader.read, 60_000, 0) // maxAge 0 → always stale
+    const jwks = createLocalJwks(reader.read, { cooldownMs: 60_000, maxAgeMs: 0 }) // always stale
 
     await verify(await b.sign(), await jwks()) // key-b verifies while it is published
     expect(reader.calls()).toBe(1)
@@ -165,8 +165,10 @@ describe('createLocalJwks', () => {
         if (fail) throw new Error('db down')
         return { keys: [a.jwk] }
       },
-      60_000, // cooldown: a FAILED stale refresh is retried at most this often
-      0, // always stale → every verification is eligible for a refresh
+      {
+        cooldownMs: 60_000, // a FAILED stale refresh is retried at most this often
+        maxAgeMs: 0, // always stale → every verification is eligible for a refresh
+      },
     )
 
     await verify(await a.sign(), await jwks()) // initial load
@@ -195,5 +197,58 @@ describe('createLocalJwks', () => {
     fail = false
     const { payload } = await verify(await a.sign(), await jwks())
     expect(payload.sub).toBe('user-1')
+  })
+
+  it('abandons a read that HANGS instead of holding every bearer check forever', async () => {
+    // The reload promise is shared by every concurrent verification, so a read that
+    // never settles — not one that fails — is what would wedge the whole auth path.
+    const a = await makeSigner('key-a')
+    const jwks = createLocalJwks(() => new Promise<JSONWebKeySet>(() => {}), { timeoutMs: 20 })
+
+    await expect(verify(await a.sign(), await jwks())).rejects.toThrow(/Timed out reading the JWKS/)
+  })
+
+  it('retries after a timed-out read rather than staying wedged', async () => {
+    const a = await makeSigner('key-a')
+    let hang = true
+    const jwks = createLocalJwks(
+      () => (hang ? new Promise<JSONWebKeySet>(() => {}) : Promise.resolve({ keys: [a.jwk] })),
+      { timeoutMs: 20 },
+    )
+
+    await expect(verify(await a.sign(), await jwks())).rejects.toThrow(/Timed out/)
+    hang = false
+    const { payload } = await verify(await a.sign(), await jwks())
+    expect(payload.sub).toBe('user-1')
+  })
+
+  it('keeps serving the last good set when a stale refresh HANGS', async () => {
+    const a = await makeSigner('key-a')
+    let hang = false
+    const jwks = createLocalJwks(
+      () => (hang ? new Promise<JSONWebKeySet>(() => {}) : Promise.resolve({ keys: [a.jwk] })),
+      {
+        maxAgeMs: 0, // always stale → every verification attempts a refresh
+        timeoutMs: 20,
+      },
+    )
+
+    await verify(await a.sign(), await jwks()) // initial load
+    hang = true
+    const { payload } = await verify(await a.sign(), await jwks()) // refresh times out, old set survives
+    expect(payload.sub).toBe('user-1')
+  })
+
+  it('clears the read timeout, leaving no timer behind', async () => {
+    const a = await makeSigner('key-a')
+    const token = await a.sign()
+    vi.useFakeTimers()
+    try {
+      const jwks = createLocalJwks(async () => ({ keys: [a.jwk] }))
+      await verify(token, await jwks())
+      expect(vi.getTimerCount()).toBe(0) // a live timer would hold the event loop open
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
