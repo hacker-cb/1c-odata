@@ -4,6 +4,7 @@ import { drizzleAdapter } from '@better-auth/drizzle-adapter'
 import { oauthProvider } from '@better-auth/oauth-provider'
 import { type Auth as BetterAuthInstance, betterAuth } from 'better-auth'
 import { admin, jwt } from 'better-auth/plugins'
+import type { JSONWebKeySet } from 'jose'
 import type { AuthDb } from '../store/db.js'
 import type { CanonicalUrls } from './config.js'
 
@@ -86,6 +87,13 @@ export type Auth = BetterAuthInstance & {
     AdminApi & {
       // biome-ignore lint/suspicious/noExplicitAny: mirrors the plugin's own (...args: any) => any shape; only presence matters here.
       getOAuthServerConfig: (...args: any[]) => any
+      /**
+       * The jwt() plugin's JWKS endpoint, called IN-PROCESS (it reads the `jwks`
+       * table directly). This is what lets the resource server verify tokens
+       * without fetching its own public origin — see `createLocalJwks`.
+       */
+      // biome-ignore lint/suspicious/noExplicitAny: see AdminApi — the inferred endpoint types are not .d.ts-portable.
+      getJwks: (...args: any[]) => Promise<JSONWebKeySet>
     }
 }
 
