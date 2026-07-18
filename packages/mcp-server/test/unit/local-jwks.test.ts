@@ -155,22 +155,31 @@ describe('createLocalJwks', () => {
     expect(reader.calls()).toBe(2)
   })
 
-  it('keeps the last good set when a stale refresh fails', async () => {
+  it('keeps the last good set when a stale refresh fails, and throttles the retries', async () => {
     const a = await makeSigner('key-a')
     let fail = false
+    let reads = 0
     const jwks = createLocalJwks(
       async () => {
+        reads++
         if (fail) throw new Error('db down')
         return { keys: [a.jwk] }
       },
-      60_000,
-      0, // always stale → every verification attempts a refresh
+      60_000, // cooldown: a FAILED stale refresh is retried at most this often
+      0, // always stale → every verification is eligible for a refresh
     )
 
-    await verify(await a.sign(), await jwks())
+    await verify(await a.sign(), await jwks()) // initial load
+    expect(reads).toBe(1)
+
     fail = true
-    const { payload } = await verify(await a.sign(), await jwks()) // refresh fails, old set survives
-    expect(payload.sub).toBe('user-1')
+    // Three verifications during the "outage": the set stays usable, and the DB is
+    // read at most once (the first attempt) — not once per verification.
+    for (let i = 0; i < 3; i++) {
+      const { payload } = await verify(await a.sign(), await jwks())
+      expect(payload.sub).toBe('user-1')
+    }
+    expect(reads).toBe(2)
   })
 
   it('does not poison the cache when the read fails', async () => {

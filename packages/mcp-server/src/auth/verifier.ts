@@ -70,6 +70,7 @@ export function createLocalJwks(
   let keys: KeyResolver | undefined
   let pending: Promise<void> | undefined
   let loadedAt = Number.NEGATIVE_INFINITY
+  let staleRefreshAt = Number.NEGATIVE_INFINITY
 
   // One shared read per reload (jose's `#pendingFetch`). `loadedAt` is stamped on
   // COMPLETION, not on entry: stamping it up front would close the cooldown window
@@ -95,8 +96,15 @@ export function createLocalJwks(
   const currentKeys = async (): Promise<KeyResolver> => {
     if (keys === undefined) {
       await reload() // nothing to fall back on — a failure here must surface
-    } else if (!loadedWithin(maxAgeMs)) {
-      await reload().catch(() => {}) // best-effort: keep the aging set if the read fails
+    } else if (!loadedWithin(maxAgeMs) && Date.now() - staleRefreshAt >= cooldownMs) {
+      // Best-effort refresh of an aging set, but throttled by the failure case: a
+      // successful reload advances `loadedAt` and closes this branch until the next
+      // maxAge, whereas a FAILED one leaves the set stale, so without this every
+      // subsequent verification would re-read — hammering the DB through an outage
+      // while a usable set is already in hand. Stamp the ATTEMPT so a failing
+      // refresh is retried at most once per `cooldownMs`.
+      staleRefreshAt = Date.now()
+      await reload().catch(() => {}) // keep the aging set if the read fails
     }
     const current = keys
     if (current === undefined) throw new Error('JWKS unavailable') // unreachable once reload resolves
