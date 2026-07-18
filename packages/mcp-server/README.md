@@ -5,7 +5,7 @@ Streamable HTTP [MCP](https://modelcontextprotocol.io) server for
 1С:Enterprise OData V3 tools (schema introspection + data queries) over HTTP so a
 remote MCP client (e.g. a **Claude custom connector**) can reach a 1С base.
 
-> Server-side only, pure ESM, Node ≥ 22.21. Part of the `@1c-odata` monorepo and
+> Server-side only, pure ESM, Node ≥ 24.18.0. Part of the `@1c-odata` monorepo and
 > released in lock-step with it.
 
 The connection-management tools (`add` / `remove` / `set_credentials` /
