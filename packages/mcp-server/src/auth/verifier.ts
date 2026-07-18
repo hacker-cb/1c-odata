@@ -99,6 +99,14 @@ export function createLocalJwks(readJwks: JwksReader, opts: LocalJwksOptions = {
    * Rejecting frees the waiters and clears `pending`, so the next request retries.
    * The abandoned read is not cancelled — there is nothing to cancel it with — it
    * is simply no longer awaited.
+   *
+   * The deadline is PER READ, and one request can make two: an aged set whose
+   * refresh times out (absorbed, so the request continues on the old set) followed
+   * by a miss on an unknown `kid`, which reads again. So the worst case for a
+   * single bearer check is 2 x `timeoutMs`. That is deliberate — collapsing it
+   * would mean either skipping the rotation retry, which 401s a valid token, or
+   * reporting the refresh failure as a bad token, which misclassifies infra as
+   * client error. Two bounded reads beat one unbounded one.
    */
   const readWithin = async (): Promise<JSONWebKeySet> => {
     let timer: ReturnType<typeof setTimeout> | undefined

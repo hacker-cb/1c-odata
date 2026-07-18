@@ -211,8 +211,12 @@ describe('createLocalJwks', () => {
   it('retries after a timed-out read rather than staying wedged', async () => {
     const a = await makeSigner('key-a')
     let hang = true
+    let reads = 0
     const jwks = createLocalJwks(
-      () => (hang ? new Promise<JSONWebKeySet>(() => {}) : Promise.resolve({ keys: [a.jwk] })),
+      () => {
+        reads++
+        return hang ? new Promise<JSONWebKeySet>(() => {}) : Promise.resolve({ keys: [a.jwk] })
+      },
       { timeoutMs: 20 },
     )
 
@@ -220,6 +224,24 @@ describe('createLocalJwks', () => {
     hang = false
     const { payload } = await verify(await a.sign(), await jwks())
     expect(payload.sub).toBe('user-1')
+    expect(reads).toBe(2) // the abandoned read, then a genuinely NEW one
+  })
+
+  it('defaults the read deadline to 5s', async () => {
+    // Pin the shipped default: too short would 401 healthy requests, too long would
+    // restore the wedge this bound exists to prevent. Every other timeout test
+    // overrides `timeoutMs`, so without this the constant is unverified.
+    vi.useFakeTimers()
+    try {
+      const jwks = createLocalJwks(() => new Promise<JSONWebKeySet>(() => {}))
+      const resolver = await jwks()
+      const attempt = resolver()
+      const settled = expect(attempt).rejects.toThrow('Timed out reading the JWKS after 5000ms')
+      await vi.advanceTimersByTimeAsync(5_000)
+      await settled
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('keeps serving the last good set when a stale refresh HANGS', async () => {

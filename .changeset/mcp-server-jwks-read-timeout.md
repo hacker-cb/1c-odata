@@ -15,3 +15,7 @@ and a lock can stall the query after checkout.
 Each read now has a 5s deadline. Exceeding it frees the waiting requests and clears
 the shared promise, so the next request retries; on the max-age refresh path the
 timeout is absorbed and the last good key set keeps serving.
+
+The deadline is per read, and one request can make two — an aged set whose refresh
+times out, then a miss on a rotated-in key — so a single bearer check is bounded at
+10s in that case rather than 5s.
