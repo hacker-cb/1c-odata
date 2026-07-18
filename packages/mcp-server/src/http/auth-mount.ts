@@ -7,7 +7,7 @@ import type { CanonicalUrls } from '../auth/config.js'
 import { consentPage } from '../auth/pages/consent.js'
 import { type FirstRunCheck, makeSignInPage } from '../auth/pages/sign-in.js'
 import { DEFAULT_REQUIRED_SCOPES, resourceMetadataUrl } from '../auth/resource-metadata.js'
-import { createJwtVerifier } from '../auth/verifier.js'
+import { createJwtVerifier, createLocalJwks } from '../auth/verifier.js'
 
 /**
  * Anti-clickjacking + CSP for the first-party sign-in / consent pages. The consent
@@ -70,6 +70,10 @@ export function createAuthMount(opts: AuthMountOptions): AuthMount {
   const verifier = createJwtVerifier({
     issuer: urls.issuer,
     audience: urls.mcpResourceUrl,
+    // The AS is THIS process, so its public keys come straight from the jwt()
+    // plugin's in-process endpoint rather than a fetch of our own public origin
+    // (which a deploy behind a reverse proxy without hairpin-NAT cannot make).
+    keys: createLocalJwks(() => auth.api.getJwks()),
     algorithms: ['EdDSA', 'RS256', 'ES256'],
   })
 
