@@ -1,7 +1,15 @@
 {
   "enabledPlugins": {
-    "typescript-lsp@claude-plugins-official": true,
-    "context7@claude-plugins-official": true,
-    "github@claude-plugins-official": true
+    "playwright@claude-plugins-official": true,
+    "github@claude-plugins-official": true,
+    "hcb-dev@hacker-cb-plugins": true
+  },
+  "extraKnownMarketplaces": {
+    "hacker-cb-plugins": {
+      "source": {
+        "source": "github",
+        "repo": "hacker-cb/claude-code-plugins"
+      }
+    }
   }
 }
