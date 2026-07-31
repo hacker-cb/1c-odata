@@ -27,7 +27,7 @@ on:
       - "pnpm-lock.yaml"
       - ".github/workflows/deploy-compose.yml"
   push:
-    branches: [dev, master, "umbrella/**"]
+    branches: [master]
   workflow_dispatch:
 
 concurrency:

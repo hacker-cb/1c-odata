@@ -51,8 +51,8 @@ updates:
     # Pinned explicitly rather than left to Dependabot's conventional-commit
     # auto-detection, which infers the style from recent history and silently
     # reverts to a bare `Bump …` subject if that heuristic ever misfires. The
-    # PR title becomes the squash commit subject on the trunk
-    # (.claude/rules/git-branches.md), so it must be deterministic.
+    # PR title becomes the squash commit subject on the trunk, so it must be
+    # deterministic.
     # `prefix: chore` + `include: scope` yields `chore(deps): …`.
     commit-message:
       prefix: chore
@@ -197,11 +197,10 @@ updates:
         update-types: [version-update:semver-major]
 # Not configured, deliberately:
 #   - `target-branch`: omitted, so updates land on the default branch (master),
-#     which is this repo's trunk. Nothing else exists to target — `umbrella/**`
-#     branches are short-lived feature integration points, not update targets.
-#   - `labels`: left at Dependabot's default (`dependencies`). The repo's label
-#     families in .claude/rules/github-issue-tracking.md classify ISSUES; a
-#     custom list here would replace the default rather than add to it.
+#     which is this repo's trunk and the only branch updates belong on.
+#   - `labels`: left at Dependabot's default (`dependencies`). A custom list here
+#     would replace that default rather than add to it, and this repo classifies
+#     issues with the stock labels only.
 #   - `registries`: nothing to declare — every source is public (npmjs, Docker
 #     Hub, GHCR public image).
 #   - `insecure-external-code-execution`: not applicable; it is only honoured by

@@ -1,12 +1,11 @@
 name: CI
 
 on:
-  # Gate every PR regardless of base — no base-branch allow-list. A multi-PR
-  # feature's slice PRs target their `umbrella/**` branch, not the trunk, so a
-  # `branches: [master]` filter would silently skip them (see
-  # .claude/rules/git-branches.md § Recommended CI triggers), yet the branch
-  # ruleset still requires these checks there. `workflow_dispatch` allows manual
-  # re-runs (flaky CI / on-demand).
+  # Gate every PR regardless of base — no base-branch allow-list. A slice of a
+  # larger feature targets that feature's branch rather than the trunk, so a
+  # `branches: [master]` filter would silently skip it, while the branch ruleset
+  # still requires these checks there. `workflow_dispatch` allows manual re-runs
+  # (flaky CI / on-demand).
   pull_request:
   workflow_dispatch:
 
