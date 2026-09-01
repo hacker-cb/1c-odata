@@ -8,7 +8,7 @@ import type { SecretSource } from '../../src/secret-store.js'
 
 // The point of the ConnectionSource seam (plan §3.2/3.3): ConnectionPool must
 // resolve connections from ANY source, not just config.json + keychain, so
-// a multi-tenant host can back it with a DB. Prove it with a pure in-memory
+// @1c-odata/mcp-server can back it with a DB. Prove it with a pure in-memory
 // source — no filesystem, no SecretStore.
 vi.mock('@1c-odata/metadata', () => ({
   fetchMetadataXml: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock('@1c-odata/client', async (importOriginal) => ({
   ODataV3Client: vi.fn(),
 }))
 
-/** A minimal in-memory {@link ConnectionSource} — a DB-backed source stand-in. */
+/** A minimal in-memory {@link ConnectionSource} — the mcp-server's DbConnectionSource stand-in. */
 class MemorySource implements ConnectionSource {
   readonly secretReads: string[] = []
   constructor(
@@ -69,7 +69,7 @@ describe('ConnectionPool over a custom ConnectionSource', () => {
 
   it('is a ReadPool', () => {
     // Compile-time guarantee that the concrete pool satisfies the interface the
-    // tool registrators (and an alternate host's scoping wrapper) depend on.
+    // tool registrators (and the mcp-server ScopedPool) depend on.
     const pool: ReadPool = new ConnectionPool(new MemorySource({}, {}))
     expect(typeof pool.get).toBe('function')
   })

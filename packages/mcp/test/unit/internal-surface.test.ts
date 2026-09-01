@@ -24,7 +24,7 @@ import {
 } from '@1c-odata/mcp/internal'
 import { describe, expect, it } from 'vitest'
 
-// Locks the reusable-building-block contract an alternate host depends on. A
+// Locks the reusable-building-block contract @1c-odata/mcp-server depends on. A
 // rename/removal here is an intentional (internal, non-semver) break — update the
 // consumer in lock-step. Management tools must stay OFF this surface (admin-only).
 describe('@1c-odata/mcp/internal surface', () => {
@@ -44,7 +44,7 @@ describe('@1c-odata/mcp/internal surface', () => {
       passwordEnvVar,
       verifyConnectivity,
       verifyReachability,
-      // Additionally relied on by a multi-tenant host (tenancy + CLI):
+      // Additionally relied on by @1c-odata/mcp-server (tenancy + CLI):
       resolveDataDir,
       assertValidConnectionName,
       isValidConnectionName,

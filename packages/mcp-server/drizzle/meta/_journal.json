@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1783101603366,
+      "tag": "0000_goofy_rhodey",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783107396105,
+      "tag": "0001_right_captain_marvel",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783245312695,
+      "tag": "0002_huge_supreme_intelligence",
+      "breakpoints": true
+    }
+  ]
+}

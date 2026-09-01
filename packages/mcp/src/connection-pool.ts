@@ -40,7 +40,7 @@ export interface ConnectionSummary {
 
 /**
  * The read-facing slice of {@link ConnectionPool} that the tool registrators
- * depend on. A per-session scoping wrapper in a multi-tenant host implements
+ * depend on. A per-session scoping wrapper (`@1c-odata/mcp-server`) implements
  * this same interface to gate access to a subset of bases without re-fetching
  * `$metadata`, so registrators take a `ReadPool` rather than the concrete pool.
  *
