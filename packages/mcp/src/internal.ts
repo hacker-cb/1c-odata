@@ -1,6 +1,6 @@
 // packages/mcp/src/internal.ts
 /**
- * Internal subpath: cross-package escape hatch for alternate hosts and
+ * Internal subpath: cross-package escape hatch for `@1c-odata/mcp-server` and
  * integration tests / tooling.
  *
  * Symbols re-exported here are NOT semver-stable. Minor releases MAY break them.
@@ -17,17 +17,17 @@
  */
 
 // The pool's canonical "no such connection" error. Re-exported so a scoped host
-// (a multi-tenant host's scoping wrapper) can throw the SAME error the pool throws
+// (`@1c-odata/mcp-server`'s ScopedPool) can throw the SAME error the pool throws
 // for an absent base — an ungranted base is then byte-identical to a missing one,
 // no existence leak, and no direct `@1c-odata/client` dependency on the host.
 export { InvalidArgumentError } from '@1c-odata/client'
 // On-disk descriptor shape + secret-store escape hatch (for tests/tooling).
 export type { StoredConnection } from './config.js'
 // Shared data-dir resolver: honors `ONEC_MCP_DATA_DIR` + the absolute-path guard,
-// so an alternate host locates the SAME config.json +
+// so an alternate host (`@1c-odata/mcp-server`) locates the SAME config.json +
 // credentials as the `1c-odata-mcp` CLI instead of diverging on a bare resolve().
 // The connection-name validator travels alongside so a DB-backed admin write path
-// enforces the SAME ASCII alias rule as the file store.
+// (`@1c-odata/mcp-server`) enforces the SAME ASCII alias rule as the file store.
 export { assertValidConnectionName, isValidConnectionName, resolveDataDir } from './config.js'
 // Connection pool + its read-facing contract.
 export {

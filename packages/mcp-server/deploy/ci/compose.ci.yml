@@ -1,0 +1,29 @@
+# deploy/ci/compose.ci.yml — CI overlay for compose.yml (merged as a second -f).
+#
+# Compose resolves relative bind-mount paths against the PROJECT directory (the
+# first -f file's parent = deploy/), NOT each override's own dir — so paths here
+# are written relative to deploy/.
+#
+# Two deltas vs the shipped stack:
+#   1. mcp runs the PREBUILT `onec-mcp:ci` image (built once via build-push-action
+#      with a GHA cache) instead of building inline — faster, cleaner cache.
+#   2. caddy layers Caddyfile.ci on top so TLS uses the internal CA (see that file).
+#
+# NOT overridden on purpose:
+#   - No `ports:` on caddy — compose MERGES ports by concatenation, so a second
+#     mapping would collide with the base 0.0.0.0:80/443. The base publish is
+#     harmless on an ephemeral runner; the smoke reaches it via `curl --resolve`.
+#   - The mcp healthcheck lives in the base compose.yml, so `up --wait` is a real
+#     readiness signal here too.
+services:
+  mcp:
+    image: onec-mcp:ci
+    pull_policy: never # the image is loaded locally by build-push-action; never reach a registry
+    build: !reset null # drop the base `build:` so `up` uses the prebuilt image, never rebuilds
+
+  caddy:
+    volumes:
+      # The shipped Caddyfile becomes an imported fragment; Caddyfile.ci is the root
+      # config. Paths are relative to the project dir (deploy/).
+      - ./Caddyfile:/etc/caddy/site.caddy:ro
+      - ./ci/Caddyfile.ci:/etc/caddy/Caddyfile:ro

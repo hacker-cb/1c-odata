@@ -71,6 +71,14 @@
           "complexity": { "useLiteralKeys": "off" }
         }
       }
+    },
+    {
+      "includes": ["**/deploy/ci/**"],
+      "linter": {
+        "rules": {
+          "suspicious": { "noConsole": "off" }
+        }
+      }
     }
   ]
 }

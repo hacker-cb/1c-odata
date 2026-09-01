@@ -1,0 +1,88 @@
+{
+  "name": "@1c-odata/mcp-server",
+  "version": "0.6.0",
+  "description": "Streamable HTTP MCP server for @1c-odata: read-only schema introspection and data queries against 1С:Enterprise OData V3 bases.",
+  "keywords": [
+    "1c",
+    "1c-enterprise",
+    "odata",
+    "odata-v3",
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "http"
+  ],
+  "author": "Pavel Sokolov",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hacker-cb/1c-odata.git",
+    "directory": "packages/mcp-server"
+  },
+  "homepage": "https://github.com/hacker-cb/1c-odata#readme",
+  "bugs": {
+    "url": "https://github.com/hacker-cb/1c-odata/issues"
+  },
+  "type": "module",
+  "bin": {
+    "1c-odata-mcp-server": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=24.18.0"
+  },
+  "files": [
+    "dist",
+    "drizzle",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "prepare": "pnpm build",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "test:unit": "vitest run --exclude \"test/integration/**\" --exclude \"test/e2e/**\"",
+    "test:coverage": "vitest run --exclude \"test/integration/**\" --exclude \"test/e2e/**\" --coverage",
+    "test:integration:offline": "echo no offline integration in mcp-server && exit 0",
+    "test:integration:live": "echo no live integration in mcp-server && exit 0",
+    "test:integration:write": "echo no write integration in mcp-server && exit 0",
+    "test:e2e": "vitest run test/e2e",
+    "package:lint": "publint && attw --pack . --ignore-rules no-resolution cjs-resolves-to-esm",
+    "auth:schema": "better-auth generate --config ./auth.config.ts --output ./auth-schema.ts --yes && biome check --write ./auth-schema.ts && drizzle-kit generate"
+  },
+  "dependencies": {
+    "@1c-odata/mcp": "workspace:*",
+    "@better-auth/drizzle-adapter": "^1.6.23",
+    "@better-auth/oauth-provider": "^1.6.23",
+    "@electric-sql/pglite": "^0.5.4",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-auth": "^1.6.23",
+    "commander": "^15.0.0",
+    "drizzle-orm": "^0.45.2",
+    "eta": "^4.6.0",
+    "express": "^5.2.1",
+    "jose": "^6.2.3",
+    "pg": "^8.22.0",
+    "pino": "^10.3.1"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "devDependencies": {
+    "@better-auth/cli": "^1.4.21",
+    "@types/express": "^5.0.6",
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
+    "msw": "^2.15.0"
+  }
+}

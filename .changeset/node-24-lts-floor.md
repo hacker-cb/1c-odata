@@ -3,6 +3,7 @@
 '@1c-odata/metadata': minor
 '@1c-odata/cli': minor
 '@1c-odata/mcp': minor
+'@1c-odata/mcp-server': minor
 ---
 
 **Breaking:** the minimum supported Node version is now 24.18.0 (was 22.21.0).
@@ -12,8 +13,9 @@ the active LTS line and is supported until 2028-04-30. Installing on Node 22
 will now be refused or warned about by npm/pnpm, depending on your client.
 
 No source change accompanies this. The library does not yet use any API that
-Node 22 lacks — the floor moves so that the version CI exercises and the version
-the packages advertise are one and the same. Keeping the advertised floor below the tested one meant the
+Node 22 lacks — the floor moves so that the version CI exercises, the version
+the published container image runs, and the version the packages advertise are
+one and the same. Keeping the advertised floor below the tested one meant the
 promise was never actually verified, which is the defect this closes.
 
 `@types/node` is pinned to the matching major for the same reason: types

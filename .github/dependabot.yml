@@ -2,10 +2,20 @@
 #
 # Scope note: an entry is matched by (package-ecosystem, directory) — a manifest
 # is only covered when BOTH match. Everything this repo actually consumes is
-# enumerated below: workflows + composite actions, and the pnpm workspace.
+# enumerated below: workflows + composite actions, the pnpm workspace, and the
+# mcp-server deploy tree's container images.
 #
-# Cooldown rationale (repeated per ecosystem below): this repo PUBLISHES four
-# npm packages, so a compromised upstream release propagates
+# NOT coverable by Dependabot, must be bumped by hand:
+#   - the `deploy-pg-smoke` service container in .github/workflows/ci.yml, at
+#     `jobs.deploy-pg-smoke.services.postgres.image` (grep for `image: postgres`).
+#     Service container images live inside a workflow file: `github-actions`
+#     only tracks `uses:` references, and the `docker` ecosystem never scans
+#     .github/workflows. Keep it in lock-step with the `postgres` image in
+#     packages/mcp-server/deploy/compose.yml — a version skew there means the
+#     deploy-pg-smoke gate stops testing what production runs.
+#
+# Cooldown rationale (repeated per ecosystem below): this repo PUBLISHES five
+# npm packages and a GHCR image, so a compromised upstream release propagates
 # straight into artifacts other people install. Malicious npm versions are
 # typically detected and unpublished within a few days, so holding new releases
 # for a cooldown window is a cheap, high-value supply-chain mitigation. Cooldown
@@ -94,23 +104,105 @@ updates:
       - dependency-name: '@types/node'
         update-types: [version-update:semver-major]
     groups:
-      # Minor + patch bumps are grouped weekly, production deps separately from
-      # dev deps ("batch the boring, isolate the risky" — same principle as the
-      # ungrouped github-actions entry above). Majors match no group and arrive
-      # as individual PRs.
+      # The better-auth family is excluded from BOTH groups — it is the one
+      # dependency set whose bumps can change GENERATED, COMMITTED artifacts.
+      # `packages/mcp-server/auth-schema.ts` is emitted from the betterAuth plugin
+      # set, so a version move on either side of that seam can alter the emitted
+      # tables and turn CI gate 2c red:
+      #   - runtime (`better-auth`, `@better-auth/drizzle-adapter`,
+      #     `@better-auth/oauth-provider`) declares WHICH tables the plugins need;
+      #   - `@better-auth/cli` (dev) is the generator that RENDERS them, and it is
+      #     versioned on its own line (1.4.x while the runtime is on 1.6.x), so the
+      #     two move independently.
+      # Batched into a group, such a bump arrives alongside biome/vitest/pino and a
+      # red gate 2c has an ambiguous cause and cannot be reverted in isolation. This
+      # is the same "batch the boring, isolate the risky" principle the
+      # github-actions entry above applies. Excluded from every group, these arrive
+      # as individual PRs with one unambiguous signal each.
       npm-prod-minor-patch:
         dependency-type: production
         update-types: [minor, patch]
+        exclude-patterns:
+          - better-auth
+          - '@better-auth/*'
       npm-dev-minor-patch:
         dependency-type: development
         update-types: [minor, patch]
+        exclude-patterns:
+          - '@better-auth/*'
+
+  # Container base images in the mcp-server deploy tree.
+  #
+  # `docker` and `docker-compose` are two DISTINCT ecosystems (Compose reached
+  # GA as its own ecosystem in Feb 2025) and both are needed here: `docker`
+  # fetches Dockerfile/Containerfile, `docker-compose` fetches
+  # compose*.y[a]ml. Pointing both at the same directory is safe — the `docker`
+  # fetcher's YAML branch only accepts Kubernetes manifests (it requires
+  # top-level `apiVersion` + `kind`), which a Compose file never has, so the
+  # compose files are not picked up twice and no duplicate PRs result.
+  #
+  # This entry covers packages/mcp-server/deploy/Dockerfile
+  # (`node:22-bookworm-slim`, builder + runtime stages).
+  - package-ecosystem: docker
+    directory: /packages/mcp-server/deploy
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    ignore:
+      # The runtime image must track the Node line the packages declare in
+      # `engines`, and Node's release cadence makes an automated major bump
+      # actively unsafe: ODD majors are NEVER promoted to LTS and are supported
+      # for about eight months. The first PR this entry ever opened proposed
+      # node:24 -> node:25 — a line that had already reached end-of-life, which
+      # would have put the shipped GHCR image on an unsupported runtime.
+      #
+      # Minor/patch bumps still flow (that is where the CVE fixes are). A major
+      # move is a deliberate change that must happen in the same commit as the
+      # `engines.node` floor and .nvmrc — see the Node 24 migration for the full
+      # set of places that have to move together.
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+
+  # Compose files under the same directory: compose.yml
+  # (`postgres:17-bookworm`, `caddy:2`) and compose.prod.yml.
+  #
+  # deploy/ci/compose.ci.yml is intentionally NOT listed: its only image is the
+  # locally-built `onec-mcp:ci`, which resolves against no registry.
+  - package-ecosystem: docker-compose
+    directory: /packages/mcp-server/deploy
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    ignore:
+      # Our own published image, referenced as
+      # `ghcr.io/hacker-cb/1c-odata-mcp-server:${MCP_IMAGE_TAG:-latest}` in
+      # compose.prod.yml. Its tag is chosen by release-image.yml, not by
+      # Dependabot; listing it explicitly documents that rather than relying on
+      # the env-substitution happening to be unparseable as a version.
+      - dependency-name: ghcr.io/hacker-cb/1c-odata-mcp-server
+      # Postgres majors are a data migration (pg_upgrade / dump+restore), never
+      # a dependency bump — an auto-merged `postgres:17 -> 18` would break every
+      # existing self-host volume on restart. Minor/patch bumps still flow.
+      # When a major is genuinely wanted, do it as a deliberate PR that also
+      # moves the ci.yml service container in the same commit.
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
 # Not configured, deliberately:
 #   - `target-branch`: omitted, so updates land on the default branch (master),
 #     which is this repo's trunk and the only branch updates belong on.
 #   - `labels`: left at Dependabot's default (`dependencies`). A custom list here
 #     would replace that default rather than add to it, and this repo classifies
 #     issues with the stock labels only.
-#   - `registries`: nothing to declare — every source is public (npmjs).
+#   - `registries`: nothing to declare — every source is public (npmjs, Docker
+#     Hub, GHCR public image).
 #   - `insecure-external-code-execution`: not applicable; it is only honoured by
 #     bundler, mix and pip, none of which this repo uses.
 #

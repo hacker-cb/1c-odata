@@ -1,0 +1,138 @@
+name: Release image
+
+# Builds and pushes the multi-arch @1c-odata/mcp-server container image to GHCR.
+# Two entry points:
+#   - workflow_call — invoked by release.yml right after the npm publish + tag, so
+#     the image tag tracks the changesets `fixed` version 1:1 (image X.Y.Z ==
+#     npm X.Y.Z == git tag vX.Y.Z).
+#   - workflow_dispatch — manual backfill / re-publish of a given version (e.g. if
+#     an earlier push failed after the tag was created).
+#
+# No secrets: pushes to ghcr.io under the repo owner with the built-in GITHUB_TOKEN
+# (packages: write). Idempotent — skips the expensive multi-arch build entirely when
+# the image tag already exists, mirroring release.yml's `npm view` self-healing.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Version to tag the image with (blank → packages/client/package.json).
+        type: string
+        required: false
+        default: ""
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to tag the image with (blank → packages/client/package.json).
+        type: string
+        required: false
+        default: ""
+
+# Least privilege: read the tree, write the package. No id-token — build-push-action's
+# `provenance: true` is BuildKit's UNSIGNED SLSA attestation (no OIDC/sigstore), so no
+# OIDC token is minted. Add `id-token: write` only if cosign keyless signing lands.
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/1c-odata-mcp-server
+
+concurrency:
+  # Serialize per ref so a manual dispatch can't race the release-driven call.
+  group: release-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    if: github.repository == 'hacker-cb/1c-odata'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # arm64 under QEMU roughly doubles the amd64-only build time
+    steps:
+      # Build the SOURCE that matches the version, not whatever HEAD happens to be:
+      # when a version is supplied, check out its release tag `v<version>`. This makes
+      # the release-driven call race-proof (a master push landing between the tag and
+      # this job can't leak into the image) and makes a dispatch backfill build the
+      # OLD version's real source instead of current master. Blank version (bare
+      # dispatch) → default ref, and Resolve version reads the tree's package.json.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.version != '' && format('v{0}', inputs.version) || '' }}
+          persist-credentials: false # the build never uses the git token
+      # Prefer the caller-supplied version (release.yml passes the just-released
+      # fixed-group version); fall back to the checked-out tree for a bare dispatch.
+      # inputs.version reaches the shell via env (never inline `${{ }}` in run:) so a
+      # crafted dispatch input can't inject shell — the job holds `packages: write`.
+      - name: Resolve version
+        id: v
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          v="$INPUT_VERSION"
+          if [ -z "$v" ]; then v=$(node -p "require('./packages/client/package.json').version"); fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "mm=$(printf '%s' "$v" | cut -d. -f1,2)" >> "$GITHUB_OUTPUT"   # 0.7.0 → 0.7
+          echo "image version: $v"
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      # Idempotency BEFORE the costly QEMU/buildx setup: a repeated master push (or a
+      # dispatch of an already-built version) is a fast no-op instead of a full rebuild.
+      - name: Skip if this version is already published
+        id: exists
+        env:
+          VERSION: ${{ steps.v.outputs.version }} # via env, never inline in run:
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE:$VERSION" >/dev/null 2>&1; then
+            echo "already published: $IMAGE:$VERSION"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set up QEMU (arm64 emulation)
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/setup-qemu-action@v4
+      - name: Set up Buildx
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v4
+      - name: Image metadata (tags + OCI labels)
+        if: steps.exists.outputs.skip != 'true'
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          # type=raw with a pre-resolved value is unconditionally emitted on ANY event
+          # (workflow_call/dispatch) — unlike type=semver, whose default source is the
+          # git tag ref. The immutable `X.Y.Z` and `sha-*` tags are always safe. The
+          # FLOATING `X.Y` and `latest` tags move only on the release-driven path
+          # (workflow_call from release.yml, whose event is `push`); a workflow_dispatch
+          # backfill of an older version must NOT roll them back, so they're gated off
+          # for dispatch. No bare-major `0` tag: during 0.x every minor is breaking
+          # (STABILITY.md), so a moving `0` would span incompatible releases.
+          tags: |
+            type=raw,value=${{ steps.v.outputs.version }}
+            type=raw,value=${{ steps.v.outputs.mm }},enable=${{ github.event_name != 'workflow_dispatch' }}
+            type=raw,value=latest,enable=${{ github.event_name != 'workflow_dispatch' }}
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.title=1c-odata-mcp-server
+            org.opencontainers.image.description=Remote MCP server for 1С:Enterprise OData bases
+            org.opencontainers.image.licenses=MIT
+      - name: Build & push (amd64 + arm64)
+        if: steps.exists.outputs.skip != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: . # repo root — the workspace build needs the sibling packages
+          file: packages/mcp-server/deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true # SLSA build provenance, aligned with npm's --provenance
+          sbom: true
+          cache-from: type=gha,scope=release-image
+          cache-to: type=gha,mode=max,scope=release-image

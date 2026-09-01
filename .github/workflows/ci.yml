@@ -120,6 +120,119 @@ jobs:
         run: |
           pnpm --filter basic-example typecheck
           pnpm --filter dynamic-example typecheck
+      - name: Auth schema + drizzle migrations re-derive clean (gate 2c)
+        # Both generated-and-committed artifacts must reproduce from their inputs:
+        #   auth.config.ts --(@better-auth/cli)--> auth-schema.ts --(drizzle-kit)--> drizzle/*.sql
+        # drizzle/*.sql is the SINGLE source of truth applied at runtime by BOTH
+        # dev/tests (pglite) and prod (pg) — see src/store/migrate.ts — so a stale
+        # committed SQL would only surface as a prod boot failure otherwise.
+        #
+        # This INVOKES the package's own `auth:schema` script rather than
+        # re-implementing a stage. The original defect was exactly a gate that ran
+        # `drizzle-kit generate` directly and skipped stage 1: the one command that
+        # would have exercised the (broken) generator was routed around, so the gate
+        # stayed green while `auth:schema` — the command its own error message tells
+        # you to run — could not run at all. A gate that runs the documented command
+        # cannot drift from the docs. Ubuntu-only — deterministic, OS-independent.
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          # stdin from /dev/null covers BOTH generators in the script. `better-auth
+          # generate` would prompt before overwriting auth-schema.ts, which the
+          # script's `--yes` suppresses; `drizzle-kit generate` prompts only on an
+          # ambiguous rename. With no TTY either read gets EOF and fails fast
+          # instead of hanging to the job timeout. The common add/modify drift case
+          # (what this guard targets) never prompts.
+          pnpm -F @1c-odata/mcp-server auth:schema < /dev/null
+          if [ -n "$(git status --porcelain packages/mcp-server/auth-schema.ts packages/mcp-server/drizzle)" ]; then
+            echo "::error::auth schema / drizzle migrations out of sync — run 'pnpm -F @1c-odata/mcp-server auth:schema' and commit packages/mcp-server/{auth-schema.ts,drizzle}"
+            git status --porcelain packages/mcp-server/auth-schema.ts packages/mcp-server/drizzle
+            git --no-pager diff packages/mcp-server/auth-schema.ts packages/mcp-server/drizzle
+            exit 1
+          fi
+      - name: Applied migrations are append-only (gate 2d)
+        # drizzle-orm decides what to apply from `created_at` ALONE. Its migrator
+        # (drizzle-orm/pg-core/dialect.js) reads only the newest applied row —
+        # `select ... order by created_at desc limit 1` — and runs a migration iff
+        # `lastDbMigration.created_at < migration.folderMillis`. It WRITES each
+        # migration's `hash` but never compares it again.
+        #
+        # So editing a migration a database has already applied is SILENTLY SKIPPED
+        # there, while a fresh database (CI, pglite, a new self-host) applies the
+        # edited version. Prod and CI then diverge with nothing failing — and since
+        # mcp-server ships `files: ["dist","drizzle",...]`, the blast radius includes
+        # other people's databases. Gate 2c cannot see this: it only proves the SQL
+        # re-derives from the schema, not that history stayed stable.
+        #
+        # Hence: migrations are APPEND-ONLY once merged. To change applied DDL, add
+        # a NEW migration; never edit or delete an existing one. `_journal.json` may
+        # only grow — its existing entries carry the `when`/folderMillis values the
+        # comparison above depends on.
+        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
+        env:
+          # Via env rather than inline `${{ }}`, so nothing from the event
+          # interpolates into the shell.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          d=packages/mcp-server/drizzle
+          # The PR checkout is shallow and sits on the merge ref, so the base commit
+          # is usually absent — fetch just that one object.
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          # ALLOWLIST the only legitimate status: `A` (added). Append-only means a
+          # new file is the sole permitted change, so everything else is rejected —
+          # modify, delete, rename (`R###`), copy, type-change. Enumerating the
+          # FORBIDDEN statuses instead would leak: rename detection is on by
+          # default since git 2.9, so `git mv` of an applied migration reports
+          # `R100` with no accompanying `D` line and would slip through an `^[MD]`
+          # test. No `|| true` on the diff itself either — a git failure must abort
+          # the step (set -e), never yield an empty result that reads as "clean".
+          changed=$(git diff --name-status "$BASE_SHA" HEAD -- "$d/*.sql" "$d/meta/*_snapshot.json")
+          illegal=$(printf '%s\n' "$changed" | grep -vE '^(A|$)' || true)
+          if [ -n "$illegal" ]; then
+            echo "::error::applied migrations are append-only — an existing migration or snapshot was modified, deleted or renamed. Add a NEW migration instead of touching one that databases may already have applied."
+            printf '%s\n' "$illegal"
+            exit 1
+          fi
+          # `_journal.json` may change, but only by appending, and an appended
+          # entry's `when` must be strictly greater than every entry before it.
+          # A merely-appended entry is NOT enough: `when` IS the folderMillis the
+          # migrator compares, so a migration generated before one already on the
+          # base branch (two concurrent migration PRs, the second rebased) carries
+          # a LOWER `when`. Databases that already applied the newer one would then
+          # skip it forever while fresh databases apply it — the very divergence
+          # this gate exists to stop, reached by an append rather than an edit.
+          # (Single-quoted node script: the `$`/backtick forms below are JS, not
+          # shell — nothing here is meant to expand.)
+          j="$d/meta/_journal.json"
+          if [ -n "$(git diff --name-only "$BASE_SHA" HEAD -- "$j")" ]; then
+            git show "$BASE_SHA:$j" > /tmp/journal-base.json
+            # shellcheck disable=SC2016
+            node -e '
+              const fs = require("node:fs")
+              const read = (p) => JSON.parse(fs.readFileSync(p, "utf8")).entries ?? []
+              const base = read("/tmp/journal-base.json")
+              const head = read(process.argv[1])
+              const fail = (msg) => { console.error("::error::" + msg); process.exit(1) }
+              if (head.length < base.length) {
+                fail("_journal.json lost entries (" + base.length + " -> " + head.length + ") — migrations are append-only")
+              }
+              for (let i = 0; i < base.length; i++) {
+                if (JSON.stringify(base[i]) !== JSON.stringify(head[i])) {
+                  fail("_journal.json entry " + i + " was modified — migrations are append-only. before: "
+                    + JSON.stringify(base[i]) + " after: " + JSON.stringify(head[i]))
+                }
+              }
+              for (let i = 1; i < head.length; i++) {
+                if (!(head[i].when > head[i - 1].when)) {
+                  fail("_journal.json entry " + i + " (" + head[i].tag + ", when=" + head[i].when
+                    + ") does not come strictly after entry " + (i - 1) + " (" + head[i - 1].tag
+                    + ", when=" + head[i - 1].when + "). drizzle applies a migration only when"
+                    + " created_at < folderMillis, so this one would be skipped on any database that"
+                    + " already applied the previous entry. Regenerate it so its timestamp is newest.")
+                }
+              }
+            ' "$j"
+          fi
 
   test-and-build:
     runs-on: ${{ matrix.os }}
@@ -140,6 +253,22 @@ jobs:
           coverage: ${{ matrix.os == 'ubuntu-latest' }}
       - name: E2E tests (gate 8)
         run: pnpm turbo test:e2e --filter='./packages/*'
+      - name: mcp-server bin boots on Windows (gate 8b)
+        # The Linux deploy tiers (deploy-pg-smoke / deploy-package-smoke) never run
+        # on Windows, yet the bin's OS-sensitive bits regress on NTFS: the shebang +
+        # realpathSync entry guard, and migrationsFolder()'s dirname/join walk over
+        # backslash paths. admin-create exercises exactly those — it drives
+        # runAuthMigrations from the built dist against a throwaway pglite store,
+        # with NO port bind (so no server/curl flake). `gates` already built dist/.
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        env:
+          BETTER_AUTH_SECRET: ci-windows-secret-not-for-prod-0123456789
+        run: |
+          node packages/mcp-server/dist/cli.js --help | grep -q admin-create
+          node packages/mcp-server/dist/cli.js admin-create \
+            --auth-data-dir "$RUNNER_TEMP/mcp-store" --public-url http://127.0.0.1:3000 \
+            --email a@b.co --password 'Password123!' | grep -qi 'admin user created'
       - name: Upload coverage
         if: success() && matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v7
@@ -149,6 +278,72 @@ jobs:
           # Fail loudly if coverage vanished — a silent empty upload previously
           # masked the fact that coverage was never generated at all.
           if-no-files-found: error
+
+  deploy-pg-smoke:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    timeout-minutes: 10
+    # Boots the shipped `pnpm deploy --prod` tree against a REAL Postgres and walks
+    # the deploy paths the pglite unit/e2e suite structurally cannot: the
+    # node-postgres migrator, the setup token's single-use guarantee under TRUE
+    # concurrency (pglite serializes; a prod pg.Pool does not), the Host guard
+    # end-to-end, and SIGTERM + idempotent re-migration.
+    #
+    # SECRET-FREE by construction: a throwaway `services:` Postgres + app secrets
+    # from `openssl rand`; no 1С base, no proxy. => NO `needs: detect-secrets`; runs
+    # on fork PRs; CAN be a required check.
+    # GUARDRAIL: never add any `secrets.*` here — that demands the owner gate and
+    # forfeits fork coverage. A secret-bearing deploy variant belongs in its own file.
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: mcp
+          POSTGRES_PASSWORD: mcp
+          POSTGRES_DB: mcp
+        ports:
+          - 5433:5432 # host 5433 dodges any preinstalled pg on 5432
+        options: >-
+          --health-cmd "pg_isready -U mcp -d mcp"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: Emit the --prod deploy tree
+        run: pnpm --filter @1c-odata/mcp-server deploy --prod --legacy /tmp/app
+      - name: Boot on real pg + walk security-critical paths
+        env:
+          APP_DIR: /tmp/app
+          DATABASE_URL: postgres://mcp:mcp@127.0.0.1:5433/mcp
+          ONEC_MCP_PUBLIC_URL: http://127.0.0.1:3000
+        run: bash packages/mcp-server/deploy/ci/smoke.sh
+      - name: Dump server logs on failure
+        if: failure()
+        # Redact the first-run setup token: a failure BEFORE the race consumes it
+        # would otherwise print a still-live one-time token into the CI log.
+        run: cat /tmp/mcp1.log /tmp/mcp2.log 2>/dev/null | sed -E 's/token=[A-Za-z0-9_-]+/token=REDACTED/g' || true
+
+  deploy-package-smoke:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    timeout-minutes: 10
+    # Sole owner of the published-package path: pack the four @1c-odata/* tarballs,
+    # install them into a scratch project (pinned to the local tarballs so npm never
+    # hits the registry for the unpublished siblings), and drive the AUTH path so
+    # the migrator resolves `drizzle/` from the real node_modules layout. Catches a
+    # dropped `files` entry / broken `bin` / misfiled runtime dep that `package:lint`
+    # (types + exports only) cannot. Secret-free; fork-safe.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: Pack + install the tarball, boot the bin
+        env:
+          REPO: ${{ github.workspace }}
+          TMP: ${{ runner.temp }}/pkgsmoke
+        run: bash packages/mcp-server/deploy/ci/package-smoke.sh
+      - name: Dump boot log on failure
+        if: failure()
+        run: cat "${{ runner.temp }}/pkgsmoke/pk.log" 2>/dev/null || true
 
   test-example:
     runs-on: ubuntu-latest
