@@ -11,7 +11,7 @@ export interface ListedConnection extends StoredConnection {
  * Pluggable origin of connection descriptors + secrets for a {@link ConnectionPool}.
  *
  * The local stdio server uses {@link FileConnectionSource} (config.json + keychain),
- * so its UX is unchanged. A multi-tenant host (`@1c-odata/mcp-server`) supplies a
+ * so its UX is unchanged. A multi-tenant host supplies a
  * DB-backed implementation whose secrets are decrypted at read time. The pool only
  * ever talks to this seam — it never learns WHERE bases or passwords live.
  *
