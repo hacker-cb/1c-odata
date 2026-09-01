@@ -7,7 +7,7 @@ import { writeFileAtomic } from './atomic-write.js'
  * Where a connection's password was resolved from (or `none`).
  *
  * `env`/`keychain`/`file` are the backends {@link SecretStore} itself reads; a
- * DB-backed {@link ConnectionSource} (the multi-tenant `@1c-odata/mcp-server`)
+ * DB-backed {@link ConnectionSource} (a multi-tenant host)
  * reports `db` so `list_connections` names the real origin. {@link SecretStore}
  * never returns `db` — it is only produced by out-of-tree sources.
  */

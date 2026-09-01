@@ -4,7 +4,7 @@ What is and isn't covered by semver across the `@1c-odata/*` monorepo.
 
 ## Public API surface
 
-Public surface = every symbol reachable via a package's `package.json#exports` entrypoints (including subpaths like `@1c-odata/client/filter` and `@1c-odata/cli/codegen`), minus symbols tagged `@internal` in JSDoc. This covers the three library packages: `@1c-odata/client`, `@1c-odata/metadata`, `@1c-odata/cli`. The two application packages — `@1c-odata/mcp` (local CLI + stdio MCP server) and `@1c-odata/mcp-server` (remote Streamable-HTTP MCP server) — have operational contracts instead; see [`@1c-odata/mcp` surface](#1c-odatamcp-surface-cli--mcp-server) and [`@1c-odata/mcp-server` surface](#1c-odatamcp-server-surface-remote-mcp-server) below.
+Public surface = every symbol reachable via a package's `package.json#exports` entrypoints (including subpaths like `@1c-odata/client/filter` and `@1c-odata/cli/codegen`), minus symbols tagged `@internal` in JSDoc. This covers the three library packages: `@1c-odata/client`, `@1c-odata/metadata`, `@1c-odata/cli`. The application package — `@1c-odata/mcp` (local CLI + stdio MCP server) — has an operational contract instead; see [`@1c-odata/mcp` surface](#1c-odatamcp-surface-cli--mcp-server) below.
 
 Semver-applicable:
 
@@ -94,24 +94,7 @@ Semver-applicable:
 NOT covered:
 
 - The OS-keychain entry naming (the `service` / `account` strings) is an implementation detail — it MAY change, and a change orphans previously stored keychain secrets (re-add them, or use `ONEC_<NAME>_PASSWORD`).
-- Programmatic exports of `@1c-odata/mcp`. The `.` entrypoint (`createMcpServer`, `runServe`, plus the config / data-dir helpers) is a convenience for embedding the local stdio server and MAY change. The `@1c-odata/mcp/internal` subpath — the connection pool and its `ConnectionSource` seam, the read-only tool registrators, `SecretStore`, `passwordEnvVar`, and the response-limit helpers — is an explicit escape hatch consumed by `@1c-odata/mcp-server` and tests/tooling, on the same footing as `@1c-odata/client/internal` (MAY break in a minor release; safe because the packages release in lock-step).
+- Programmatic exports of `@1c-odata/mcp`. The `.` entrypoint (`createMcpServer`, `runServe`, plus the config / data-dir helpers) is a convenience for embedding the local stdio server and MAY change. The `@1c-odata/mcp/internal` subpath — the connection pool and its `ConnectionSource` seam, the read-only tool registrators, `SecretStore`, `passwordEnvVar`, and the response-limit helpers — is an explicit escape hatch for alternate hosts and tests/tooling, on the same footing as `@1c-odata/client/internal` (MAY break in a minor release; safe because the packages release in lock-step).
 - Tool / CLI output text and error-message wording.
 
 The per-data-dir keychain namespacing is a **behavioral break with no migration**: a secret stored under the previous flat `1c-odata` keychain service is not found after the upgrade — re-add the password (`1c-odata-mcp add <name>`) or set `ONEC_<NAME>_PASSWORD`. `config.json`, the `credentials.json` file backend, and env-var passwords are unaffected.
-
-## `@1c-odata/mcp-server` surface (remote MCP server)
-
-`@1c-odata/mcp-server` is an application — the `1c-odata-mcp-server` bin plus a Docker/Compose deploy — versioned under the same [Versioning](#versioning) policy (a break ships as a minor in v0.x, documented in the release).
-
-Semver-applicable:
-
-- The CLI command set and primary flags: `serve`, `admin-create`, `set-password`; `--public-url`, `--pg-url`, `--auth-data-dir`, `--enc-key`, `--data-dir`, `--host`, `--port`, and the env vars that back those flags (`ONEC_MCP_DATA_DIR`, `ONEC_MCP_PUBLIC_URL`, `BETTER_AUTH_SECRET` (or its `AUTH_SECRET` alias), `ONEC_MCP_ENC_KEY`, `DATABASE_URL`, `ONEC_MCP_AUTH_DATA_DIR`, `ONEC_MCP_ALLOWED_HOSTS` — see the package README for the full set).
-- The HTTP surface a client depends on: the MCP endpoint (`POST`/`GET`/`DELETE /mcp`, Streamable HTTP), `GET /healthz`, and the OAuth discovery documents (`/.well-known/oauth-*`, `/api/auth/*`) — OAuth 2.1 with RFC 8707 resource + PKCE. The read-only MCP tool set is `@1c-odata/mcp`'s (above); management/write tools are never exposed over HTTP.
-- The deploy env contract: `BETTER_AUTH_SECRET`, `ONEC_MCP_ENC_KEY`, `DATABASE_URL`, `ONEC_MCP_PUBLIC_URL` (see [`deploy/README.md`](./packages/mcp-server/deploy/README.md)).
-
-NOT covered:
-
-- The `/admin` panel and the `/sign-in` / `/consent` / `/setup` pages — their markup, routes, and styling are operational UI and MAY change freely.
-- The OAuth authorization-server internals (better-auth), the database schema, and the shipped `drizzle/` migrations — implementation details (migrations run automatically on boot; the store is not a public API).
-- The deploy artifacts (`deploy/Dockerfile`, `compose.yml`, `compose.prod.yml`, `Caddyfile`) and the published `ghcr.io/hacker-cb/1c-odata-mcp-server` image beyond the promise that each release publishes the `X.Y.Z` / `X.Y` / `latest` tags.
-- The `.` programmatic export (`createHttpServer`) — a convenience for embedding, MAY change. There is no `@1c-odata/mcp-server/internal`.
