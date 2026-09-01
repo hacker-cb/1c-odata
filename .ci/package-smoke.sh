@@ -121,14 +121,18 @@ for p in client metadata cli mcp; do
   ( cd "$SCRATCH/$p" && node smoke.mjs )
 done
 
-# Both bins through their `bin` mapping (npx resolves node_modules/.bin — the
-# shim + shebang path a registry install gives the consumer), each from its own
-# isolated scratch. The grep anchors on the indented Commands-section line —
-# a bare `grep -q serve` would match the word "server" in the program
-# DESCRIPTION and stay green with the command itself deleted.
+# Both bins through their `bin` mapping — invoked as the exact shim npm created
+# in node_modules/.bin (the shebang path a registry install gives the consumer),
+# each from its own isolated scratch. Deliberately NOT `npx`: with the local shim
+# missing — exactly the broken-`bin` failure this smoke exists to catch — npx
+# falls back to fetching a same-named package from the registry and executing
+# that, masking the breakage and adding a network/code-exec path.
+# The grep anchors on the indented Commands-section line — a bare `grep -q serve`
+# would match the word "server" in the program DESCRIPTION and stay green with
+# the command itself deleted.
 # Materialize-then-match (not `… | grep -q`): under pipefail a late writer hitting
 # the pipe grep -q already closed would SIGPIPE and trip set -e.
-help=$(cd "$SCRATCH/cli" && npx 1c-odata --help); grep -qE '^[[:space:]]+generate\b' <<<"$help"
-help=$(cd "$SCRATCH/mcp" && npx 1c-odata-mcp --help); grep -qE '^[[:space:]]+serve\b' <<<"$help"
+help=$(cd "$SCRATCH/cli" && ./node_modules/.bin/1c-odata --help); grep -qE '^[[:space:]]+generate\b' <<<"$help"
+help=$(cd "$SCRATCH/mcp" && ./node_modules/.bin/1c-odata-mcp --help); grep -qE '^[[:space:]]+serve\b' <<<"$help"
 
 echo "package-smoke: OK"
