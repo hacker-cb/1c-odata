@@ -1,5 +1,54 @@
 # @1c-odata/mcp
 
+## 0.7.0
+
+### Minor Changes
+
+- [#56](https://github.com/hacker-cb/1c-odata/pull/56) [`1a64c54`](https://github.com/hacker-cb/1c-odata/commit/1a64c54e3afb80436c9222cae5c994f9d620f969) Thanks [@hacker-cb](https://github.com/hacker-cb)! - Refactor `@1c-odata/mcp` for multi-tenant reuse (prep for a remote multi-tenant host).
+
+  - New `@1c-odata/mcp/internal` subpath exposing the reusable building blocks — `ConnectionPool`, the new `ConnectionSource`/`FileConnectionSource` seam, `ReadPool`, the read-only tool registrators (`registerSchemaTools`/`registerDataTools`/`registerServerInfoTool`), and the response-limit helpers. The connection-management tools stay off this surface (admin-only).
+  - `ConnectionPool` now takes a `ConnectionSource` (where connections and secrets come from) instead of `{ dataDir }`; the local stdio server injects a `FileConnectionSource` (config.json + keychain) and is unchanged. The read-only tool registrators now accept a `ReadPool`.
+  - The programmatic building blocks previously reachable from the `@1c-odata/mcp` root (`ConnectionPool`, `SecretStore`, `passwordEnvVar`, …) moved to `@1c-odata/mcp/internal`; the root now exposes only the local-server entry (`createMcpServer`, `runServe`) and config/data-dir helpers. No CLI, MCP-tool, or on-disk contract changed.
+
+- [#126](https://github.com/hacker-cb/1c-odata/pull/126) [`3146289`](https://github.com/hacker-cb/1c-odata/commit/3146289e4304b1ea5bf531be6a8496456c6cf228) Thanks [@hacker-cb](https://github.com/hacker-cb)! - **Breaking:** the minimum supported Node version is now 24.18.0 (was 22.21.0).
+
+  Node 22 "Jod" has left active LTS and is in maintenance; Node 24 "Krypton" is
+  the active LTS line and is supported until 2028-04-30. Installing on Node 22
+  will now be refused or warned about by npm/pnpm, depending on your client.
+
+  No source change accompanies this. The library does not yet use any API that
+  Node 22 lacks — the floor moves so that the version CI exercises and the version
+  the packages advertise are one and the same. Keeping the advertised floor below the tested one meant the
+  promise was never actually verified, which is the defect this closes.
+
+  `@types/node` is pinned to the matching major for the same reason: types
+  describing a runtime above the floor let an API that does not exist there
+  typecheck green and fail at runtime for anyone who installed at the advertised
+  minimum.
+
+  If you are pinned to Node 22, stay on the previous release until you can move —
+  v0.x carries no compatibility shims (see STABILITY.md).
+
+### Patch Changes
+
+- [#58](https://github.com/hacker-cb/1c-odata/pull/58) [`bf78afc`](https://github.com/hacker-cb/1c-odata/commit/bf78afceb30cc89123e112f451a829e03930e57a) Thanks [@hacker-cb](https://github.com/hacker-cb)! - Prep `@1c-odata/mcp/internal` for a DB-backed multi-tenant host. Additive only — no CLI, MCP-tool, on-disk, or local stdio behavior changed.
+
+  - `SecretSource` gains a `'db'` variant so a DB-backed `ConnectionSource` can report the real password origin in `list_connections`. `SecretStore` itself never returns it (file/keychain/env only).
+  - `@1c-odata/mcp/internal` now re-exports `verifyConnectivity` — the standalone `$metadata` reachability probe (no `dataDir` dependency), reused by a remote host to verify a base before saving it. The connection-management functions (`upsertConnection`/`removeConnection`/`updateConnectionCredentials`/`setConnectionLabel`) stay private — they are bound to the file-backed config.
+
+- [#162](https://github.com/hacker-cb/1c-odata/pull/162) [`4c57cdb`](https://github.com/hacker-cb/1c-odata/commit/4c57cdba8e317db65074909ba268f0112bb0af1a) Thanks [@hacker-cb](https://github.com/hacker-cb)! - `@1c-odata/mcp/internal` re-exports for alternate hosts:
+
+  - `assertValidConnectionName` / `isValidConnectionName`, so a DB-backed admin
+    write path enforces the same ASCII connection-name rule as the file-backed
+    store.
+  - `InvalidArgumentError` (from `@1c-odata/client`), so a scoping wrapper throws
+    the pool's canonical not-found error without a new dependency — an ungranted
+    base is then byte-identical to a missing one.
+
+- Updated dependencies [[`3146289`](https://github.com/hacker-cb/1c-odata/commit/3146289e4304b1ea5bf531be6a8496456c6cf228)]:
+  - @1c-odata/client@0.7.0
+  - @1c-odata/metadata@0.7.0
+
 ## 0.6.0
 
 ### Minor Changes
