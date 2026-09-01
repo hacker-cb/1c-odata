@@ -30,7 +30,7 @@ NOT covered:
 - **v0.x (current)** — API is unstable. Minor versions MAY contain breaking changes. Every break is documented in [GitHub Releases](https://github.com/hacker-cb/1c-odata/releases) with a migration example. Patch versions are NEVER breaking.
 - **v1.0+ (future)** — strict semver.
 
-Workspace deps use `workspace:*`. All five `@1c-odata/*` packages are one changesets `fixed` group, so they always release together at the same version. In v0.x a breaking change therefore ships as a **minor** bump across all five at once (a major bump is reserved for v1.0) — never as a major in 0.x.
+Workspace deps use `workspace:*`. All four `@1c-odata/*` packages are one changesets `fixed` group, so they always release together at the same version. In v0.x a breaking change therefore ships as a **minor** bump across all four at once (a major bump is reserved for v1.0) — never as a major in 0.x.
 
 ## Error contract
 
