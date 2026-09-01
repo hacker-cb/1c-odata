@@ -150,6 +150,36 @@ jobs:
           # masked the fact that coverage was never generated at all.
           if-no-files-found: error
 
+  package-smoke:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    timeout-minutes: 10
+    # Sole owner of the published-package path: pack the four @1c-odata/* tarballs
+    # (the same `pnpm pack` artifact release.yml publishes), install each into its
+    # own isolated scratch project (pinned to the local tarballs so npm never hits
+    # the registry for the unpublished siblings), import every `exports` entrypoint
+    # from the installed tree and run both bins through their `bin` mapping.
+    # Catches a dropped `files` entry / broken `bin` / broken `exports` /
+    # unrewritten `workspace:*` that `package:lint` (types + exports only) cannot.
+    # Secret-free; fork-safe.
+    # GUARDRAIL: never add any `secrets.*` here — that demands the owner gate and
+    # forfeits fork coverage.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: Pack + install the tarballs, import entrypoints, run both bins
+        env:
+          REPO: ${{ github.workspace }}
+          TMP: ${{ runner.temp }}/pkgsmoke
+          # Blank out the workflow-level turbo credentials for this step: the
+          # scratch `npm install` resolves unpinned third-party versions (no
+          # lockfile), and even with --ignore-scripts in the script itself,
+          # nothing that runs here needs — or should see — a write-capable
+          # remote-cache token.
+          TURBO_TOKEN: ''
+          TURBO_TEAM: ''
+        run: bash .ci/package-smoke.sh
+
   test-example:
     runs-on: ubuntu-latest
     needs: [detect-secrets, test-and-build]

@@ -64,6 +64,8 @@ pnpm changeset                         # add a release note (consumer-facing)
 
 Windows runner is materially slower than Linux/Mac for `tsc --noEmit` over thousands of generated `.ts` files (NTFS overhead). Tsc-validate timeouts reflect this: 90s for `trade_v11.5` (always-on), 60s for `bp_v3.0` (`CI=true || CI_RUN_BIG_FIXTURES=1`).
 
+**package-smoke** ([`.ci/package-smoke.sh`](./.ci/package-smoke.sh)) owns the published-artifact path: pack the four workspace tarballs → install each into its own isolated scratch npm project → import every `exports` entrypoint + run both bins (`1c-odata`, `1c-odata-mcp`). Catches `files`/`bin`/`exports`/workspace-rewrite mistakes that `package:lint` (types + exports only) cannot. Secret-free, fork-safe.
+
 ## Conventions
 
 - **Cyrillic identifiers everywhere.** 1С metadata uses Russian (`Catalog_Валюты`, `ФайлХранилище`, `Document_РеализацияТоваровУслуг`). Codegen emits Cyrillic filenames. `.gitattributes` forces `eol=lf` + `UTF-8 working-tree-encoding` for `.ts`.
