@@ -1,6 +1,6 @@
 {
   "name": "@1c-odata/metadata",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "description": "1С:Enterprise OData V3 schema toolkit — EDMX ($metadata) parsing and runtime MetadataIndex building for @1c-odata/client.",
   "keywords": [
