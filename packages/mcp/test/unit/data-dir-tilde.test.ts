@@ -50,6 +50,8 @@ describe('resolveDataDir — leading ~ expansion', () => {
   it('does not expand ~user/…, and says only a leading ~ or ~/ is', () => {
     fakeHome.value = HOME
     expect(() => resolveDataDir({}, '~other/data')).toThrow(/not absolute.*not `~user`/)
+    const forms = process.platform === 'win32' ? '(`~`, `~/…`, `~\\…`)' : '(`~`, `~/…`)'
+    expect(() => resolveDataDir({}, '~other/data')).toThrow(`a home-relative one ${forms}`)
   })
 
   it('leaves a ~ that is not leading alone', () => {

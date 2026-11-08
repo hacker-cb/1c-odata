@@ -72,8 +72,8 @@ export function resolveDataDir(env: NodeJS.ProcessEnv = process.env, dataDirOver
   if (!isFullyAbsolute(dir)) {
     throw new Error(
       `Resolved data directory ${JSON.stringify(dir)} is not absolute. Set --data-dir / ONEC_MCP_DATA_DIR to an ` +
-        'absolute path or one starting with `~/`, or ensure HOME/USERPROFILE is set so the default ' +
-        `(~/.config or %APPDATA%) can resolve.${notAbsoluteHint(dir)}`,
+        `absolute path or a home-relative one (${homeForms()}), or ensure HOME/USERPROFILE is set so the ` +
+        `default (~/.config or %APPDATA%) can resolve.${notAbsoluteHint(dir)}`,
     )
   }
   return dir
@@ -99,6 +99,11 @@ function expandHome(dir: string): string {
 /** Separators that may follow a leading `~`: `/` everywhere, `\` on Windows too. */
 function homeSeparators(): string[] {
   return process.platform === 'win32' ? ['/', '\\'] : ['/']
+}
+
+/** The home-relative forms {@link expandHome} accepts on this platform, for error text. */
+function homeForms(): string {
+  return ['`~`', ...homeSeparators().map((sep) => `\`~${sep}…\``)].join(', ')
 }
 
 /**
@@ -134,8 +139,8 @@ function isFullyAbsolute(dir: string): boolean {
 function notAbsoluteHint(dir: string): string {
   if (dir.startsWith('~')) {
     return process.platform === 'win32'
-      ? ' Only a leading `~`, `~/` or `~\\` is expanded (not `~user`).'
-      : ' Only a leading `~` or `~/` is expanded (not `~user`, and not `~\\` outside Windows).'
+      ? ' Only those home-relative forms are expanded (not `~user`).'
+      : ' Only those home-relative forms are expanded (not `~user`, and not `~\\` outside Windows).'
   }
   if (process.platform === 'win32' && isAbsolute(dir)) {
     return ' On Windows it needs a drive letter or a UNC prefix (`C:\\…`, `\\\\server\\…`).'
