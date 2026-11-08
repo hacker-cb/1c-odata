@@ -66,6 +66,8 @@ describe('resolveDataDir — leading ~ expansion', () => {
     it('rejects a drive-relative root on Windows, naming the forms that work', () => {
       expect(() => resolveDataDir({}, '\\onec')).toThrow(/not absolute.*drive letter or a UNC prefix/)
       expect(resolveDataDir({}, '\\\\server\\share\\onec')).toBe('\\\\server\\share\\onec')
+      expect(() => resolveDataDir({}, '///onec')).toThrow(/not absolute/)
+      expect(() => resolveDataDir({}, '\\\\server')).toThrow(/not absolute/)
     })
   } else {
     it('does not treat ~\\… as the home outside Windows, and says so', () => {

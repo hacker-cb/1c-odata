@@ -122,10 +122,11 @@ function userHome(): string {
  * `isAbsolute` there yet lands on whichever drive the process was started
  * from, so the CLI and an MCP client launched elsewhere would read different
  * directories and keychain namespaces. On Windows a drive letter (`C:\…`) or a
- * UNC prefix (`\\server\…`) is required.
+ * UNC prefix naming a server and a share (`\\server\share…`) is required —
+ * `///onec` collapses to the current drive's root just the same.
  */
 function isFullyAbsolute(dir: string): boolean {
-  if (process.platform === 'win32') return /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(dir)
+  if (process.platform === 'win32') return /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/.test(dir)
   return isAbsolute(dir)
 }
 
