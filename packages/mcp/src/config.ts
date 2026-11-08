@@ -69,12 +69,11 @@ const APP_DIR = '1c-odata'
 export function resolveDataDir(env: NodeJS.ProcessEnv = process.env, dataDirOverride?: string): string {
   const override = firstNonBlank(dataDirOverride, env.ONEC_MCP_DATA_DIR)
   const dir = override !== undefined ? expandHome(override) : defaultDataDir(env)
-  if (!isAbsolute(dir)) {
-    const tildeHint = dir.startsWith('~') ? ' Only a leading `~` or `~/` is expanded (not `~user`).' : ''
+  if (!isFullyAbsolute(dir)) {
     throw new Error(
       `Resolved data directory ${JSON.stringify(dir)} is not absolute. Set --data-dir / ONEC_MCP_DATA_DIR to an ` +
         'absolute path or one starting with `~/`, or ensure HOME/USERPROFILE is set so the default ' +
-        `(~/.config or %APPDATA%) can resolve.${tildeHint}`,
+        `(~/.config or %APPDATA%) can resolve.${notAbsoluteHint(dir)}`,
     )
   }
   return dir
@@ -86,21 +85,61 @@ export function resolveDataDir(env: NodeJS.ProcessEnv = process.env, dataDirOver
  * determined, rather than leaving a relative `~` path behind.
  */
 function expandHome(dir: string): string {
-  const separators = process.platform === 'win32' ? ['/', '\\'] : ['/']
-  if (dir !== '~' && !separators.some((sep) => dir.startsWith(`~${sep}`))) return dir
-  let home: string
-  try {
-    home = homedir()
-  } catch {
-    home = ''
-  }
-  if (home === '' || !isAbsolute(home)) {
+  if (dir !== '~' && !homeSeparators().some((sep) => dir.startsWith(`~${sep}`))) return dir
+  const home = userHome()
+  if (home === '') {
     throw new Error(
       `Cannot expand ${JSON.stringify(dir)}: the home directory is unknown. Set HOME/USERPROFILE, or pass an ` +
         'absolute path to --data-dir / ONEC_MCP_DATA_DIR.',
     )
   }
   return dir === '~' ? home : join(home, dir.slice(2))
+}
+
+/** Separators that may follow a leading `~`: `/` everywhere, `\` on Windows too. */
+function homeSeparators(): string[] {
+  return process.platform === 'win32' ? ['/', '\\'] : ['/']
+}
+
+/**
+ * The user's home from `os.homedir()`, or `''` when it can't be determined —
+ * `homedir()` threw, or answered something that isn't an absolute path. Every
+ * home-anchored path goes through here, so an unknown home surfaces as the
+ * `resolveDataDir` error rather than a raw exception.
+ */
+function userHome(): string {
+  let home: string
+  try {
+    home = homedir()
+  } catch {
+    return ''
+  }
+  return isFullyAbsolute(home) ? home : ''
+}
+
+/**
+ * `isAbsolute`, minus Windows' drive-relative roots: `\onec` passes
+ * `isAbsolute` there yet lands on whichever drive the process was started
+ * from, so the CLI and an MCP client launched elsewhere would read different
+ * directories and keychain namespaces. On Windows a drive letter (`C:\…`) or a
+ * UNC prefix (`\\server\…`) is required.
+ */
+function isFullyAbsolute(dir: string): boolean {
+  if (process.platform === 'win32') return /^(?:[A-Za-z]:[\\/]|[\\/]{2})/.test(dir)
+  return isAbsolute(dir)
+}
+
+/** The extra sentence a "not absolute" error carries for the forms people actually try. */
+function notAbsoluteHint(dir: string): string {
+  if (dir.startsWith('~')) {
+    return process.platform === 'win32'
+      ? ' Only a leading `~`, `~/` or `~\\` is expanded (not `~user`).'
+      : ' Only a leading `~` or `~/` is expanded (not `~user`, and not `~\\` outside Windows).'
+  }
+  if (process.platform === 'win32' && isAbsolute(dir)) {
+    return ' On Windows it needs a drive letter or a UNC prefix (`C:\\…`, `\\\\server\\…`).'
+  }
+  return ''
 }
 
 /** First of `values` that is defined and non-blank, trimmed; else `undefined`. */
@@ -117,14 +156,14 @@ function defaultDataDir(env: NodeJS.ProcessEnv): string {
   if (process.platform === 'win32') {
     const appData = env.APPDATA?.trim()
     if (appData !== undefined && appData !== '') return join(appData, APP_DIR)
-    return join(homedir(), 'AppData', 'Roaming', APP_DIR)
+    return join(userHome(), 'AppData', 'Roaming', APP_DIR)
   }
   // The XDG Base Directory spec mandates absolute paths; a relative or empty
   // $XDG_CONFIG_HOME is ignored in favour of ~/.config. Trim first so a
   // whitespace-padded absolute path is still honoured (and joined cleanly).
   const xdg = env.XDG_CONFIG_HOME?.trim()
   if (xdg !== undefined && xdg !== '' && isAbsolute(xdg)) return join(xdg, APP_DIR)
-  return join(homedir(), '.config', APP_DIR)
+  return join(userHome(), '.config', APP_DIR)
 }
 
 export function configPath(dataDir: string): string {

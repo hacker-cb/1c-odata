@@ -62,10 +62,20 @@ describe('resolveDataDir — leading ~ expansion', () => {
       fakeHome.value = HOME
       expect(resolveDataDir({}, '~\\data')).toBe(join(HOME, 'data'))
     })
+
+    it('rejects a drive-relative root on Windows, naming the forms that work', () => {
+      expect(() => resolveDataDir({}, '\\onec')).toThrow(/not absolute.*drive letter or a UNC prefix/)
+      expect(resolveDataDir({}, '\\\\server\\share\\onec')).toBe('\\\\server\\share\\onec')
+    })
   } else {
-    it('does not treat ~\\… as the home outside Windows', () => {
+    it('does not treat ~\\… as the home outside Windows, and says so', () => {
       fakeHome.value = HOME
-      expect(() => resolveDataDir({}, '~\\data')).toThrow(/not absolute/)
+      expect(() => resolveDataDir({}, '~\\data')).toThrow(/not absolute.*not `~\\` outside Windows/)
+    })
+
+    it('reports an unknown home on the default path as the resolveDataDir error, not a raw throw', () => {
+      fakeHome.value = new Error('no passwd entry')
+      expect(() => resolveDataDir({})).toThrow(/not absolute.*ensure HOME\/USERPROFILE is set/)
     })
   }
 

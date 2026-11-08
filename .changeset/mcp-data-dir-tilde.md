@@ -10,3 +10,10 @@ expands it via `os.homedir()`. MCP clients launch `serve` without a shell, so a
 so `~/x` and its absolute spelling share one directory and one set of stored
 passwords. `~user/…` and `$HOME` are still not expanded and still fail, now
 with a hint saying which forms are.
+
+On Windows a drive-relative override such as `\onec` is now rejected: it passed
+the absolute-path check yet resolved against whichever drive the process
+started on, so the CLI and an MCP client could read different directories and
+keychain namespaces. Use a drive letter (`C:\onec`) or a UNC path. An unknown
+home directory on the default path now fails with the usual `resolveDataDir`
+error instead of a raw `os.homedir()` exception.

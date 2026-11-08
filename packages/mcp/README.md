@@ -109,7 +109,8 @@ Then ask the assistant to `list_connections`, explore the schema, and query data
 Both files live in one **agent-independent** data directory, so a connection added once is shared by every
 MCP client (Claude Code, Claude Desktop, Codex, ChatGPT, …) — they all spawn the same `serve` process and
 resolve the same directory. Resolution order (first non-blank wins; the result **must be absolute** — a
-relative `--data-dir` / `ONEC_MCP_DATA_DIR` is a hard error, not a silent fallback):
+relative `--data-dir` / `ONEC_MCP_DATA_DIR` is a hard error, not a silent fallback; on Windows that includes a
+drive-relative `\onec`, which needs a drive letter or a UNC prefix):
 
 1. the `--data-dir <path>` flag,
 2. `$ONEC_MCP_DATA_DIR` (env override — sandboxed / portable / CI),
