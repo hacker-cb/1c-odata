@@ -54,20 +54,53 @@ const APP_DIR = '1c-odata'
  *      else `~/.config/1c-odata`.
  *    - Windows: `%APPDATA%\1c-odata`, else `~\AppData\Roaming\1c-odata`.
  *
+ * An override may start with the current user's home: a bare `~`, `~/…`, or on
+ * Windows also `~\…`, expanded against `os.homedir()`. MCP clients spawn the
+ * server without a shell, so nothing else expands it. Expansion happens here,
+ * before the absolute-path check, so `~/x` and its absolute spelling are one
+ * directory — and one keychain namespace (`keychainServiceName` in `secret-store.ts` hashes
+ * the returned path). `~user/…` and `$HOME` are NOT expanded.
+ *
  * The result is always absolute; resolution throws if it isn't (a relative
  * `--data-dir` / `ONEC_MCP_DATA_DIR`, or no `HOME`/`USERPROFILE` so the default
- * can't anchor) rather than silently writing config + the `0600` credentials
- * file to a CWD-relative path that forks the shared config per launch.
+ * or a `~` can't anchor) rather than silently writing config + the `0600`
+ * credentials file to a CWD-relative path that forks the shared config per launch.
  */
 export function resolveDataDir(env: NodeJS.ProcessEnv = process.env, dataDirOverride?: string): string {
-  const dir = firstNonBlank(dataDirOverride, env.ONEC_MCP_DATA_DIR) ?? defaultDataDir(env)
+  const override = firstNonBlank(dataDirOverride, env.ONEC_MCP_DATA_DIR)
+  const dir = override !== undefined ? expandHome(override) : defaultDataDir(env)
   if (!isAbsolute(dir)) {
+    const tildeHint = dir.startsWith('~') ? ' Only a leading `~` or `~/` is expanded (not `~user`).' : ''
     throw new Error(
       `Resolved data directory ${JSON.stringify(dir)} is not absolute. Set --data-dir / ONEC_MCP_DATA_DIR to an ` +
-        'absolute path, or ensure HOME/USERPROFILE is set so the default (~/.config or %APPDATA%) can resolve.',
+        'absolute path or one starting with `~/`, or ensure HOME/USERPROFILE is set so the default ' +
+        `(~/.config or %APPDATA%) can resolve.${tildeHint}`,
     )
   }
   return dir
+}
+
+/**
+ * Expand a leading `~` / `~/` (and `~\` on Windows) to the user's home; any
+ * other string is returned as is. Throws when the home directory can't be
+ * determined, rather than leaving a relative `~` path behind.
+ */
+function expandHome(dir: string): string {
+  const separators = process.platform === 'win32' ? ['/', '\\'] : ['/']
+  if (dir !== '~' && !separators.some((sep) => dir.startsWith(`~${sep}`))) return dir
+  let home: string
+  try {
+    home = homedir()
+  } catch {
+    home = ''
+  }
+  if (home === '' || !isAbsolute(home)) {
+    throw new Error(
+      `Cannot expand ${JSON.stringify(dir)}: the home directory is unknown. Set HOME/USERPROFILE, or pass an ` +
+        'absolute path to --data-dir / ONEC_MCP_DATA_DIR.',
+    )
+  }
+  return dir === '~' ? home : join(home, dir.slice(2))
 }
 
 /** First of `values` that is defined and non-blank, trimmed; else `undefined`. */

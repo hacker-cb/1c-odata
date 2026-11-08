@@ -117,6 +117,17 @@ relative `--data-dir` / `ONEC_MCP_DATA_DIR` is a hard error, not a silent fallba
    or `%APPDATA%\1c-odata` on Windows. macOS deliberately uses the XDG `~/.config` path, not
    `~/Library/Application Support`, for cross-platform / container consistency.
 
+`--data-dir` and `ONEC_MCP_DATA_DIR` may start with your home directory — a bare `~`, `~/…`, or on Windows also
+`~\…` — and the server expands it itself. That matters because MCP clients launch `serve` without a shell, so
+nothing else would expand `~` in their `args` / `env`:
+
+```jsonc
+"args": ["-y", "@1c-odata/mcp", "--data-dir", "~/.config/1c-odata-work", "serve"]
+```
+
+`~/x` and its absolute spelling are the same directory and the same keychain namespace. `~user/…` and `$HOME`
+are not expanded and stay a "not absolute" error.
+
 - **`config.json`** — connection descriptors *without* passwords (base URL, login, timezone, optional display
   label, optional shape). Safe to read / surface to an LLM.
 - **Passwords** — resolved in priority order **env → OS keychain → `credentials.json` (0600)**:
