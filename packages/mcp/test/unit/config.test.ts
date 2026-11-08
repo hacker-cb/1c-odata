@@ -19,13 +19,19 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 
+// A fully absolute path on this platform: POSIX as written, on Windows rooted at
+// `C:` — a bare `\x` is drive-relative there and rejected by resolveDataDir.
+const abs = (posix: string): string => (process.platform === 'win32' ? `C:${posix.replaceAll('/', '\\')}` : posix)
+
 describe('resolveDataDir', () => {
   it('prefers ONEC_MCP_DATA_DIR over any platform default', () => {
-    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '/x/y', XDG_CONFIG_HOME: '/other', APPDATA: 'C:\\other' })).toBe('/x/y')
+    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: abs('/x/y'), XDG_CONFIG_HOME: '/other', APPDATA: 'C:\\other' })).toBe(
+      abs('/x/y'),
+    )
   })
 
   it('trims surrounding whitespace from ONEC_MCP_DATA_DIR', () => {
-    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '  /srv/onec  ' })).toBe('/srv/onec')
+    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: `  ${abs('/srv/onec')}  ` })).toBe(abs('/srv/onec'))
   })
 
   it('rejects a relative ONEC_MCP_DATA_DIR (would fork per-CWD and scatter secrets)', () => {
@@ -33,11 +39,11 @@ describe('resolveDataDir', () => {
   })
 
   it('lets the --data-dir override win over ONEC_MCP_DATA_DIR, trimmed', () => {
-    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '/from/env' }, '  /from/flag  ')).toBe('/from/flag')
+    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: abs('/from/env') }, `  ${abs('/from/flag')}  `)).toBe(abs('/from/flag'))
   })
 
   it('falls back to ONEC_MCP_DATA_DIR when the --data-dir override is blank', () => {
-    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: '/from/env' }, '   ')).toBe('/from/env')
+    expect(resolveDataDir({ ONEC_MCP_DATA_DIR: abs('/from/env') }, '   ')).toBe(abs('/from/env'))
   })
 
   it('rejects a relative --data-dir override too (same guard as the env var)', () => {

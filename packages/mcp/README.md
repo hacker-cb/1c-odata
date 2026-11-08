@@ -109,13 +109,25 @@ Then ask the assistant to `list_connections`, explore the schema, and query data
 Both files live in one **agent-independent** data directory, so a connection added once is shared by every
 MCP client (Claude Code, Claude Desktop, Codex, ChatGPT, …) — they all spawn the same `serve` process and
 resolve the same directory. Resolution order (first non-blank wins; the result **must be absolute** — a
-relative `--data-dir` / `ONEC_MCP_DATA_DIR` is a hard error, not a silent fallback):
+relative `--data-dir` / `ONEC_MCP_DATA_DIR` is a hard error, not a silent fallback; on Windows that includes a
+drive-relative `\onec`, which needs a drive letter or a UNC prefix):
 
 1. the `--data-dir <path>` flag,
 2. `$ONEC_MCP_DATA_DIR` (env override — sandboxed / portable / CI),
 3. the per-user default — `~/.config/1c-odata` on macOS **and** Linux (honoring an absolute `$XDG_CONFIG_HOME`)
    or `%APPDATA%\1c-odata` on Windows. macOS deliberately uses the XDG `~/.config` path, not
    `~/Library/Application Support`, for cross-platform / container consistency.
+
+`--data-dir` and `ONEC_MCP_DATA_DIR` may start with your home directory — a bare `~`, `~/…`, or on Windows also
+`~\…` — and the server expands it itself. That matters because MCP clients launch `serve` without a shell, so
+nothing else would expand `~` in their `args` / `env`:
+
+```jsonc
+"args": ["-y", "@1c-odata/mcp", "--data-dir", "~/.config/1c-odata-work", "serve"]
+```
+
+`~/x` and its absolute spelling are the same directory and the same keychain namespace. `~user/…` and `$HOME`
+are not expanded and stay a "not absolute" error.
 
 - **`config.json`** — connection descriptors *without* passwords (base URL, login, timezone, optional display
   label, optional shape). Safe to read / surface to an LLM.
