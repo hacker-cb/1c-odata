@@ -154,6 +154,23 @@ describe('mapResponseToError', () => {
       expect(err.message).not.toContain('a path segment is')
     })
 
+    it('splits on an encoded slash even where another escape does not decode', async () => {
+      // Two ~200-char halves joined by %2F, with a stray '%' in one: neither decoded segment is over 260.
+      const half = 'Х'.repeat(200)
+      const url = `${base}/${encodeURIComponent(`${half}/${half}`)}%G1`
+      const err = await mapResponseToError(400, 'Bad Request', html, iisBody, { method: 'GET', url })
+      expect(err.message).not.toContain('a path segment is')
+    })
+
+    it('matches the media type case-insensitively', async () => {
+      const url = `${base}/${encodeURIComponent(vt(3))}`
+      const err = await mapResponseToError(400, 'Bad Request', { 'content-type': 'TEXT/HTML' }, iisBody, {
+        method: 'GET',
+        url,
+      })
+      expect(err.message).toContain('a path segment is')
+    })
+
     it('does not take a non-HTML 400 that merely mentions "Invalid URL" for the IIS page', async () => {
       const url = `${base}/${encodeURIComponent(vt(3))}`
       const err = await mapResponseToError(400, 'Bad Request', { 'content-type': 'text/plain' }, 'Invalid URL scheme', {

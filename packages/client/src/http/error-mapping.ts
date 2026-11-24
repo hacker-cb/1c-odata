@@ -133,7 +133,7 @@ function iisInvalidUrlMessage(
   body: string,
   url: string,
 ): string | null {
-  if (status !== 400 || !ct.includes('html') || !IIS_INVALID_URL_PAGE.test(body)) return null
+  if (status !== 400 || !ct.toLowerCase().includes('html') || !IIS_INVALID_URL_PAGE.test(body)) return null
   const head = `HTTP ${status} ${statusText}: IIS rejected the request URL as invalid ("Invalid URL")`
   const longest = longestPathSegment(url)
   if (longest > IIS_URL_SEGMENT_MAX) {
@@ -153,8 +153,8 @@ function iisInvalidUrlMessage(
 
 /**
  * Length of the longest segment of a URL's path, measured as IIS does: on the
- * decoded text, an encoded `/` splitting too. A segment whose escapes do not
- * decode counts each `%XX` as one character. 0 when the URL does not parse.
+ * decoded text, an encoded `/` splitting too. In a segment whose escapes do not
+ * all decode, each run of escapes is decoded on its own. 0 when the URL does not parse.
  */
 function longestPathSegment(url: string): number {
   let path: string
@@ -169,7 +169,15 @@ function longestPathSegment(url: string): number {
     try {
       decoded = decodeURIComponent(raw)
     } catch {
-      decoded = raw.replace(/%[0-9A-Fa-f]{2}/g, '_')
+      // Decode each run of escapes on its own, so one bad escape leaves the rest
+      // (multi-byte letters, an encoded `/`) read as IIS reads them.
+      decoded = raw.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+        try {
+          return decodeURIComponent(run)
+        } catch {
+          return '_'
+        }
+      })
     }
     for (const seg of decoded.split('/')) if (seg.length > longest) longest = seg.length
   }
