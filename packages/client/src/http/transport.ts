@@ -105,6 +105,64 @@ async function prepareRequest(
 }
 
 /**
+ * Certificate-trust failures — the server's chain does not verify against the
+ * CAs Node trusts. Typical behind a corporate / Active Directory CA or a
+ * TLS-inspecting proxy, and fixed by trusting that CA, not by code changes.
+ */
+const TLS_TRUST_CODES: ReadonlySet<string> = new Set([
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'CERT_UNTRUSTED',
+])
+
+const TLS_TRUST_HINT =
+  'the server certificate is not trusted by Node — add the issuing CA with NODE_EXTRA_CA_CERTS=/path/to/ca.pem, ' +
+  'or trust the OS certificate store with NODE_USE_SYSTEM_CA=1 (README "Network configuration")'
+
+/** The `code` / trimmed `message` of an error-like value (either may be absent). */
+function codeAndMessage(v: unknown): { code: string | undefined; message: string } {
+  if (typeof v !== 'object' || v === null) return { code: undefined, message: '' }
+  const { code, message } = v as { code?: unknown; message?: unknown }
+  return {
+    code: typeof code === 'string' && code !== '' ? code : undefined,
+    message: typeof message === 'string' ? message.trim() : '',
+  }
+}
+
+/** `CODE: message`, or whichever of the two is present ('' for neither). */
+function causeText({ code, message }: { code: string | undefined; message: string }): string {
+  if (code !== undefined && message !== '') return `${code}: ${message}`
+  return code ?? message
+}
+
+/**
+ * Build the `NetworkError` message. undici's own message is always the bare
+ * `fetch failed`; the real reason — `ECONNREFUSED`, `ENOTFOUND`, a TLS
+ * verification code — sits in `e.cause`, and a multi-address connect failure
+ * (e.g. `localhost` → `::1` + `127.0.0.1`) is an `AggregateError` with an EMPTY
+ * message whose per-address errors are in `cause.errors[]`. Fold that into the
+ * message so the reason survives every surface that shows only `.message`.
+ */
+function networkErrorMessage(e: unknown): string {
+  const base = `Network error: ${(e as Error | undefined)?.message ?? 'unknown'}`
+  const cause = (e as { cause?: unknown } | undefined)?.cause
+  const own = codeAndMessage(cause)
+  const errors = (cause as { errors?: unknown } | undefined)?.errors
+  // An AggregateError's per-attempt errors carry the reason, each message already
+  // naming its code (`connect ECONNREFUSED ::1:8080`); any other cause speaks for itself.
+  const subs = Array.isArray(errors) ? errors.map(codeAndMessage) : []
+  const subTexts = subs.map((s) => s.message || causeText(s)).filter((t) => t !== '')
+  const texts = subTexts.length > 0 ? [...new Set(subTexts)] : [causeText(own)]
+  const shown = texts.filter((t) => t !== '' && !base.includes(t))
+  if (shown.length === 0) return base
+  const trust = [own, ...subs].some((s) => s.code !== undefined && TLS_TRUST_CODES.has(s.code))
+  return `${base} (${shown.join('; ')})${trust ? `; ${TLS_TRUST_HINT}` : ''}`
+}
+
+/**
  * Translate caught exceptions into the typed error hierarchy and fire the
  * `onError` hook. Shared between text and stream paths.
  */
@@ -132,7 +190,7 @@ async function translateAndFireError(
   }
   if (e instanceof ODataError) throw e
   // Anything else is treated as network-level
-  const err = new NetworkError(`Network error: ${(e as Error).message ?? 'unknown'}`, { cause: e, request })
+  const err = new NetworkError(networkErrorMessage(e), { cause: e, request })
   if (hooks?.onError) await hooks.onError(reqEvent, err)
   throw err
 }

@@ -1,4 +1,4 @@
-import { BasicAuth, HTTPError, type RequestEvent, TimeoutError } from '@1c-odata/client'
+import { BasicAuth, HTTPError, NetworkError, type RequestEvent, TimeoutError } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { request } from '../../src/http/transport.js'
@@ -126,5 +126,73 @@ describe('transport.request', () => {
     )
 
     expect(captured['x-correlation-id']).toBe('abc-123')
+  })
+})
+
+describe('transport.request — NetworkError carries the undici cause (#180)', () => {
+  /** An undici-shaped rejection: `TypeError('fetch failed')` with the real reason in `cause`. */
+  function fetchFailed(cause?: unknown): TypeError {
+    return new TypeError('fetch failed', cause === undefined ? undefined : { cause })
+  }
+  function withCode(message: string, code: string): Error {
+    return Object.assign(new Error(message), { code })
+  }
+
+  async function networkErrorFor(rejection: unknown): Promise<NetworkError> {
+    const spy = vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(rejection)
+    try {
+      const err = await request({ method: 'GET', url: `${base}/X`, headers: {} }, {}).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(NetworkError)
+      return err as NetworkError
+    } finally {
+      spy.mockRestore()
+    }
+  }
+
+  it('appends the TLS code + text and a trust hint for a certificate-chain failure', async () => {
+    const cause = withCode('unable to get local issuer certificate', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY')
+    const err = await networkErrorFor(fetchFailed(cause))
+    expect(err.message).toBe(
+      'Network error: fetch failed (UNABLE_TO_GET_ISSUER_CERT_LOCALLY: unable to get local issuer certificate); ' +
+        'the server certificate is not trusted by Node — add the issuing CA with NODE_EXTRA_CA_CERTS=/path/to/ca.pem, ' +
+        'or trust the OS certificate store with NODE_USE_SYSTEM_CA=1 (README "Network configuration")',
+    )
+    // The original error stays reachable for programmatic inspection.
+    expect((err.cause as TypeError).cause).toBe(cause)
+  })
+
+  it('appends a DNS failure without a TLS hint', async () => {
+    const err = await networkErrorFor(fetchFailed(withCode('getaddrinfo ENOTFOUND 1c.example', 'ENOTFOUND')))
+    expect(err.message).toBe('Network error: fetch failed (ENOTFOUND: getaddrinfo ENOTFOUND 1c.example)')
+  })
+
+  it('reads the per-address errors of an AggregateError whose own message is empty', async () => {
+    const agg = Object.assign(
+      new AggregateError(
+        [
+          withCode('connect ECONNREFUSED ::1:8080', 'ECONNREFUSED'),
+          withCode('connect ECONNREFUSED 127.0.0.1:8080', 'ECONNREFUSED'),
+        ],
+        '',
+      ),
+      { code: 'ECONNREFUSED' },
+    )
+    const err = await networkErrorFor(fetchFailed(agg))
+    expect(err.message).toBe(
+      'Network error: fetch failed (connect ECONNREFUSED ::1:8080; connect ECONNREFUSED 127.0.0.1:8080)',
+    )
+  })
+
+  it('falls back to the cause text when it has no code', async () => {
+    const err = await networkErrorFor(fetchFailed(new Error('bad port')))
+    expect(err.message).toBe('Network error: fetch failed (bad port)')
+  })
+
+  it('keeps the bare message when there is no cause, or it adds nothing', async () => {
+    expect((await networkErrorFor(fetchFailed())).message).toBe('Network error: fetch failed')
+    expect((await networkErrorFor(new Error('socket hang up', { cause: new Error('socket hang up') }))).message).toBe(
+      'Network error: socket hang up',
+    )
+    expect((await networkErrorFor(fetchFailed({ unrelated: true }))).message).toBe('Network error: fetch failed')
   })
 })

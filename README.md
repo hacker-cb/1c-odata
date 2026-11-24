@@ -224,6 +224,7 @@ TLS verification, HTTP proxy, and corporate CAs are configured **process-wide** 
 
 ```bash
 export NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem
+export NODE_USE_SYSTEM_CA=1                  # or `node --use-system-ca` — trust the OS certificate store
 export HTTP_PROXY=http://user:pass@corp-proxy.example.com:8080
 export HTTPS_PROXY=$HTTP_PROXY
 export NO_PROXY=localhost,127.0.0.1
@@ -231,7 +232,9 @@ export NODE_USE_ENV_PROXY=1                  # or `node --use-env-proxy app.js`
 export NODE_TLS_REJECT_UNAUTHORIZED=0        # DEV ONLY — never in production
 ```
 
-For TLS-inspecting proxies (Zscaler, Netskope), combine `NODE_EXTRA_CA_CERTS` (the inspector's CA) with the proxy env vars. Per-tenant TLS/proxy and mTLS are not supported — run separate Node processes if you need different config per tenant.
+A 1С server behind a certificate from a corporate / Active Directory CA fails TLS verification in Node unless that CA is trusted: point `NODE_EXTRA_CA_CERTS` at the CA's PEM, or set `NODE_USE_SYSTEM_CA=1` to use the OS certificate store, where a domain-joined machine usually already has it. A `NetworkError` names the underlying cause — e.g. `Network error: fetch failed (UNABLE_TO_GET_ISSUER_CERT_LOCALLY: unable to get local issuer certificate)`, `ENOTFOUND`, `ECONNREFUSED` — and the original error stays in `error.cause`.
+
+For TLS-inspecting proxies (Zscaler, Netskope), combine `NODE_EXTRA_CA_CERTS` (the inspector's CA) with the proxy env vars. For the MCP server these variables go in the `env` block of its entry in the MCP client's config, since the client launches it without your shell profile — see [`packages/mcp/README.md`](./packages/mcp/README.md). Per-tenant TLS/proxy and mTLS are not supported — run separate Node processes if you need different config per tenant.
 
 ## Cross-platform setup
 
