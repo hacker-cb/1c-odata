@@ -253,19 +253,19 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           .string()
           .optional()
           .describe(
-            'ISO date or date-time — point in time for balance/slice (range tables: taken as range start). Without Z/offset it is the 1С server time (the connection serverTimezone); a bare date is server midnight.',
+            'ISO date or date-time — point in time for balance/slice (range tables: taken as range start). Without Z/offset it is the 1С server time (the connection serverTimezone). A bare date is the START of that day (00:00:00), so balance/sliceLast on it do not count that day: for the state at the end of a day pass T23:59:59 or the next day.',
           ),
         periodFrom: z
           .string()
           .optional()
           .describe(
-            'ISO date or date-time — range start (StartPeriod) for turnovers/accounting tables. Without Z/offset it is the 1С server time; a bare date is server midnight.',
+            'ISO date or date-time — range start (StartPeriod) for turnovers/accounting tables. Without Z/offset it is the 1С server time; a bare date is the start of that day (00:00:00).',
           ),
         periodTo: z
           .string()
           .optional()
           .describe(
-            'ISO date or date-time — range end (EndPeriod) for turnovers/accounting tables. Without Z/offset it is the 1С server time; a bare date is server MIDNIGHT, so to include a whole last day pass e.g. 2026-01-31T23:59:59.',
+            'ISO date or date-time — range end (EndPeriod) for turnovers/accounting tables. Without Z/offset it is the 1С server time; a bare date is the END of that day (23:59:59), so periodFrom 2026-01-01 + periodTo 2026-01-31 is the whole of January.',
           ),
         condition: z.string().optional().describe('Raw OData condition expression on the register records'),
         dimensions: z.string().optional().describe('Comma-separated dimension names'),
@@ -368,13 +368,18 @@ const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(\
  * Parse a register period. A value WITH a zone (`Z` / `±hh:mm`) is that
  * instant. A value without one — a bare date or a naive date-time — is wall
  * time on the 1С server: read in the connection's `serverTimezone`, the same
- * conversion the client applies to naive date-times in 1С responses, so a bare
- * date is the server's midnight. (`new Date()` would read a naive date-time in
+ * conversion the client applies to naive date-times in 1С responses. A bare
+ * date is the start of that server day, or its last second where `bareDateAs`
+ * is `'end'` (a range end: `periodTo`). (`new Date()` would read a naive date-time in
  * the MCP host's zone and a bare date as UTC midnight — both shift the period
  * off the server's day.) Impossible calendar values (`2026-02-30`, `25:00`) are
  * rejected rather than rolled over.
  */
-function toDate(iso: string | undefined, serverTimezone: string): Date | undefined {
+function toDate(
+  iso: string | undefined,
+  serverTimezone: string,
+  bareDateAs: 'start' | 'end' = 'start',
+): Date | undefined {
   if (iso === undefined) return undefined
   const trimmed = iso.trim()
   const m = ISO_DATE_RE.exec(trimmed)
@@ -384,15 +389,19 @@ function toDate(iso: string | undefined, serverTimezone: string): Date | undefin
         `without one it is read as the 1С server's time, ${serverTimezone})`,
     )
   }
-  const [, y, mo, d, hh = '00', mi = '00', ss = '00', frac = '', zone] = m
+  // A bare date is a whole server day: its start, or — as a range end — its last second (1С dates are second-precision).
+  const [, y, mo, d, time, minute = '00', second = '00', frac = '', zone] = m
+  const bareDay = bareDateAs === 'end' ? ['23', '59', '59'] : ['00', '00', '00']
+  const [hh, mi, ss] = time === undefined ? bareDay : [time, minute, second]
   const local = `${y}-${mo}-${d}T${hh}:${mi}:${ss}`
   const date = zone !== undefined ? new Date(`${local}${frac}${zone}`) : parseInZone(`${local}${frac}`, serverTimezone)
   if (Number.isNaN(date.getTime())) {
     throw new Error(`Invalid ISO date: "${iso}" (not a representable instant — check the offset and the year)`)
   }
   // A wall time the zone skips (the spring-forward gap) has no instant: parseInZone
-  // would shift it silently, moving the period boundary.
-  if (zone === undefined && formatInZone(date, serverTimezone).slice(0, 19) !== local) {
+  // would shift it silently, moving the period boundary. A bare date is exempt —
+  // where a zone skips midnight, the shifted instant IS that day's first moment.
+  if (zone === undefined && time !== undefined && formatInZone(date, serverTimezone).slice(0, 19) !== local) {
     throw new Error(`Invalid ISO date: "${iso}" (no such local time in ${serverTimezone} — a daylight-saving gap)`)
   }
   return date
@@ -412,7 +421,7 @@ function isRealDateTime(m: RegExpExecArray): boolean {
 /** Build a { from?, to? } range from periodFrom/periodTo; a lone `period` is the start. */
 function rangeFromArgs(args: RegisterQueryArgs, tz: string): { from?: Date; to?: Date } | undefined {
   const from = toDate(args.periodFrom, tz) ?? toDate(args.period, tz)
-  const to = toDate(args.periodTo, tz)
+  const to = toDate(args.periodTo, tz, 'end')
   if (from === undefined && to === undefined) return undefined
   const range: { from?: Date; to?: Date } = {}
   if (from !== undefined) range.from = from

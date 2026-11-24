@@ -47,7 +47,30 @@ describe('register_query periods in the connection serverTimezone (#182)', () =>
     expect(iso(period.to)).toBe('2026-01-31T20:59:59.000Z')
   })
 
-  it('reads a bare date as server midnight (no longer UTC midnight)', async () => {
+  it('reads a bare periodFrom/periodTo as the whole server days (January = 01-01 .. 01-31)', async () => {
+    const { run, calls } = setup('Europe/Moscow')
+    await run({ table: 'turnovers', periodFrom: '2026-01-01', periodTo: '2026-01-31' })
+    const period = calls[0]?.args.Period as { from: Date; to: Date }
+    expect(iso(period.from)).toBe('2025-12-31T21:00:00.000Z') // 01-01 00:00:00 MSK
+    expect(iso(period.to)).toBe('2026-01-31T20:59:59.000Z') // 01-31 23:59:59 MSK
+  })
+
+  it('takes the same bare day as periodFrom and periodTo to be that whole day', async () => {
+    const { run, calls } = setup('Europe/Moscow')
+    await run({ table: 'drCrTurnovers', periodFrom: '2026-03-15', periodTo: '2026-03-15' })
+    const period = calls[0]?.args.Period as { from: Date; to: Date }
+    expect(iso(period.from)).toBe('2026-03-14T21:00:00.000Z')
+    expect(iso(period.to)).toBe('2026-03-15T20:59:59.000Z')
+  })
+
+  it('keeps a naive periodTo date-time as given', async () => {
+    const { run, calls } = setup('Europe/Moscow')
+    await run({ table: 'turnovers', periodTo: '2026-01-31T12:00' })
+    const period = calls[0]?.args.Period as { to: Date }
+    expect(iso(period.to)).toBe('2026-01-31T09:00:00.000Z')
+  })
+
+  it('reads a bare period (a point) as the start of the server day (no longer UTC midnight)', async () => {
     const { run, calls } = setup('Europe/Moscow')
     await run({ table: 'balance', period: '2026-01-01' })
     expect(iso(calls[0]?.args.Period)).toBe('2025-12-31T21:00:00.000Z')
