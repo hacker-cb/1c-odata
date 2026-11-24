@@ -63,6 +63,13 @@ describe('register_query periods in the connection serverTimezone (#182)', () =>
     expect(iso(period.to)).toBe('2026-03-15T20:59:59.000Z')
   })
 
+  it('starts a bare day whose midnight a DST switch skips at its first real moment', async () => {
+    const { run, calls } = setup('America/Sao_Paulo')
+    await run({ table: 'turnovers', periodFrom: '2018-11-04' })
+    // 2018-11-04 01:00 -02:00 — never the previous evening.
+    expect(iso((calls[0]?.args.Period as { from: Date } | undefined)?.from)).toBe('2018-11-04T03:00:00.000Z')
+  })
+
   it('keeps a naive periodTo date-time as given', async () => {
     const { run, calls } = setup('Europe/Moscow')
     await run({ table: 'turnovers', periodTo: '2026-01-31T12:00' })
@@ -103,8 +110,14 @@ describe('register_query periods in the connection serverTimezone (#182)', () =>
   })
 
   it.each([
-    ['a daylight-saving gap', 'America/New_York', '2026-03-08T02:30', 'daylight-saving gap'],
-    ['an offset Date cannot represent', 'Europe/Moscow', '2026-01-01T00:00:00+24:00', 'not a representable instant'],
+    [
+      'a daylight-saving gap',
+      'America/New_York',
+      '2026-03-08T02:30',
+      'daylight-saving switch skips in America/New_York',
+    ],
+    ['an offset Date cannot represent', 'Europe/Moscow', '2026-01-01T00:00:00+24:00', 'an impossible offset'],
+    ['a naive year parseInZone cannot place', 'UTC', '0050-06-01T00:00:00', 'a year before 1000'],
   ])('rejects %s with a clear message', async (_name, zone, value, why) => {
     const { run, calls } = setup(zone)
     const res = await run({ table: 'balance', period: value })

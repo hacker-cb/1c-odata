@@ -253,19 +253,19 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           .string()
           .optional()
           .describe(
-            'ISO date or date-time — point in time for balance/slice (range tables: taken as range start). Without Z/offset it is the 1С server time (the connection serverTimezone). A bare date is the START of that day (00:00:00), so balance/sliceLast on it do not count that day: for the state at the end of a day pass T23:59:59 or the next day.',
+            'ISO date or date-time — point in time for balance/slice (range tables: taken as range start). Without Z/offset it is the 1С server time (the connection serverTimezone). A bare date is the START of that day (00:00:00): balance on it is the state before the movements of that day; for the state at the end of a day pass T23:59:59.',
           ),
         periodFrom: z
           .string()
           .optional()
           .describe(
-            'ISO date or date-time — range start (StartPeriod) for turnovers/accounting tables. Without Z/offset it is the 1С server time; a bare date is the start of that day (00:00:00).',
+            'ISO date or date-time — range start (StartPeriod) for the turnovers tables and recordsWithExtDimensions. Without Z/offset it is the 1С server time; a bare date is the start of that day (00:00:00).',
           ),
         periodTo: z
           .string()
           .optional()
           .describe(
-            'ISO date or date-time — range end (EndPeriod) for turnovers/accounting tables. Without Z/offset it is the 1С server time; a bare date is the END of that day (23:59:59), so periodFrom 2026-01-01 + periodTo 2026-01-31 is the whole of January.',
+            'ISO date or date-time — range end (EndPeriod) for the turnovers tables and recordsWithExtDimensions. Without Z/offset it is the 1С server time; a bare date is the END of that day (23:59:59), so periodFrom 2026-01-01 + periodTo 2026-01-31 is the whole of January.',
           ),
         condition: z.string().optional().describe('Raw OData condition expression on the register records'),
         dimensions: z.string().optional().describe('Comma-separated dimension names'),
@@ -394,17 +394,38 @@ function toDate(
   const bareDay = bareDateAs === 'end' ? ['23', '59', '59'] : ['00', '00', '00']
   const [hh, mi, ss] = time === undefined ? bareDay : [time, minute, second]
   const local = `${y}-${mo}-${d}T${hh}:${mi}:${ss}`
-  const date = zone !== undefined ? new Date(`${local}${frac}${zone}`) : parseInZone(`${local}${frac}`, serverTimezone)
-  if (Number.isNaN(date.getTime())) {
-    throw new Error(`Invalid ISO date: "${iso}" (not a representable instant — check the offset and the year)`)
+  let date: Date | undefined
+  if (zone !== undefined) date = new Date(`${local}${frac}${zone}`)
+  else {
+    date = naiveInZone(`${local}${frac}`, local, serverTimezone)
+    // A bare day whose midnight a DST switch skips (e.g. America/Sao_Paulo, 2018-11-04) starts at 01:00.
+    if (date === undefined && time === undefined && bareDateAs === 'start') {
+      date = naiveInZone(`${y}-${mo}-${d}T01:00:00`, `${y}-${mo}-${d}T01:00:00`, serverTimezone)
+    }
   }
-  // A wall time the zone skips (the spring-forward gap) has no instant: parseInZone
-  // would shift it silently, moving the period boundary. A bare date is exempt —
-  // where a zone skips midnight, the shifted instant IS that day's first moment.
-  if (zone === undefined && time !== undefined && formatInZone(date, serverTimezone).slice(0, 19) !== local) {
-    throw new Error(`Invalid ISO date: "${iso}" (no such local time in ${serverTimezone} — a daylight-saving gap)`)
+  if (date === undefined || Number.isNaN(date.getTime())) {
+    throw new Error(
+      `Invalid ISO date: "${iso}" (no such instant: a local time a daylight-saving switch skips in ${serverTimezone}, ` +
+        'an impossible offset, or a year before 1000)',
+    )
   }
   return date
+}
+
+/**
+ * `parseInZone`, answering `undefined` where it cannot place the wall time —
+ * it throws on years it cannot format back (below 1000) — and where the
+ * instant it returns does not read back as `local`: a wall time the zone skips
+ * (the spring-forward gap) has no instant, and parseInZone would shift it
+ * silently, moving the period boundary.
+ */
+function naiveInZone(naive: string, local: string, zone: string): Date | undefined {
+  try {
+    const date = parseInZone(naive, zone)
+    return formatInZone(date, zone).slice(0, 19) === local ? date : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** Whether the matched fields name a real calendar day and clock time (no `Date` rollover). */
