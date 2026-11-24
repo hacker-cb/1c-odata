@@ -73,6 +73,23 @@ describe('register_query periods in the connection serverTimezone (#182)', () =>
     expect(iso(calls[0]?.args.Period)).toBe('2026-01-01T07:00:00.250Z')
   })
 
+  it('accepts the 1С empty-date year range (years below 100 are not shifted to 19xx)', async () => {
+    const { run, calls } = setup('UTC')
+    await run({ table: 'balance', period: '0050-06-01T00:00:00Z' })
+    expect(iso(calls[0]?.args.Period)).toBe('0050-06-01T00:00:00.000Z')
+  })
+
+  it.each([
+    ['a daylight-saving gap', 'America/New_York', '2026-03-08T02:30', 'daylight-saving gap'],
+    ['an offset Date cannot represent', 'Europe/Moscow', '2026-01-01T00:00:00+24:00', 'not a representable instant'],
+  ])('rejects %s with a clear message', async (_name, zone, value, why) => {
+    const { run, calls } = setup(zone)
+    const res = await run({ table: 'balance', period: value })
+    expect(res.isError).toBe(true)
+    expect((res.content[0] as { text: string }).text).toContain(why)
+    expect(calls).toHaveLength(0)
+  })
+
   it.each(['2026-02-30', '2026-13-01', '2026-01-01T24:00', '2026-01-01T10:60', '2026/01/01', '2026-1-1', 'yesterday'])(
     'rejects %s instead of rolling it over',
     async (value) => {

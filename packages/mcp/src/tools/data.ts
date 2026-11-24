@@ -9,7 +9,7 @@ import type {
   UntypedEntity,
   V3QueryBuilder,
 } from '@1c-odata/client'
-import { parseInZone } from '@1c-odata/client'
+import { formatInZone, parseInZone } from '@1c-odata/client'
 import { raw } from '@1c-odata/client/filter'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -385,15 +385,26 @@ function toDate(iso: string | undefined, serverTimezone: string): Date | undefin
     )
   }
   const [, y, mo, d, hh = '00', mi = '00', ss = '00', frac = '', zone] = m
-  if (zone !== undefined) return new Date(`${y}-${mo}-${d}T${hh}:${mi}:${ss}${frac}${zone}`)
-  return parseInZone(`${y}-${mo}-${d}T${hh}:${mi}:${ss}${frac}`, serverTimezone)
+  const local = `${y}-${mo}-${d}T${hh}:${mi}:${ss}`
+  const date = zone !== undefined ? new Date(`${local}${frac}${zone}`) : parseInZone(`${local}${frac}`, serverTimezone)
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Invalid ISO date: "${iso}" (not a representable instant — check the offset and the year)`)
+  }
+  // A wall time the zone skips (the spring-forward gap) has no instant: parseInZone
+  // would shift it silently, moving the period boundary.
+  if (zone === undefined && formatInZone(date, serverTimezone).slice(0, 19) !== local) {
+    throw new Error(`Invalid ISO date: "${iso}" (no such local time in ${serverTimezone} — a daylight-saving gap)`)
+  }
+  return date
 }
 
 /** Whether the matched fields name a real calendar day and clock time (no `Date` rollover). */
 function isRealDateTime(m: RegExpExecArray): boolean {
   const [, y, mo, d, hh = '0', mi = '0', ss = '0'] = m
   const [year, month, day] = [Number(y), Number(mo), Number(d)]
-  const probe = new Date(Date.UTC(year, month - 1, day))
+  // setUTCFullYear, not Date.UTC: the latter maps years 0–99 to 1900–1999.
+  const probe = new Date(0)
+  probe.setUTCFullYear(year, month - 1, day)
   const dayOk = probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day
   return dayOk && Number(hh) <= 23 && Number(mi) <= 59 && Number(ss) <= 59
 }
