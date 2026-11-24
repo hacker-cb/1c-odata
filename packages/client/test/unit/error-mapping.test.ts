@@ -127,7 +127,7 @@ describe('mapResponseToError', () => {
       expect(err.message).toContain(`a path segment is ${vt(3).length} characters`)
       expect(err.message).toContain('UrlSegmentMaxLength')
       expect(err.message).toContain('register_query')
-      expect(err.message).toContain('split the condition')
+      expect(err.message).toContain('split the condition into calls over disjoint subsets')
       expect((err as HTTPError).rawBody).toContain('Invalid URL')
     })
 
@@ -145,6 +145,23 @@ describe('mapResponseToError', () => {
       expect(err.message).toMatch(
         /^HTTP 400 Bad Request: IIS rejected the request URL as invalid \("Invalid URL"\) — check the path/,
       )
+    })
+
+    it('measures a segment whose escapes do not decode by counting each %XX once', async () => {
+      // A stray '%' (e.g. a LIKE pattern) makes the path undecodable: IIS rejects the escape, not the length.
+      const url = `${base}/${encodeURIComponent('AccountingRegister_Хозрасчетный')}/Turnovers(Condition='${'Хозрасчетный'.repeat(8)} like %G1')`
+      const err = await mapResponseToError(400, 'Bad Request', html, iisBody, { method: 'GET', url })
+      expect(err.message).not.toContain('a path segment is')
+    })
+
+    it('does not take a non-HTML 400 that merely mentions "Invalid URL" for the IIS page', async () => {
+      const url = `${base}/${encodeURIComponent(vt(3))}`
+      const err = await mapResponseToError(400, 'Bad Request', { 'content-type': 'text/plain' }, 'Invalid URL scheme', {
+        method: 'GET',
+        url,
+      })
+      expect(err.message).toContain('server returned no OData error envelope')
+      expect(err.message).toContain('Body starts: Invalid URL scheme')
     })
 
     it('leaves other no-envelope 400s on the generic text', async () => {

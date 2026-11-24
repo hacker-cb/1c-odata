@@ -28,7 +28,7 @@ describe('query: register virtual tables in the path (#181)', () => {
   it('the description names the per-segment limit and points to register_query', () => {
     const description = setup().get('query')?.description ?? ''
     expect(description).toContain('ONE URL path segment')
-    expect(description).toContain('260 characters')
+    expect(description).toContain('260 characters by default')
     expect(description).toContain('register_query sends them in the query string')
   })
 
@@ -40,8 +40,17 @@ describe('query: register virtual tables in the path (#181)', () => {
       entitySet: "AccountingRegister_X/Turnovers(AccountCondition='Account_Key eq guid''g1''')",
     })
     const text = (res.content[0] as { text: string }).text
-    expect(text).toContain('register_query aggregates it server-side and sends its parameters in the query string')
-    expect(text).toContain('IIS caps at 260 characters')
+    expect(text).toContain('register_query aggregates it server-side')
+    expect(text).toContain('share one URL path segment, which IIS caps at 260 characters')
+  })
+
+  it('a virtual table without parameters in the path gets the plain tip, no segment claim', async () => {
+    const query = setup().get('query')
+    if (query === undefined) throw new Error('query not registered')
+    const res = await query.handler({ connection: 'c', entitySet: 'AccumulationRegister_X/Balance' })
+    const text = (res.content[0] as { text: string }).text
+    expect(text).toContain('register_query aggregates it server-side.')
+    expect(text).not.toContain('path segment')
   })
 
   it('register_query itself carries no segment-limit warning — it has no such limit', () => {

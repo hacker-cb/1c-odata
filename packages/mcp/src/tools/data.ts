@@ -85,9 +85,16 @@ function truncationNote(truncated: boolean, shown: number, fetched: number, limi
 const REGISTER_VT =
   /\/(Balance|Turnovers|BalanceAndTurnovers|SliceFirst|SliceLast|DrCrTurnovers|ExtDimensions|RecordsWithExtDimensions)\b/
 
+/** A virtual table with its parameters in the path — `…/Turnovers(StartPeriod=…)` — one segment for all of them. */
+const PARAMS_IN_PATH = /\/\w+\([^)]*=/
+
 function registerHint(entitySet: string): string {
-  if (REGISTER_VT.test(entitySet))
-    return ' Tip: this is a register virtual table — register_query aggregates it server-side and sends its parameters in the query string; here they share one URL path segment, which IIS caps at 260 characters (about two GUIDs in a condition).'
+  if (REGISTER_VT.test(entitySet)) {
+    const segment = PARAMS_IN_PATH.test(entitySet)
+      ? ' Here its parameters share one URL path segment, which IIS caps at 260 characters by default (about two GUIDs in a condition); register_query sends them in the query string.'
+      : ''
+    return ` Tip: this is a register virtual table — register_query aggregates it server-side.${segment}`
+  }
   if (entitySet.endsWith('_RecordType'))
     return ' Tip: for totals/balances prefer register_query (server-side aggregation by dimensions) over raw _RecordType rows.'
   return ''
@@ -100,7 +107,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     {
       title: 'Query data',
       description:
-        'Read-only OData query against an entity set ($filter, $select, $expand, $orderby, $top/$skip, optional count). Large results are truncated to a byte budget — use select to keep them small. With expand, also include the navigation property in select (e.g. "Партнер/Description") or the expanded data is dropped. To look up records by key use get_entity (once per id) — do NOT build long "Ref_Key eq … or …" filters; 1С rejects over-long URLs with HTTP 404 (keep any OR-batch ≤ ~10). For register balances/turnovers/totals use register_query, not raw "*_RecordType" rows. Do not pass a register virtual table with its parameters in the path as entitySet ("AccountingRegister_X/Turnovers(StartPeriod=…,AccountCondition=\'…\')"): they all share ONE URL path segment, which IIS caps at 260 characters — about two GUIDs in a condition — and rejects with HTTP 400 "Invalid URL"; register_query sends them in the query string, with no such limit.',
+        'Read-only OData query against an entity set ($filter, $select, $expand, $orderby, $top/$skip, optional count). Large results are truncated to a byte budget — use select to keep them small. With expand, also include the navigation property in select (e.g. "Партнер/Description") or the expanded data is dropped. To look up records by key use get_entity (once per id) — do NOT build long "Ref_Key eq … or …" filters; 1С rejects over-long URLs with HTTP 404 (keep any OR-batch ≤ ~10). For register balances/turnovers/totals use register_query, not raw "*_RecordType" rows. Do not pass a register virtual table with its parameters in the path as entitySet ("AccountingRegister_X/Turnovers(StartPeriod=…,AccountCondition=\'…\')"): they all share ONE URL path segment, which IIS caps at 260 characters by default — about two GUIDs in a condition — and rejects with HTTP 400 "Invalid URL"; register_query sends them in the query string, with no such limit.',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         entitySet: z.string().describe('Entity set, e.g. Catalog_Валюты'),
