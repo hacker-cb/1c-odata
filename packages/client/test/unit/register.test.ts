@@ -322,9 +322,14 @@ describe('RegisterHelper ReadFiOptions ($select / $filter)', () => {
     expect(decodeURIComponent(seen.url())).toContain('$select=Номенклатура_Key')
   })
 
-  it('rejects a non-array select from an untyped caller before issuing the request', async () => {
-    const bad = { select: 'A,B' } as unknown as { select: string[] }
-    await expect(client().register('AccumulationRegister_X').balance({}, bad)).rejects.toThrow(InvalidArgumentError)
+  it.each([
+    ['a string select', { select: 'A,B' }],
+    ['a non-string select entry', { select: ['A', null] }],
+    ['a non-string filter', { filter: 42 }],
+    ['a null filter', { filter: null }],
+  ])('rejects %s from an untyped caller before issuing the request', async (_name, bad) => {
+    const opts = bad as unknown as { select?: string[]; filter?: string }
+    await expect(client().register('AccumulationRegister_X').balance({}, opts)).rejects.toThrow(InvalidArgumentError)
   })
 })
 

@@ -236,7 +236,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     {
       title: 'Query register virtual table',
       description:
-        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Control grouping with select: 1С sums the resources over the selected fields only, so selecting fewer dimensions returns fewer, coarser rows (e.g. select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account). condition/accountCondition restrict the records the table is computed from; filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601. Paginated via top/skip.',
+        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Control grouping with select: on balance/turnovers/balanceAndTurnovers/drCrTurnovers 1С sums the resources over the selected dimensions only, so fewer dimensions return fewer, coarser rows (e.g. select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account); on slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from; filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601. Paginated via top/skip.',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         register: z.string().describe('Register entity set, e.g. AccumulationRegister_ТоварыНаСкладах'),
@@ -269,7 +269,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           .array(z.string())
           .optional()
           .describe(
-            'Fields to return ($select) — also the GROUPING: resources are summed over the selected dimensions only, so fewer dimensions = fewer, pre-rolled-up rows. Include the resources you need (e.g. "КоличествоBalance", "СуммаTurnoverDr").',
+            'Fields to return ($select). On balance/turnovers/balanceAndTurnovers/drCrTurnovers also the GROUPING: resources are summed over the selected dimensions only, so fewer dimensions = fewer, pre-rolled-up rows. Include the resources you need (e.g. "КоличествоBalance", "СуммаTurnoverDr").',
           ),
         filter: z
           .string()
@@ -457,17 +457,15 @@ function cleanRegisterArgs(args: RegisterQueryArgs): RegisterQueryArgs {
 }
 
 /**
- * The `$select` / `$filter` system options of a register call: blank select
- * entries and a blank filter are dropped, so an empty value sends nothing — the
- * same rule the client applies, kept here so the MCP contract does not lean on it.
+ * The `$select` / `$filter` system options of a register call, passed through
+ * as given — the client's `ReadFiOptions` owns the rule that blank values send
+ * nothing.
  */
 function readOptions(args: { select?: string[] | undefined; filter?: string | undefined }): ReadFiOptions {
-  const opts: ReadFiOptions = {}
-  const select = (args.select ?? []).map((f) => f.trim()).filter((f) => f !== '')
-  if (select.length > 0) opts.select = select
-  const filter = args.filter?.trim()
-  if (filter !== undefined && filter !== '') opts.filter = filter
-  return opts
+  return {
+    ...(args.select !== undefined ? { select: args.select } : {}),
+    ...(args.filter !== undefined ? { filter: args.filter } : {}),
+  }
 }
 
 /** Dispatch a register virtual-table call. Each arg builder is a small pure function. */

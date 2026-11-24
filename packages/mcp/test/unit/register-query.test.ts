@@ -2,6 +2,7 @@ import type { ReadFiOptions } from '@1c-odata/client'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { describe, expect, it } from 'vitest'
+import { type ZodRawShape, z } from 'zod'
 import type { PoolEntry, ReadPool } from '../../src/connection-pool.js'
 import { DEFAULT_LIMITS } from '../../src/limits.js'
 import { registerDataTools } from '../../src/tools/data.js'
@@ -23,7 +24,10 @@ interface Call {
 function setup(rows: Record<string, unknown>[] = [], serverTimezone = 'Europe/Moscow') {
   const handlers = new Map<string, Handler>()
   const server = {
-    registerTool: (name: string, _config: unknown, handler: Handler) => handlers.set(name, handler),
+    // Validate through the tool's own inputSchema, as the SDK does: a parameter
+    // missing from the schema is stripped here exactly as it would be in a call.
+    registerTool: (name: string, config: { inputSchema: ZodRawShape }, handler: Handler) =>
+      handlers.set(name, (args) => handler(z.object(config.inputSchema).parse(args))),
   } as unknown as McpServer
   const calls: Call[] = []
   const helper = (register: string) =>
@@ -62,21 +66,18 @@ describe('register_query select / filter (#179)', () => {
     expect(res.isError).toBeUndefined()
     expect(calls).toHaveLength(1)
     expect(calls[0]?.method).toBe('turnovers')
+    // Passed through as given: the client's ReadFiOptions trims and drops blanks.
     expect(calls[0]?.opts).toEqual({
       top: DEFAULT_LIMITS.maxRegisterRows + 1,
-      select: ['Account_Key', 'СуммаTurnoverDr'],
-      filter: 'СуммаTurnoverDr gt 100000',
+      select: ['Account_Key', ' СуммаTurnoverDr ', ''],
+      filter: ' СуммаTurnoverDr gt 100000 ',
     })
   })
 
-  it('sends neither option when absent or blank', async () => {
+  it('sends neither option when absent', async () => {
     const { run, calls } = setup()
     await run({ table: 'balance' })
-    await run({ table: 'balance', select: [' '], filter: '  ' })
-    expect(calls.map((c) => c.opts)).toEqual([
-      { top: DEFAULT_LIMITS.maxRegisterRows + 1 },
-      { top: DEFAULT_LIMITS.maxRegisterRows + 1 },
-    ])
+    expect(calls.map((c) => c.opts)).toEqual([{ top: DEFAULT_LIMITS.maxRegisterRows + 1 }])
   })
 
   it('applies to the no-argument extDimensions table too', async () => {

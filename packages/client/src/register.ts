@@ -6,6 +6,7 @@ import { InvalidArgumentError } from './errors.js'
 import { buildFunctionUrl } from './functions.js'
 import { parseOptsFor, parseV3Collection } from './parser.js'
 import { assertNonNegativeInt } from './query/builder.js'
+import { qp } from './url-builder.js'
 
 /**
  * Args for `balance()` — single point in time. Both AccumulationRegister and
@@ -113,43 +114,53 @@ export interface ReadFiOptions extends RequestOptions {
    */
   top?: number
   /**
-   * `$select` — the fields to return. On a virtual table this also sets the
+   * `$select` — the fields to return. On the aggregating tables (`Balance`,
+   * `Turnovers`, `BalanceAndTurnovers`, `DrCrTurnovers`) this also sets the
    * **grouping**: 1С sums the resources over the selected dimensions, so
    * selecting fewer dimensions returns fewer, coarser rows (a server-side
    * roll-up). E.g. `['Account_Key', 'СуммаTurnoverDr', 'СуммаTurnoverCr']`
-   * collapses `Turnovers` to one row per account. Blank entries are ignored;
-   * an empty list sends no `$select`.
+   * collapses `Turnovers` to one row per account. On the per-record and slice
+   * tables (`RecordsWithExtDimensions`, `SliceFirst` / `SliceLast`,
+   * `ExtDimensions`) it only picks the fields — nothing is summed. Blank
+   * entries are ignored; an empty list sends no `$select`.
    */
   select?: string[]
   /**
    * `$filter` — a raw OData filter expression applied to the virtual table's
    * result rows, e.g. `"СуммаTurnoverDr gt 100000"`. Distinct from the FI's own
    * `Condition` (and `AccountCondition`, …) parameters, which restrict the
-   * records the table is computed from and travel inside the URL path segment,
-   * where IIS caps their length. A blank string sends no `$filter`.
+   * records the table is computed from. A blank string sends no `$filter`.
    */
   filter?: string
 }
 
 /**
- * The system query options of a virtual-table call, encoded as the collection
- * URL builder encodes them (`encodeURIComponent` on key and value). `$top`
- * keeps its historical bare `$top=N` form.
+ * The system query options of a virtual-table call, encoded by the collection
+ * URL builder's own `qp`. `$top` keeps its historical bare `$top=N` form. An
+ * untyped (JS) caller passing a non-string `filter` or a `select` that is not
+ * an array of strings fails with `InvalidArgumentError` before any request.
  */
-function readFiQueryParams(opts: Pick<ReadFiOptions, 'top' | 'select' | 'filter'>): string[] {
+function readFiQueryParams(opts: ReadFiOptions): string[] {
   const params: string[] = []
-  const filter = opts.filter?.trim()
-  if (filter !== undefined && filter !== '')
-    params.push(`${encodeURIComponent('$filter')}=${encodeURIComponent(filter)}`)
+  if (opts.filter !== undefined) {
+    if (typeof opts.filter !== 'string') {
+      throw new InvalidArgumentError('ReadFiOptions.filter must be a string (a raw OData $filter expression)', {
+        argument: 'ReadFiOptions.filter',
+        received: opts.filter,
+      })
+    }
+    const filter = opts.filter.trim()
+    if (filter !== '') params.push(qp('$filter', filter))
+  }
   if (opts.select !== undefined) {
-    if (!Array.isArray(opts.select)) {
-      throw new InvalidArgumentError('ReadFiOptions.select must be an array of field names', {
+    if (!Array.isArray(opts.select) || !opts.select.every((f) => typeof f === 'string')) {
+      throw new InvalidArgumentError('ReadFiOptions.select must be an array of field-name strings', {
         argument: 'ReadFiOptions.select',
         received: opts.select,
       })
     }
-    const fields = opts.select.map((f) => String(f).trim()).filter((f) => f !== '')
-    if (fields.length > 0) params.push(`${encodeURIComponent('$select')}=${encodeURIComponent(fields.join(','))}`)
+    const fields = opts.select.map((f) => f.trim()).filter((f) => f !== '')
+    if (fields.length > 0) params.push(qp('$select', fields.join(',')))
   }
   if (opts.top !== undefined) {
     assertNonNegativeInt(opts.top, 'ReadFiOptions.top')
@@ -304,7 +315,7 @@ export class RegisterHelper<T> {
   private async callReadFi<R>(funcName: string, args: Record<string, unknown>, opts: ReadFiOptions): Promise<R[]> {
     const { top, select, filter, ...reqOpts } = opts
     let url = buildFunctionUrl(this.client.baseUrl, this.entitySet, funcName, {}, args, this.client.serverTimezone)
-    const params = readFiQueryParams({ top, select, filter })
+    const params = readFiQueryParams(opts)
     if (params.length > 0) url += `${url.includes('?') ? '&' : '?'}${params.join('&')}`
     const raw = await this.client.transportGet(url, reqOpts)
     // withTypeHint=false: virtual-table FI results have a different shape than the entity type itself.

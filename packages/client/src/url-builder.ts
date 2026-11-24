@@ -39,8 +39,14 @@ export function buildV3CountUrl(base: string, q: QueryBuilder<unknown>): string 
   return `${path}?${params.join('&')}`
 }
 
-/** Encode both the key (including `$`) and value */
-function qp(key: string, value: string): string {
+/**
+ * Encode both the key (including `$`) and value of one system query option.
+ * Shared by the collection builders here and the register virtual-table calls
+ * (`register.ts`), so both encode `$filter` / `$select` alike.
+ *
+ * @internal
+ */
+export function qp(key: string, value: string): string {
   return `${encodeURIComponent(key)}=${encodeURIComponent(value)}`
 }
 
