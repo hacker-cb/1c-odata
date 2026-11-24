@@ -92,17 +92,41 @@ describe('serializeArgs — @odata.bind shape', () => {
 })
 
 describe('buildFunctionUrl', () => {
+  it.each([
+    ['a slash', 'AccumulationRegister_X/../../other_base/odata/standard.odata/Catalog_Y'],
+    ['a query', 'AccumulationRegister_X?$top=1'],
+    ['a fragment', 'AccumulationRegister_X#'],
+  ])('keeps an entity set with %s in one encoded path segment', (_name, entitySet) => {
+    const url = buildFunctionUrl(base, entitySet, 'Balance', {}, {}, 'Europe/Moscow')
+    expect(url).toBe(`${base}/${encodeURIComponent(entitySet)}/Balance()`)
+    const parsed = new URL(url)
+    // Still under the base, one segment for the set, nothing in the query or a fragment.
+    expect(parsed.pathname).toBe(`${new URL(base).pathname}/${encodeURIComponent(entitySet)}/Balance()`)
+    expect(parsed.search).toBe('')
+    expect(parsed.hash).toBe('')
+  })
+
+  it.each(['', '.', '..'])('rejects the entity set %j, which would collapse into the path above', (entitySet) => {
+    expect(() => buildFunctionUrl(base, entitySet, 'Balance', {}, {}, 'Europe/Moscow')).toThrow(InvalidArgumentError)
+  })
+
+  it('encodes a Cyrillic entity set like the collection URLs do', () => {
+    expect(buildFunctionUrl(base, 'AccumulationRegister_ТоварыНаСкладах', 'Balance', {}, {}, 'Europe/Moscow')).toBe(
+      `${base}/${encodeURIComponent('AccumulationRegister_ТоварыНаСкладах')}/Balance()`,
+    )
+  })
+
   const base = 'http://example.test/odata'
   const REF = '11111111-2222-3333-4444-555555555555'
   it('instance-bound: <set>(<ref>)/<func>()?args', () => {
     expect(buildFunctionUrl(base, 'Document_РТУ', 'Post', { ref: REF }, {}, 'Europe/Moscow')).toBe(
-      `${base}/Document_РТУ(guid'${REF}')/Post()`,
+      `${base}/${encodeURIComponent('Document_РТУ')}(guid'${REF}')/Post()`,
     )
   })
   it('instance-bound with extra args: <set>(<ref>)/<func>()?args', () => {
     expect(
       buildFunctionUrl(base, 'Document_РТУ', 'Post', { ref: REF }, { PostingModeOperational: false }, 'Europe/Moscow'),
-    ).toBe(`${base}/Document_РТУ(guid'${REF}')/Post()?PostingModeOperational=false`)
+    ).toBe(`${base}/${encodeURIComponent('Document_РТУ')}(guid'${REF}')/Post()?PostingModeOperational=false`)
   })
   it('set-bound: <set>/<func>()?args (no ref) — Date formatted in server timezone', () => {
     // UTC 07:30:00 = Moscow wall-clock 10:30:00 (UTC+3, no DST in Jan).

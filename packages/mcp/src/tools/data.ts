@@ -348,7 +348,9 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
               top: limit,
               returned: rows.length,
               truncated,
-              hasMore: truncated || totalCapped || offset + page.length < total,
+              // Rows past the cap cannot be paged to — the cap is reported by
+              // `totalCapped` and the note — so paging stops at the last fetched row.
+              hasMore: truncated || offset + page.length < total,
             },
             rows,
           },

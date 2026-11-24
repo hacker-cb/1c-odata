@@ -85,6 +85,21 @@ function formatValue(v: unknown, serverTimezone: string, argument: string): stri
  *
  * Args (excluding `ref`) are appended as query string per spec §2.5.
  */
+/**
+ * One encoded path segment. A dot segment (`.` / `..`) or an empty name has no
+ * encoded form a URL parser keeps as a name — it would collapse into the path
+ * above — so it is rejected.
+ */
+function pathSegment(name: string, argument: string): string {
+  if (name === '' || name === '.' || name === '..') {
+    throw new InvalidArgumentError(`FunctionImport ${argument} must be a name, not "${name}"`, {
+      argument,
+      received: name,
+    })
+  }
+  return encodeURIComponent(name)
+}
+
 export function buildFunctionUrl(
   base: string,
   entitySet: string,
@@ -94,6 +109,12 @@ export function buildFunctionUrl(
   serverTimezone: string,
 ): string {
   const trimmedBase = base.replace(/\/$/, '')
+  // Each name is ONE path segment, encoded as the collection URLs encode the
+  // entity set (url-builder.ts): a `/`, `?`, `#` or `..` in a caller-supplied
+  // name (an MCP tool argument, say) must not reach another path of the host
+  // with this connection's credentials, nor push the query into a fragment.
+  const set = pathSegment(entitySet, 'entitySet')
+  const fn = pathSegment(funcName, 'funcName')
   let head: string
   if (target.ref !== undefined) {
     // Reject non-GUID `ref` early — a stray apostrophe would terminate the
@@ -105,9 +126,9 @@ export function buildFunctionUrl(
         received: target.ref,
       })
     }
-    head = `${trimmedBase}/${entitySet}(guid'${target.ref}')/${funcName}()`
+    head = `${trimmedBase}/${set}(guid'${target.ref}')/${fn}()`
   } else {
-    head = `${trimmedBase}/${entitySet}/${funcName}()`
+    head = `${trimmedBase}/${set}/${fn}()`
   }
   const qs = serializeArgs(args, serverTimezone)
   return qs.length > 0 ? `${head}?${qs}` : head
