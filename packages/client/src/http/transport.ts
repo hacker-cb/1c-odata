@@ -122,8 +122,16 @@ const TLS_TRUST_HINT =
   'the server certificate is not trusted by Node — add the issuing CA with NODE_EXTRA_CA_CERTS=/path/to/ca.pem, ' +
   'or trust the OS certificate store with NODE_USE_SYSTEM_CA=1 (README "Network configuration")'
 
+/** How deep {@link networkErrorMessage} follows a `cause` chain. */
+const MAX_CAUSE_DEPTH = 4
+
+interface Reason {
+  code: string | undefined
+  message: string
+}
+
 /** The `code` / trimmed `message` of an error-like value (either may be absent). */
-function codeAndMessage(v: unknown): { code: string | undefined; message: string } {
+function reasonOf(v: unknown): Reason {
   if (typeof v !== 'object' || v === null) return { code: undefined, message: '' }
   const { code, message } = v as { code?: unknown; message?: unknown }
   return {
@@ -132,34 +140,60 @@ function codeAndMessage(v: unknown): { code: string | undefined; message: string
   }
 }
 
-/** `CODE: message`, or whichever of the two is present ('' for neither). */
-function causeText({ code, message }: { code: string | undefined; message: string }): string {
-  if (code !== undefined && message !== '') return `${code}: ${message}`
-  return code ?? message
+/** `CODE: message` — the code dropped where the message already names it, '' for neither. */
+function reasonText({ code, message }: Reason): string {
+  if (code === undefined) return message
+  if (message === '') return code
+  return message.includes(code) ? message : `${code}: ${message}`
+}
+
+/**
+ * Every reason under a caught error: its `cause` chain, and at each link the
+ * per-attempt errors of an `AggregateError` — undici's multi-address connect
+ * failure has an EMPTY message with the attempts in `errors[]`, and a proxy
+ * failure wraps the TLS error one level deeper (`UND_ERR_PRX_TLS` → the
+ * certificate code). The caught error itself contributes only its `errors[]`.
+ */
+function collectReasons(e: unknown): Reason[] {
+  const out: Reason[] = []
+  let link: unknown = e
+  for (let depth = 0; depth <= MAX_CAUSE_DEPTH && typeof link === 'object' && link !== null; depth++) {
+    if (depth > 0) out.push(reasonOf(link))
+    const errors = (link as { errors?: unknown }).errors
+    if (Array.isArray(errors)) out.push(...errors.map(reasonOf))
+    link = (link as { cause?: unknown }).cause
+  }
+  return out
 }
 
 /**
  * Build the `NetworkError` message. undici's own message is always the bare
  * `fetch failed`; the real reason — `ECONNREFUSED`, `ENOTFOUND`, a TLS
- * verification code — sits in `e.cause`, and a multi-address connect failure
- * (e.g. `localhost` → `::1` + `127.0.0.1`) is an `AggregateError` with an EMPTY
- * message whose per-address errors are in `cause.errors[]`. Fold that into the
- * message so the reason survives every surface that shows only `.message`.
+ * verification code — sits under `e.cause` (see {@link collectReasons}). Fold
+ * it into the message so it survives every surface that shows only `.message`
+ * (the MCP server among them); a certificate-trust code adds a hint. Reading
+ * the error must never fail the translation: anything thrown while inspecting
+ * it (a hostile `cause` getter) falls back to the bare message.
  */
 function networkErrorMessage(e: unknown): string {
-  const base = `Network error: ${(e as Error | undefined)?.message ?? 'unknown'}`
-  const cause = (e as { cause?: unknown } | undefined)?.cause
-  const own = codeAndMessage(cause)
-  const errors = (cause as { errors?: unknown } | undefined)?.errors
-  // An AggregateError's per-attempt errors carry the reason, each message already
-  // naming its code (`connect ECONNREFUSED ::1:8080`); any other cause speaks for itself.
-  const subs = Array.isArray(errors) ? errors.map(codeAndMessage) : []
-  const subTexts = subs.map((s) => s.message || causeText(s)).filter((t) => t !== '')
-  const texts = subTexts.length > 0 ? [...new Set(subTexts)] : [causeText(own)]
-  const shown = texts.filter((t) => t !== '' && !base.includes(t))
-  if (shown.length === 0) return base
-  const trust = [own, ...subs].some((s) => s.code !== undefined && TLS_TRUST_CODES.has(s.code))
-  return `${base} (${shown.join('; ')})${trust ? `; ${TLS_TRUST_HINT}` : ''}`
+  let own = ''
+  try {
+    own = String((e as { message?: unknown } | undefined)?.message ?? '').trim()
+  } catch {
+    // A throwing `message` getter: report the failure without it.
+  }
+  const base = `Network error: ${own || 'unknown'}`
+  try {
+    const reasons = collectReasons(e)
+    const unique = [...new Set(reasons.map(reasonText))].filter((t) => t !== '' && t !== own)
+    // A bare code (an AggregateError's own) is dropped where a fuller text already names it.
+    const texts = unique.filter((t) => !unique.some((o) => o !== t && o.includes(t)))
+    const trust = reasons.some((r) => r.code !== undefined && TLS_TRUST_CODES.has(r.code))
+    const detail = texts.length > 0 ? ` (${texts.join('; ')})` : ''
+    return `${base}${detail}${trust ? `; ${TLS_TRUST_HINT}` : ''}`
+  } catch {
+    return base
+  }
 }
 
 /**

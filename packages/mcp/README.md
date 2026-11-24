@@ -105,12 +105,12 @@ predefined `config.json` plus `ONEC_<NAME>_PASSWORD` env vars is enough; nothing
 TLS and proxy settings are Node's process-wide env vars (see the root README's
 [Network configuration](../../README.md#network-configuration)), so for the server they belong in the same `env`
 block — the MCP client starts `serve` without your shell profile, and an `export` there never reaches it. For a 1С
-base behind a corporate / Active Directory CA, either trust the OS certificate store or name the CA file:
+base behind a corporate / Active Directory CA, trust the OS certificate store, where a domain-joined machine
+usually has that CA already — or name the CA file instead with `"NODE_EXTRA_CA_CERTS": "/abs/path/to/corp-ca.pem"`:
 
-```jsonc
+```json
 "env": {
-  "NODE_USE_SYSTEM_CA": "1",                       // or:
-  "NODE_EXTRA_CA_CERTS": "/abs/path/to/corp-ca.pem"
+  "NODE_USE_SYSTEM_CA": "1"
 }
 ```
 

@@ -163,7 +163,7 @@ describe('transport.request — NetworkError carries the undici cause (#180)', (
 
   it('appends a DNS failure without a TLS hint', async () => {
     const err = await networkErrorFor(fetchFailed(withCode('getaddrinfo ENOTFOUND 1c.example', 'ENOTFOUND')))
-    expect(err.message).toBe('Network error: fetch failed (ENOTFOUND: getaddrinfo ENOTFOUND 1c.example)')
+    expect(err.message).toBe('Network error: fetch failed (getaddrinfo ENOTFOUND 1c.example)')
   })
 
   it('reads the per-address errors of an AggregateError whose own message is empty', async () => {
@@ -188,11 +188,59 @@ describe('transport.request — NetworkError carries the undici cause (#180)', (
     expect(err.message).toBe('Network error: fetch failed (bad port)')
   })
 
+  it('follows a nested cause — a proxy TLS failure names the certificate error under it', async () => {
+    const tls = withCode('unable to get local issuer certificate', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY')
+    const proxy = Object.assign(new Error('Secure Proxy Connection failed', { cause: tls }), {
+      code: 'UND_ERR_PRX_TLS',
+    })
+    const err = await networkErrorFor(fetchFailed(proxy))
+    expect(err.message).toMatch(
+      /^Network error: fetch failed \(UND_ERR_PRX_TLS: Secure Proxy Connection failed; UNABLE_TO_GET_ISSUER_CERT_LOCALLY: unable to get local issuer certificate\); the server certificate is not trusted by Node/,
+    )
+  })
+
+  it('keeps the trust hint when the outer message already repeats the cause', async () => {
+    const cause = withCode('self-signed certificate', 'DEPTH_ZERO_SELF_SIGNED_CERT')
+    const err = await networkErrorFor(new Error('DEPTH_ZERO_SELF_SIGNED_CERT: self-signed certificate', { cause }))
+    expect(err.message).toMatch(/^Network error: DEPTH_ZERO_SELF_SIGNED_CERT: self-signed certificate; the server/)
+  })
+
+  it('reads an AggregateError thrown directly, with no cause', async () => {
+    const agg = new AggregateError([withCode('connect ETIMEDOUT 10.0.0.1:80', 'ETIMEDOUT')], '')
+    expect((await networkErrorFor(agg)).message).toBe('Network error: unknown (connect ETIMEDOUT 10.0.0.1:80)')
+  })
+
+  it('keeps a code that the sub-error message does not name', async () => {
+    const agg = new AggregateError(
+      [withCode('connect failed', 'ECONNREFUSED'), withCode('connect failed', 'ETIMEDOUT')],
+      '',
+    )
+    expect((await networkErrorFor(fetchFailed(agg))).message).toBe(
+      'Network error: fetch failed (ECONNREFUSED: connect failed; ETIMEDOUT: connect failed)',
+    )
+  })
+
+  it('still yields a NetworkError when inspecting the cause throws', async () => {
+    const hostile = new Error('fetch failed')
+    Object.defineProperty(hostile, 'cause', {
+      get() {
+        throw new Error('boom')
+      },
+    })
+    const err = await networkErrorFor(hostile)
+    expect(err.message).toBe('Network error: fetch failed')
+    expect(err.cause).toBe(hostile)
+  })
+
   it('keeps the bare message when there is no cause, or it adds nothing', async () => {
     expect((await networkErrorFor(fetchFailed())).message).toBe('Network error: fetch failed')
     expect((await networkErrorFor(new Error('socket hang up', { cause: new Error('socket hang up') }))).message).toBe(
       'Network error: socket hang up',
     )
     expect((await networkErrorFor(fetchFailed({ unrelated: true }))).message).toBe('Network error: fetch failed')
+    // A short cause text that merely occurs inside the outer message is still shown.
+    expect((await networkErrorFor(fetchFailed(new Error('failed')))).message).toBe(
+      'Network error: fetch failed (failed)',
+    )
   })
 })
