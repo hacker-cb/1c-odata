@@ -236,7 +236,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     {
       title: 'Query register virtual table',
       description:
-        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Use dimensions (comma-separated) to control grouping. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601. Paginated via top/skip.',
+        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Control grouping with select: 1С sums the resources over the selected fields only, so selecting fewer dimensions returns fewer, coarser rows (e.g. select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account). condition/accountCondition restrict the records the table is computed from; filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601. Paginated via top/skip.',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         register: z.string().describe('Register entity set, e.g. AccumulationRegister_ТоварыНаСкладах'),
@@ -265,6 +265,18 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           .string()
           .optional()
           .describe('drCrTurnovers: ext-dimension condition for the corresponding account'),
+        select: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Fields to return ($select) — also the GROUPING: resources are summed over the selected dimensions only, so fewer dimensions = fewer, pre-rolled-up rows. Include the resources you need (e.g. "КоличествоBalance", "СуммаTurnoverDr").',
+          ),
+        filter: z
+          .string()
+          .optional()
+          .describe(
+            'Raw OData $filter on the resulting rows, e.g. "СуммаTurnoverDr gt 100000". Use condition/accountCondition to restrict the records the table is computed from.',
+          ),
         top: z.number().int().optional().describe('Max rows to return this page (server-capped; omit for the default)'),
         skip: z.number().int().min(0).optional().describe('Offset for pagination (default 0)'),
         compact: z
@@ -285,6 +297,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
         const cap = limits.maxRegisterRows
         const fetched = await runRegisterTable(client.register(args.register), cleanRegisterArgs(args), {
           top: cap + 1,
+          ...readOptions(args),
         })
         const totalCapped = fetched.length > cap
         const allRows = totalCapped ? fetched.slice(0, cap) : fetched
@@ -298,10 +311,10 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           rows.length,
           page.length,
           limits,
-          'narrow with dimensions/condition, set compact:true, or page with skip',
+          'narrow with select/condition/filter, set compact:true, or page with skip',
         )
         const capNote = totalCapped
-          ? ` ⚠ register result capped at ${cap} rows — narrow with dimensions/condition/period for the full set.`
+          ? ` ⚠ register result capped at ${cap} rows — narrow with select/condition/filter/period for the full set.`
           : ''
         return {
           summary: `${rows.length} row(s) of ${total}${totalCapped ? '+' : ''} total from ${args.register}.${args.table}.${note}${capNote}`,
@@ -441,6 +454,20 @@ function cleanRegisterArgs(args: RegisterQueryArgs): RegisterQueryArgs {
     ...opt('extraDimensions', extraDimensions),
     ...opt('balancedExtraDimensions', balancedExtraDimensions),
   }
+}
+
+/**
+ * The `$select` / `$filter` system options of a register call: blank select
+ * entries and a blank filter are dropped, so an empty value sends nothing — the
+ * same rule the client applies, kept here so the MCP contract does not lean on it.
+ */
+function readOptions(args: { select?: string[] | undefined; filter?: string | undefined }): ReadFiOptions {
+  const opts: ReadFiOptions = {}
+  const select = (args.select ?? []).map((f) => f.trim()).filter((f) => f !== '')
+  if (select.length > 0) opts.select = select
+  const filter = args.filter?.trim()
+  if (filter !== undefined && filter !== '') opts.filter = filter
+  return opts
 }
 
 /** Dispatch a register virtual-table call. Each arg builder is a small pure function. */

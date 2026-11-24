@@ -193,7 +193,7 @@ Narrow before broad: `ConcurrencyError` / `BusinessError` / `PermissionError` ex
 
 ## Registers
 
-`client.register(set)` is a typed facade over 1С register virtual tables — balances, turnovers, and slices. Turnover-style tables take a `{ from, to }` period **range** (mapped to `StartPeriod` / `EndPeriod`); `balance()` and slices take a single `Period` point. Every method accepts an optional trailing `ReadFiOptions` (`$top` + per-call `signal` / `timeout` / `retry`) and returns the rows directly (`Promise<R[]>`):
+`client.register(set)` is a typed facade over 1С register virtual tables — balances, turnovers, and slices. Turnover-style tables take a `{ from, to }` period **range** (mapped to `StartPeriod` / `EndPeriod`); `balance()` and slices take a single `Period` point. Every method accepts an optional trailing `ReadFiOptions` (`top` / `select` / `filter` + per-call `signal` / `timeout` / `retry`) and returns the rows directly (`Promise<R[]>`):
 
 ```ts
 // AccumulationRegister — stock balance at a date, turnovers over a range
@@ -214,6 +214,16 @@ const prices = await client
 const drcr = await client
   .register('AccountingRegister_Хозрасчетный')
   .drCrTurnovers({ Period: { from: new Date('2025-01-01'), to: new Date('2025-03-31') } })
+```
+
+On a virtual table `select` is also the **grouping**: 1С sums the resources over the selected dimensions only, so selecting fewer of them rolls the result up server-side. `filter` is a raw OData `$filter` on the resulting rows — unlike `Condition` / `AccountCondition`, which restrict the records the table is computed from:
+
+```ts
+// One row per account instead of one per account × ext-dimension × balanced account
+const byAccount = await client.register('AccountingRegister_Хозрасчетный').turnovers(
+  { Period: { from: new Date('2026-01-01'), to: new Date('2026-01-31') }, AccountCondition: "Account_Key eq guid'…'" },
+  { select: ['Account_Key', 'СуммаTurnoverDr', 'СуммаTurnoverCr'], filter: 'СуммаTurnoverDr gt 100000' },
+)
 ```
 
 Also available: `balanceAndTurnovers`, `sliceFirst`, `extDimensions`, `recordsWithExtDimensions`, plus `recordsets()` / `records()` for the raw record sets — see [`packages/client/src/register.ts`](./packages/client/src/register.ts).

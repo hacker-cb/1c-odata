@@ -250,6 +250,84 @@ describe('RegisterHelper ReadFiOptions ($top)', () => {
   })
 })
 
+describe('RegisterHelper ReadFiOptions ($select / $filter)', () => {
+  /** Capture the URL of one virtual-table call. */
+  function capture(pattern: RegExp): { url: () => string } {
+    let url = ''
+    server.use(
+      http.get(pattern, ({ request }) => {
+        url = request.url
+        return HttpResponse.json({ 'odata.metadata': '#X', value: [] })
+      }),
+    )
+    return { url: () => url }
+  }
+  const client = () => new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+
+  it('appends $select (the grouping) and $filter, encoded like a collection query', async () => {
+    const seen = capture(/\/AccountingRegister_X\/Turnovers\(\).*/)
+    await client()
+      .register('AccountingRegister_X')
+      .turnovers(
+        { Period: { from: new Date(2026, 0, 1) }, AccountCondition: "Account_Key eq guid'g1'" },
+        { select: ['Account_Key', 'СуммаTurnoverDr'], filter: 'СуммаTurnoverDr gt 100000', top: 10 },
+      )
+    const url = seen.url()
+    expect(url).toContain(`%24select=${encodeURIComponent('Account_Key,СуммаTurnoverDr')}`)
+    expect(url).toContain(`%24filter=${encodeURIComponent('СуммаTurnoverDr gt 100000')}`)
+    expect(url).toContain('$top=10')
+    // The FI's own parameters stay in the query string ahead of the system options.
+    expect(decodeURIComponent(url)).toMatch(
+      /Turnovers\(\)\?StartPeriod=.*AccountCondition=.*\$filter=.*\$select=.*\$top=10$/,
+    )
+  })
+
+  it('applies to a no-arg virtual table (after ?)', async () => {
+    const seen = capture(/\/AccountingRegister_X\/ExtDimensions\(\).*/)
+    await client()
+      .register('AccountingRegister_X')
+      .extDimensions({ select: ['ExtDimension_Type'] })
+    expect(decodeURIComponent(seen.url())).toContain('ExtDimensions()?$select=ExtDimension_Type')
+  })
+
+  it.each([
+    ['balance', (r: ReturnType<ReturnType<typeof client>['register']>) => r.balance({}, { select: ['A'] })],
+    ['turnovers', (r: ReturnType<ReturnType<typeof client>['register']>) => r.turnovers({}, { select: ['A'] })],
+    [
+      'balanceAndTurnovers',
+      (r: ReturnType<ReturnType<typeof client>['register']>) => r.balanceAndTurnovers({}, { select: ['A'] }),
+    ],
+    ['sliceFirst', (r: ReturnType<ReturnType<typeof client>['register']>) => r.sliceFirst({}, { select: ['A'] })],
+    ['sliceLast', (r: ReturnType<ReturnType<typeof client>['register']>) => r.sliceLast({}, { select: ['A'] })],
+    ['drCrTurnovers', (r: ReturnType<ReturnType<typeof client>['register']>) => r.drCrTurnovers({}, { select: ['A'] })],
+    [
+      'recordsWithExtDimensions',
+      (r: ReturnType<ReturnType<typeof client>['register']>) => r.recordsWithExtDimensions({}, { select: ['A'] }),
+    ],
+  ])('%s forwards $select', async (_name, call) => {
+    const seen = capture(/\/Register_X\/\w+\(\).*/)
+    await call(client().register('Register_X'))
+    expect(decodeURIComponent(seen.url())).toContain('$select=A')
+  })
+
+  it('sends neither option for an empty list, blank entries or a blank filter', async () => {
+    const seen = capture(/\/AccumulationRegister_X\/Balance\(\).*/)
+    await client()
+      .register('AccumulationRegister_X')
+      .balance({}, { select: [' ', ''], filter: '   ' })
+    expect(decodeURIComponent(seen.url())).not.toMatch(/\$select|\$filter/)
+    await client()
+      .register('AccumulationRegister_X')
+      .balance({}, { select: [' Номенклатура_Key ', ''] })
+    expect(decodeURIComponent(seen.url())).toContain('$select=Номенклатура_Key')
+  })
+
+  it('rejects a non-array select from an untyped caller before issuing the request', async () => {
+    const bad = { select: 'A,B' } as unknown as { select: string[] }
+    await expect(client().register('AccumulationRegister_X').balance({}, bad)).rejects.toThrow(InvalidArgumentError)
+  })
+})
+
 describe('RegisterHelper forwards AccountingRegister filters on shared FIs', () => {
   it('turnovers() forwards AccountCondition (not silently dropped on an AccountingRegister)', async () => {
     let url: string | null = null

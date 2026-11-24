@@ -112,6 +112,50 @@ export interface ReadFiOptions extends RequestOptions {
    * {@link RecordsWithExtDimensionsArgs.Top}), which is a virtual-table parameter.
    */
   top?: number
+  /**
+   * `$select` — the fields to return. On a virtual table this also sets the
+   * **grouping**: 1С sums the resources over the selected dimensions, so
+   * selecting fewer dimensions returns fewer, coarser rows (a server-side
+   * roll-up). E.g. `['Account_Key', 'СуммаTurnoverDr', 'СуммаTurnoverCr']`
+   * collapses `Turnovers` to one row per account. Blank entries are ignored;
+   * an empty list sends no `$select`.
+   */
+  select?: string[]
+  /**
+   * `$filter` — a raw OData filter expression applied to the virtual table's
+   * result rows, e.g. `"СуммаTurnoverDr gt 100000"`. Distinct from the FI's own
+   * `Condition` (and `AccountCondition`, …) parameters, which restrict the
+   * records the table is computed from and travel inside the URL path segment,
+   * where IIS caps their length. A blank string sends no `$filter`.
+   */
+  filter?: string
+}
+
+/**
+ * The system query options of a virtual-table call, encoded as the collection
+ * URL builder encodes them (`encodeURIComponent` on key and value). `$top`
+ * keeps its historical bare `$top=N` form.
+ */
+function readFiQueryParams(opts: Pick<ReadFiOptions, 'top' | 'select' | 'filter'>): string[] {
+  const params: string[] = []
+  const filter = opts.filter?.trim()
+  if (filter !== undefined && filter !== '')
+    params.push(`${encodeURIComponent('$filter')}=${encodeURIComponent(filter)}`)
+  if (opts.select !== undefined) {
+    if (!Array.isArray(opts.select)) {
+      throw new InvalidArgumentError('ReadFiOptions.select must be an array of field names', {
+        argument: 'ReadFiOptions.select',
+        received: opts.select,
+      })
+    }
+    const fields = opts.select.map((f) => String(f).trim()).filter((f) => f !== '')
+    if (fields.length > 0) params.push(`${encodeURIComponent('$select')}=${encodeURIComponent(fields.join(','))}`)
+  }
+  if (opts.top !== undefined) {
+    assertNonNegativeInt(opts.top, 'ReadFiOptions.top')
+    params.push(`$top=${opts.top}`)
+  }
+  return params
 }
 
 /**
@@ -164,7 +208,8 @@ function expandRangeArgs(args: Record<string, unknown>): Record<string, unknown>
  *     (also `balance()` / `turnovers()` / `balanceAndTurnovers()`)
  *
  * Every virtual-table method takes an optional trailing {@link ReadFiOptions}
- * (`$top` + per-call `signal` / `timeout` / `retry`) — useful for the large
+ * (`$top` / `$select` / `$filter` + per-call `signal` / `timeout` / `retry`) —
+ * `select` doubles as the server-side grouping, and `top` bounds the large
  * collections big registers return.
  *
  * See spec §4.7.
@@ -250,19 +295,17 @@ export class RegisterHelper<T> {
 
   /**
    * Shared dispatch for read-style virtual-table FIs. Builds the URL via
-   * `buildFunctionUrl` (no `ref` — set-bound), appends `$top` when requested,
-   * GETs through the transport (threading the per-call `RequestOptions`), and
-   * parses through `parseV3Collection` so `Edm.DateTime` values become `Date`
-   * instances and the `0001-01-01T00:00:00` empty-date sentinel becomes `null`
-   * (consistent with `client.functions.X.Y` dispatch).
+   * `buildFunctionUrl` (no `ref` — set-bound), appends `$filter` / `$select` /
+   * `$top` when requested, GETs through the transport (threading the per-call
+   * `RequestOptions`), and parses through `parseV3Collection` so `Edm.DateTime`
+   * values become `Date` instances and the `0001-01-01T00:00:00` empty-date
+   * sentinel becomes `null` (consistent with `client.functions.X.Y` dispatch).
    */
   private async callReadFi<R>(funcName: string, args: Record<string, unknown>, opts: ReadFiOptions): Promise<R[]> {
-    const { top, ...reqOpts } = opts
+    const { top, select, filter, ...reqOpts } = opts
     let url = buildFunctionUrl(this.client.baseUrl, this.entitySet, funcName, {}, args, this.client.serverTimezone)
-    if (top !== undefined) {
-      assertNonNegativeInt(top, 'ReadFiOptions.top')
-      url += `${url.includes('?') ? '&' : '?'}$top=${top}`
-    }
+    const params = readFiQueryParams({ top, select, filter })
+    if (params.length > 0) url += `${url.includes('?') ? '&' : '?'}${params.join('&')}`
     const raw = await this.client.transportGet(url, reqOpts)
     // withTypeHint=false: virtual-table FI results have a different shape than the entity type itself.
     const parsed = parseV3Collection<R>(raw.body, parseOptsFor(this.client, this.entitySet, false))

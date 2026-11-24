@@ -23,7 +23,7 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 | `query` | Read-only OData query: raw `$filter`, `$select`, `$expand`, `$orderby`, `$top`/`$skip`, optional count. |
 | `get_entity` | Fetch a single entity by `Ref_Key`. |
 | `count` | Count rows matching an optional `$filter`. |
-| `register_query` | Register virtual tables: balance / turnovers / slices / accounting (read-only analytics). |
+| `register_query` | Register virtual tables: balance / turnovers / slices / accounting (read-only analytics). `select` sets the server-side grouping; `filter` narrows the resulting rows. |
 | `add_connection` | Add/update a connection (writes config; optional `label` + password; password stored securely, never returned). |
 | `set_credentials` | Change a connection's login and/or password in place (keeps URL/timezone/label; password never returned). |
 | `set_label` | Set or clear a connection's display label (empty clears it → falls back to the name). |
