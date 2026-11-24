@@ -220,6 +220,38 @@ describe('transport.request — NetworkError carries the undici cause (#180)', (
     )
   })
 
+  it('follows the cause of each AggregateError attempt', async () => {
+    const tls = withCode('self-signed certificate in certificate chain', 'SELF_SIGNED_CERT_IN_CHAIN')
+    const attempt = Object.assign(new Error('Secure Proxy Connection failed', { cause: tls }), {
+      code: 'UND_ERR_PRX_TLS',
+    })
+    const err = await networkErrorFor(fetchFailed(new AggregateError([attempt], '')))
+    expect(err.message).toMatch(/SELF_SIGNED_CERT_IN_CHAIN: self-signed certificate in certificate chain\); the server/)
+  })
+
+  it('shows the code of an AggregateError thrown directly when nothing else names it', async () => {
+    const agg = Object.assign(new AggregateError([], ''), { code: 'ECONNREFUSED' })
+    expect((await networkErrorFor(agg)).message).toBe('Network error: unknown (ECONNREFUSED)')
+  })
+
+  it('does not repeat the code of the caught error when its message names it', async () => {
+    const err = await networkErrorFor(withCode('read ECONNRESET', 'ECONNRESET'))
+    expect(err.message).toBe('Network error: read ECONNRESET')
+  })
+
+  it('keeps attempts whose texts are prefixes of each other', async () => {
+    const agg = new AggregateError(
+      [
+        withCode('connect ECONNREFUSED 10.0.0.1:80', 'ECONNREFUSED'),
+        withCode('connect ECONNREFUSED 10.0.0.1:8080', 'ECONNREFUSED'),
+      ],
+      '',
+    )
+    expect((await networkErrorFor(fetchFailed(agg))).message).toBe(
+      'Network error: fetch failed (connect ECONNREFUSED 10.0.0.1:80; connect ECONNREFUSED 10.0.0.1:8080)',
+    )
+  })
+
   it('still yields a NetworkError when inspecting the cause throws', async () => {
     const hostile = new Error('fetch failed')
     Object.defineProperty(hostile, 'cause', {

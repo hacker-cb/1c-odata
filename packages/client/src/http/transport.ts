@@ -148,23 +148,26 @@ function reasonText({ code, message }: Reason): string {
 }
 
 /**
- * Every reason under a caught error: its `cause` chain, and at each link the
- * per-attempt errors of an `AggregateError` — undici's multi-address connect
- * failure has an EMPTY message with the attempts in `errors[]`, and a proxy
- * failure wraps the TLS error one level deeper (`UND_ERR_PRX_TLS` → the
- * certificate code). The caught error itself contributes only its `errors[]`.
+ * Every reason under a caught error: its `cause` chain, and the per-attempt
+ * errors of an `AggregateError` with their own chains — undici's multi-address
+ * connect failure has an EMPTY message with the attempts in `errors[]`, and a
+ * proxy failure wraps the TLS error one level deeper (`UND_ERR_PRX_TLS` → the
+ * certificate code). The caught error itself contributes only its code (its
+ * message is the base of the NetworkError's). Bounded by depth.
  */
-function collectReasons(e: unknown): Reason[] {
-  const out: Reason[] = []
-  let link: unknown = e
-  for (let depth = 0; depth <= MAX_CAUSE_DEPTH && typeof link === 'object' && link !== null; depth++) {
-    if (depth > 0) out.push(reasonOf(link))
-    const errors = (link as { errors?: unknown }).errors
-    if (Array.isArray(errors)) out.push(...errors.map(reasonOf))
-    link = (link as { cause?: unknown }).cause
-  }
-  return out
+function collectReasons(v: unknown, depth = 0, out: Reason[] = []): Reason[] {
+  if (depth > MAX_CAUSE_DEPTH || typeof v !== 'object' || v === null) return out
+  const reason = reasonOf(v)
+  if (depth > 0) out.push(reason)
+  else if (reason.code !== undefined && !reason.message.includes(reason.code))
+    out.push({ code: reason.code, message: '' })
+  const errors = (v as { errors?: unknown }).errors
+  if (Array.isArray(errors)) for (const sub of errors) collectReasons(sub, depth + 1, out)
+  return collectReasons((v as { cause?: unknown }).cause, depth + 1, out)
 }
+
+/** A bare error code — `ECONNREFUSED`, `UND_ERR_SOCKET`. */
+const BARE_CODE = /^[A-Z][A-Z0-9_]*$/
 
 /**
  * Build the `NetworkError` message. undici's own message is always the bare
@@ -187,7 +190,7 @@ function networkErrorMessage(e: unknown): string {
     const reasons = collectReasons(e)
     const unique = [...new Set(reasons.map(reasonText))].filter((t) => t !== '' && t !== own)
     // A bare code (an AggregateError's own) is dropped where a fuller text already names it.
-    const texts = unique.filter((t) => !unique.some((o) => o !== t && o.includes(t)))
+    const texts = unique.filter((t) => !(BARE_CODE.test(t) && unique.some((o) => o !== t && o.includes(t))))
     const trust = reasons.some((r) => r.code !== undefined && TLS_TRUST_CODES.has(r.code))
     const detail = texts.length > 0 ? ` (${texts.join('; ')})` : ''
     return `${base}${detail}${trust ? `; ${TLS_TRUST_HINT}` : ''}`
