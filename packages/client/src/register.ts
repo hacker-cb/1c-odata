@@ -138,7 +138,8 @@ export interface ReadFiOptions extends RequestOptions {
  * The system query options of a virtual-table call, encoded by the collection
  * URL builder's own `qp`. `$top` keeps its historical bare `$top=N` form. An
  * untyped (JS) caller passing a non-string `filter` or a `select` that is not
- * an array of strings fails with `InvalidArgumentError` before any request.
+ * an array of strings (a sparse array's holes included) fails with
+ * `InvalidArgumentError` before any request.
  */
 function readFiQueryParams(opts: ReadFiOptions): string[] {
   const params: string[] = []
@@ -153,7 +154,7 @@ function readFiQueryParams(opts: ReadFiOptions): string[] {
     if (filter !== '') params.push(qp('$filter', filter))
   }
   if (opts.select !== undefined) {
-    if (!Array.isArray(opts.select) || !opts.select.every((f) => typeof f === 'string')) {
+    if (!Array.isArray(opts.select) || !Array.from(opts.select).every((f) => typeof f === 'string')) {
       throw new InvalidArgumentError('ReadFiOptions.select must be an array of field-name strings', {
         argument: 'ReadFiOptions.select',
         received: opts.select,

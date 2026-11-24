@@ -82,7 +82,7 @@ describe('register_query select / filter (#179)', () => {
 
   it('applies to the no-argument extDimensions table too', async () => {
     const { run, calls } = setup()
-    await run({ table: 'extDimensions', select: ['ExtDimension_Type'] })
-    expect(calls[0]?.opts.select).toEqual(['ExtDimension_Type'])
+    await run({ table: 'extDimensions', select: ['Type_Key'] })
+    expect(calls[0]?.opts.select).toEqual(['Type_Key'])
   })
 })

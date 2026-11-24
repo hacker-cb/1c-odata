@@ -286,8 +286,8 @@ describe('RegisterHelper ReadFiOptions ($select / $filter)', () => {
     const seen = capture(/\/AccountingRegister_X\/ExtDimensions\(\).*/)
     await client()
       .register('AccountingRegister_X')
-      .extDimensions({ select: ['ExtDimension_Type'] })
-    expect(decodeURIComponent(seen.url())).toContain('ExtDimensions()?$select=ExtDimension_Type')
+      .extDimensions({ select: ['Type_Key'] })
+    expect(decodeURIComponent(seen.url())).toContain('ExtDimensions()?$select=Type_Key')
   })
 
   it.each([
@@ -325,6 +325,7 @@ describe('RegisterHelper ReadFiOptions ($select / $filter)', () => {
   it.each([
     ['a string select', { select: 'A,B' }],
     ['a non-string select entry', { select: ['A', null] }],
+    ['a sparse select array', { select: new Array<string>(2) }],
     ['a non-string filter', { filter: 42 }],
     ['a null filter', { filter: null }],
   ])('rejects %s from an untyped caller before issuing the request', async (_name, bad) => {

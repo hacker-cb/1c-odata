@@ -236,7 +236,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     {
       title: 'Query register virtual table',
       description:
-        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Control grouping with select: on balance/turnovers/balanceAndTurnovers/drCrTurnovers 1С sums the resources over the selected dimensions only, so fewer dimensions return fewer, coarser rows (e.g. select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account); on slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from; filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601. Paginated via top/skip.',
+        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Control grouping with select: on balance/turnovers/balanceAndTurnovers/drCrTurnovers 1С sums the resources over the selected dimensions only, so fewer dimensions return fewer, coarser rows (e.g. on an AccountingRegister turnovers, select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account); on slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from (extDimensions takes neither); filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601. Paginated via top/skip.',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         register: z.string().describe('Register entity set, e.g. AccumulationRegister_ТоварыНаСкладах'),
@@ -314,7 +314,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           'narrow with select/condition/filter, set compact:true, or page with skip',
         )
         const capNote = totalCapped
-          ? ` ⚠ register result capped at ${cap} rows — narrow with select/condition/filter/period for the full set.`
+          ? ` ⚠ register result capped at ${cap} rows — narrow with condition/filter/period (or group coarser with select on an aggregating table) for the full set.`
           : ''
         return {
           summary: `${rows.length} row(s) of ${total}${totalCapped ? '+' : ''} total from ${args.register}.${args.table}.${note}${capNote}`,
