@@ -92,7 +92,7 @@ const NAME_RE = /^[\p{L}\p{N}_]+$/u
 function pathSegment(name: string, argument: string): string {
   if (typeof name !== 'string' || !NAME_RE.test(name)) {
     throw new InvalidArgumentError(
-      `FunctionImport ${argument} must be a 1С metadata name (letters, digits, _), got ${JSON.stringify(name)}`,
+      `FunctionImport ${argument} must be a 1С metadata name (letters, digits, _), got ${typeof name === 'string' ? JSON.stringify(name) : String(name)}`,
       { argument, received: name },
     )
   }

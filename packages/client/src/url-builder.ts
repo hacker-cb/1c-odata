@@ -12,18 +12,22 @@ export type EntityKey = string | Record<string, string>
  * Encode a caller-supplied path (an entity set, or a set path such as
  * `Register_X/Balance(…)`) as ONE segment. A dot segment or an empty name has
  * no encoded form a URL parser keeps as a name — `<base>/..` collapses into the
- * path above the base — so it is rejected.
+ * path above the base — so it is rejected, as is a string that cannot be
+ * encoded (a lone surrogate).
  *
  * @internal
  */
 export function encodeSegment(name: string, argument = 'entitySet'): string {
-  if (name === '' || name === '.' || name === '..') {
-    throw new InvalidArgumentError(`${argument} must be a name, not ${JSON.stringify(name)}`, {
-      argument,
-      received: name,
-    })
+  const reject = (): never => {
+    throw new InvalidArgumentError(`${argument} must be a name, not ${String(name)}`, { argument, received: name })
   }
-  return encodeURIComponent(name)
+  if (typeof name !== 'string' || name === '' || name === '.' || name === '..') return reject()
+  try {
+    return encodeURIComponent(name)
+  } catch {
+    // A lone UTF-16 surrogate: encodeURIComponent throws a raw URIError.
+    return reject()
+  }
 }
 
 /**

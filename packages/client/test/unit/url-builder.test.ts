@@ -103,6 +103,12 @@ describe('V3 URL builder — entity set as one segment', () => {
     expect(() => buildV3KeyUrl(base, set, '11111111-2222-3333-4444-555555555555')).toThrow(InvalidArgumentError)
   })
 
+  it('rejects a set name that cannot be encoded (a lone surrogate) as an InvalidArgumentError', () => {
+    expect(() => buildV3CollectionUrl(base, new QueryBuilder('Catalog_\ud800', 'Europe/Moscow'))).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
   it('still encodes a set path with a slash into one segment', () => {
     expect(buildV3CollectionUrl(base, new QueryBuilder('Register_X/Balance()', 'Europe/Moscow'))).toMatch(
       /^http:\/\/h\/odata\/Register_X%2FBalance\(\)\?/,

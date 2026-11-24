@@ -3,7 +3,7 @@
 import { assertExpectedVersion } from '../concurrency.js'
 import { buildFunctionUrl } from '../functions.js'
 import { parseOptsFor, parseV3Single } from '../parser.js'
-import { buildV3KeyUrl, type EntityKey } from '../url-builder.js'
+import { buildV3KeyUrl, type EntityKey, encodeSegment } from '../url-builder.js'
 import { type ReadStreamResult, readStream, type WriteStreamInput, writeStream } from '../value-storage.js'
 import type { MutationOptions, RequestOptions } from './options.js'
 import type { ODataV3Client } from './v3-client.js'
@@ -41,7 +41,7 @@ export class V3EntitySetHandle<T> {
   /** POST a new entity. Returns the full entity (including auto-`Ref_Key` + `DataVersion`). */
   async create(body: Partial<T>, opts: RequestOptions = {}): Promise<T> {
     this.client.validateBeforeWrite(this.entitySet, body)
-    const url = `${this.client.baseUrl}/${this.entitySet}`
+    const url = `${this.client.baseUrl}/${encodeSegment(this.entitySet)}`
     const raw = await this.client.transportPost(url, body, opts, this.entitySet, this.extraHeaders)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }

@@ -70,3 +70,23 @@ describe('ODataV3Client constructor — serverTimezone validation', () => {
     expect(() => new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })).not.toThrow()
   })
 })
+
+describe('V3EntitySetHandle.create — entity set as one path segment', () => {
+  it.each(['..', '.', ''])('rejects the entity set %j before posting', async (set) => {
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    await expect(c.entity(set).create({})).rejects.toThrow(InvalidArgumentError)
+  })
+
+  it('posts to the encoded set', async () => {
+    let url = ''
+    server.use(
+      http.post(/\/odata\/.*/, ({ request }) => {
+        url = request.url
+        return HttpResponse.json({ Ref_Key: 'r' }, { status: 201 })
+      }),
+    )
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    await c.entity('Catalog_Валюты').create({})
+    expect(url).toBe(`${baseUrl}/${encodeURIComponent('Catalog_Валюты')}`)
+  })
+})

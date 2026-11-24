@@ -105,6 +105,11 @@ describe('buildFunctionUrl', () => {
     expect(() => buildFunctionUrl(base, entitySet, 'Balance', {}, {}, 'Europe/Moscow')).toThrow(InvalidArgumentError)
   })
 
+  it('rejects a non-string entity set from an untyped caller with InvalidArgumentError', () => {
+    const set = 123n as unknown as string
+    expect(() => buildFunctionUrl(base, set, 'Balance', {}, {}, 'Europe/Moscow')).toThrow(InvalidArgumentError)
+  })
+
   it('rejects a function name that is not a plain name', () => {
     expect(() => buildFunctionUrl(base, 'Catalog_X', 'Post/../Delete', {}, {}, 'Europe/Moscow')).toThrow(
       InvalidArgumentError,
