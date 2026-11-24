@@ -93,21 +93,22 @@ describe('serializeArgs — @odata.bind shape', () => {
 
 describe('buildFunctionUrl', () => {
   it.each([
-    ['a slash', 'AccumulationRegister_X/../../other_base/odata/standard.odata/Catalog_Y'],
+    ['a slash and parent segments', 'AccumulationRegister_X/../../other_base/odata/standard.odata/Catalog_Y'],
     ['a query', 'AccumulationRegister_X?$top=1'],
     ['a fragment', 'AccumulationRegister_X#'],
-  ])('keeps an entity set with %s in one encoded path segment', (_name, entitySet) => {
-    const url = buildFunctionUrl(base, entitySet, 'Balance', {}, {}, 'Europe/Moscow')
-    expect(url).toBe(`${base}/${encodeURIComponent(entitySet)}/Balance()`)
-    const parsed = new URL(url)
-    // Still under the base, one segment for the set, nothing in the query or a fragment.
-    expect(parsed.pathname).toBe(`${new URL(base).pathname}/${encodeURIComponent(entitySet)}/Balance()`)
-    expect(parsed.search).toBe('')
-    expect(parsed.hash).toBe('')
+    ['a pre-encoded slash', 'AccumulationRegister_X%2F..'],
+    ['an entity key predicate', "Document_X(guid'11111111-2222-3333-4444-555555555555')"],
+    ['a dot segment', '..'],
+    ['an empty name', ''],
+    ['a lone surrogate', 'AccumulationRegister_\ud800'],
+  ])('rejects an entity set with %s before building a URL', (_name, entitySet) => {
+    expect(() => buildFunctionUrl(base, entitySet, 'Balance', {}, {}, 'Europe/Moscow')).toThrow(InvalidArgumentError)
   })
 
-  it.each(['', '.', '..'])('rejects the entity set %j, which would collapse into the path above', (entitySet) => {
-    expect(() => buildFunctionUrl(base, entitySet, 'Balance', {}, {}, 'Europe/Moscow')).toThrow(InvalidArgumentError)
+  it('rejects a function name that is not a plain name', () => {
+    expect(() => buildFunctionUrl(base, 'Catalog_X', 'Post/../Delete', {}, {}, 'Europe/Moscow')).toThrow(
+      InvalidArgumentError,
+    )
   })
 
   it('encodes a Cyrillic entity set like the collection URLs do', () => {

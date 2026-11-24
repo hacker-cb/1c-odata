@@ -1,4 +1,4 @@
-import { QueryBuilder } from '@1c-odata/client'
+import { InvalidArgumentError, QueryBuilder } from '@1c-odata/client'
 import { describe, expect, it } from 'vitest'
 import { buildV3CollectionUrl, buildV3CountUrl, buildV3KeyUrl } from '../../src/url-builder.js'
 
@@ -92,5 +92,20 @@ describe('V3 URL builder', () => {
     expect(url).toContain('/$count')
     expect(url).toContain('%24filter')
     expect(url).not.toContain('%24format') // /$count returns plain integer, no format needed
+  })
+})
+
+describe('V3 URL builder — entity set as one segment', () => {
+  const base = 'http://h/odata'
+  it.each(['', '.', '..'])('rejects the entity set %j, which would collapse into the path above the base', (set) => {
+    expect(() => buildV3CollectionUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).toThrow(InvalidArgumentError)
+    expect(() => buildV3CountUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).toThrow(InvalidArgumentError)
+    expect(() => buildV3KeyUrl(base, set, '11111111-2222-3333-4444-555555555555')).toThrow(InvalidArgumentError)
+  })
+
+  it('still encodes a set path with a slash into one segment', () => {
+    expect(buildV3CollectionUrl(base, new QueryBuilder('Register_X/Balance()', 'Europe/Moscow'))).toMatch(
+      /^http:\/\/h\/odata\/Register_X%2FBalance\(\)\?/,
+    )
   })
 })

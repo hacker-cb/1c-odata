@@ -1,4 +1,5 @@
 // packages/client/src/url-builder.ts
+import { InvalidArgumentError } from './errors.js'
 import type { QueryBuilder } from './query/builder.js'
 
 /**
@@ -8,10 +9,28 @@ import type { QueryBuilder } from './query/builder.js'
 export type EntityKey = string | Record<string, string>
 
 /**
+ * Encode a caller-supplied path (an entity set, or a set path such as
+ * `Register_X/Balance(…)`) as ONE segment. A dot segment or an empty name has
+ * no encoded form a URL parser keeps as a name — `<base>/..` collapses into the
+ * path above the base — so it is rejected.
+ *
+ * @internal
+ */
+export function encodeSegment(name: string, argument = 'entitySet'): string {
+  if (name === '' || name === '.' || name === '..') {
+    throw new InvalidArgumentError(`${argument} must be a name, not ${JSON.stringify(name)}`, {
+      argument,
+      received: name,
+    })
+  }
+  return encodeURIComponent(name)
+}
+
+/**
  * Build a V3 collection URL: `<base>/<EntitySet>?$format=...&$filter=...&...`.
  */
 export function buildV3CollectionUrl(base: string, q: QueryBuilder<unknown>): string {
-  const path = `${base}/${encodeURIComponent(q.entitySet)}`
+  const path = `${base}/${encodeSegment(q.entitySet)}`
   const params = buildQueryParams(q)
   // Always prepend $format
   const allParams = [qp('$format', 'application/json;odata=nometadata'), ...params]
@@ -23,7 +42,7 @@ export function buildV3CollectionUrl(base: string, q: QueryBuilder<unknown>): st
  */
 export function buildV3KeyUrl(base: string, entitySet: string, key: EntityKey): string {
   const keyExpr = formatKey(key)
-  const path = `${base}/${encodeURIComponent(entitySet)}(${keyExpr})`
+  const path = `${base}/${encodeSegment(entitySet)}(${keyExpr})`
   const formatParam = qp('$format', 'application/json;odata=nometadata')
   return `${path}?${formatParam}`
 }
@@ -32,7 +51,7 @@ export function buildV3KeyUrl(base: string, entitySet: string, key: EntityKey): 
  * Build a V3 `/$count` URL: returns plain integer.
  */
 export function buildV3CountUrl(base: string, q: QueryBuilder<unknown>): string {
-  const path = `${base}/${encodeURIComponent(q.entitySet)}/$count`
+  const path = `${base}/${encodeSegment(q.entitySet)}/$count`
   // Only $filter — /$count returns text/plain, no $format needed
   const params = buildQueryParams(q, { onlyFilter: true })
   if (params.length === 0) return path

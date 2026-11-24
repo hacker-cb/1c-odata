@@ -78,6 +78,27 @@ function formatValue(v: unknown, serverTimezone: string, argument: string): stri
   return `'${String(v).replace(/'/g, "''")}'`
 }
 
+/** A 1С metadata name — an entity set or a function: letters (Cyrillic included), digits, `_`. */
+const NAME_RE = /^[\p{L}\p{N}_]+$/u
+
+/**
+ * One path segment for a metadata name. Anything but a plain name — a `/`, `?`,
+ * `#`, `%`, `(`, a dot segment, an empty or malformed string — is rejected
+ * rather than encoded: a caller-supplied name (an MCP tool argument, say) must
+ * not reach another path of the host with this connection's credentials, push
+ * the query into a fragment, address an entity instead of the set, or rely on
+ * how a proxy in between decodes `%2F`.
+ */
+function pathSegment(name: string, argument: string): string {
+  if (typeof name !== 'string' || !NAME_RE.test(name)) {
+    throw new InvalidArgumentError(
+      `FunctionImport ${argument} must be a 1С metadata name (letters, digits, _), got ${JSON.stringify(name)}`,
+      { argument, received: name },
+    )
+  }
+  return encodeURIComponent(name)
+}
+
 /**
  * Build the OData V3 FunctionImport URL. If `target.ref` is provided, the FI
  * is treated as instance-bound and the URL becomes `<base>/<set>(guid'<ref>')/<func>()`.
@@ -85,21 +106,6 @@ function formatValue(v: unknown, serverTimezone: string, argument: string): stri
  *
  * Args (excluding `ref`) are appended as query string per spec §2.5.
  */
-/**
- * One encoded path segment. A dot segment (`.` / `..`) or an empty name has no
- * encoded form a URL parser keeps as a name — it would collapse into the path
- * above — so it is rejected.
- */
-function pathSegment(name: string, argument: string): string {
-  if (name === '' || name === '.' || name === '..') {
-    throw new InvalidArgumentError(`FunctionImport ${argument} must be a name, not "${name}"`, {
-      argument,
-      received: name,
-    })
-  }
-  return encodeURIComponent(name)
-}
-
 export function buildFunctionUrl(
   base: string,
   entitySet: string,
@@ -109,10 +115,7 @@ export function buildFunctionUrl(
   serverTimezone: string,
 ): string {
   const trimmedBase = base.replace(/\/$/, '')
-  // Each name is ONE path segment, encoded as the collection URLs encode the
-  // entity set (url-builder.ts): a `/`, `?`, `#` or `..` in a caller-supplied
-  // name (an MCP tool argument, say) must not reach another path of the host
-  // with this connection's credentials, nor push the query into a fragment.
+  // Each name is ONE path segment (see pathSegment).
   const set = pathSegment(entitySet, 'entitySet')
   const fn = pathSegment(funcName, 'funcName')
   let head: string
