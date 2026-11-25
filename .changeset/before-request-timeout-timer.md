@@ -1,5 +1,0 @@
----
-"@1c-odata/client": patch
----
-
-A `beforeRequest` hook that throws no longer leaves the request's timeout timer running, and the timeout now bounds the hook. Before, a failing hook — a token fetch that rejects, say — failed the call at once while the timer, started before the hook, kept a short-lived Node process (a CLI, a script, a test run) alive for the whole `timeout`. Now the hook's error still reaches the caller unchanged, and the call ends there: the timer is cleared and `req.signal` is aborted, so work the hook left running under that signal is cancelled rather than left without a deadline. A hook still pending when the timeout fires now fails the call with a `TimeoutError` — `onError` called with it — even where the hook ignores `req.signal`; before, the call waited for the hook however long it took, and a hook that rejected with the timeout's own abort surfaced as a bare `AbortError`. A caller's `AbortSignal` firing during the hook likewise ends the wait at once, with the abort's reason.
