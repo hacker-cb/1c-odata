@@ -9,6 +9,7 @@ import type {
   UntypedEntity,
   V3QueryBuilder,
 } from '@1c-odata/client'
+import { formatInZone, parseInZone } from '@1c-odata/client'
 import { raw } from '@1c-odata/client/filter'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -243,7 +244,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     {
       title: 'Query register virtual table',
       description:
-        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Control grouping with select: on balance/turnovers/balanceAndTurnovers/drCrTurnovers 1С sums the resources over the selected dimensions only, so fewer dimensions return fewer, coarser rows (e.g. on an AccountingRegister turnovers, select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account); on slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from (extDimensions takes neither); filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601. Paginated via top/skip.',
+        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Control grouping with select: on balance/turnovers/balanceAndTurnovers/drCrTurnovers 1С sums the resources over the selected dimensions only, so fewer dimensions return fewer, coarser rows (e.g. on an AccountingRegister turnovers, select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account); on slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from (extDimensions takes neither); filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601 in the 1С server time unless they carry Z or an offset. Paginated via top/skip.',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         register: z.string().describe('Register entity set, e.g. AccumulationRegister_ТоварыНаСкладах'),
@@ -251,12 +252,21 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
         period: z
           .string()
           .optional()
-          .describe('ISO date — point in time for balance/slice (range tables: taken as range start)'),
+          .describe(
+            'ISO date or date-time — point in time for balance/slice (range tables: taken as range start). Without Z/offset it is the 1С server time (the connection serverTimezone). A bare date is the START of that day (00:00:00): balance on it is the state before the movements of that day; for the state at the end of a day pass T23:59:59.',
+          ),
         periodFrom: z
           .string()
           .optional()
-          .describe('ISO date — range start (StartPeriod) for turnovers/accounting tables'),
-        periodTo: z.string().optional().describe('ISO date — range end (EndPeriod) for turnovers/accounting tables'),
+          .describe(
+            'ISO date or date-time — range start (StartPeriod) for the turnovers tables and recordsWithExtDimensions. Without Z/offset it is the 1С server time; a bare date is the start of that day (00:00:00).',
+          ),
+        periodTo: z
+          .string()
+          .optional()
+          .describe(
+            'ISO date or date-time — range end (EndPeriod) for the turnovers tables and recordsWithExtDimensions. Without Z/offset it is the 1С server time; a bare date is the END of that day (23:59:59), so periodFrom 2026-01-01 + periodTo 2026-01-31 is the whole of January.',
+          ),
         condition: z.string().optional().describe('Raw OData condition expression on the register records'),
         dimensions: z.string().optional().describe('Comma-separated dimension names'),
         accountCondition: z
@@ -302,10 +312,12 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
         // client-side. `total` is exact below the cap; above it we degrade to a
         // floor with `totalCapped` and a nudge to narrow.
         const cap = limits.maxRegisterRows
-        const fetched = await runRegisterTable(client.register(args.register), cleanRegisterArgs(args), {
-          top: cap + 1,
-          ...readOptions(args),
-        })
+        const fetched = await runRegisterTable(
+          client.register(args.register),
+          cleanRegisterArgs(args),
+          { top: cap + 1, ...readOptions(args) },
+          client.serverTimezone,
+        )
         const totalCapped = fetched.length > cap
         const allRows = totalCapped ? fetched.slice(0, cap) : fetched
         const total = allRows.length
@@ -346,33 +358,91 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
 }
 
 /**
- * Strict ISO-8601: a date-only `2024-01-01` (parsed as UTC), or a date-time that
- * carries an EXPLICIT timezone `2024-01-01T00:00:00(.sss)(Z|±hh:mm)`. A time
- * without a timezone is rejected — `new Date()` would parse it in the MCP host's
- * local zone, silently shifting the register period off the 1С server's zone.
+ * Strict ISO-8601: a date `2024-01-01`, or a date-time
+ * `2024-01-01T00:00(:00(.sss))` with an optional zone `Z` / `±hh:mm`. A space
+ * may stand for the `T`.
  */
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2}))?$/
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/
 
-function toDate(iso: string | undefined): Date | undefined {
+/**
+ * Parse a register period. A value WITH a zone (`Z` / `±hh:mm`) is that
+ * instant. A value without one — a bare date or a naive date-time — is wall
+ * time on the 1С server: read in the connection's `serverTimezone`, the same
+ * conversion the client applies to naive date-times in 1С responses. A bare
+ * date is the start of that server day, or its last second where `bareDateAs`
+ * is `'end'` (a range end: `periodTo`). (`new Date()` would read a naive date-time in
+ * the MCP host's zone and a bare date as UTC midnight — both shift the period
+ * off the server's day.) Impossible calendar values (`2026-02-30`, `25:00`) are
+ * rejected rather than rolled over.
+ */
+function toDate(
+  iso: string | undefined,
+  serverTimezone: string,
+  bareDateAs: 'start' | 'end' = 'start',
+): Date | undefined {
   if (iso === undefined) return undefined
   const trimmed = iso.trim()
-  // Strict shape first: bare `new Date()` leniently parses ambiguous strings
-  // ("2024-1", "2024/01/01") to an unintended instant, and a timezone-less
-  // date-time to a host-local one — both silently shift register aggregation.
-  if (!ISO_DATE_RE.test(trimmed)) {
+  const m = ISO_DATE_RE.exec(trimmed)
+  if (m === null || !isRealDateTime(m)) {
     throw new Error(
-      `Invalid ISO date: "${iso}" (expected YYYY-MM-DD, or a date-time with an explicit timezone like 2024-01-01T00:00:00Z or +03:00)`,
+      `Invalid ISO date: "${iso}" (expected YYYY-MM-DD or YYYY-MM-DDTHH:mm[:ss], optionally with Z or an offset like +03:00; ` +
+        `without one it is read as the 1С server's time, ${serverTimezone})`,
     )
   }
-  const date = new Date(trimmed)
-  if (Number.isNaN(date.getTime())) throw new Error(`Invalid ISO date: "${iso}"`)
+  // A bare date is a whole server day: its start, or — as a range end — its last second (1С dates are second-precision).
+  const [, y, mo, d, time, minute = '00', second = '00', frac = '', zone] = m
+  const bareDay = bareDateAs === 'end' ? ['23', '59', '59'] : ['00', '00', '00']
+  const [hh, mi, ss] = time === undefined ? bareDay : [time, minute, second]
+  const local = `${y}-${mo}-${d}T${hh}:${mi}:${ss}`
+  let date: Date | undefined
+  if (zone !== undefined) date = new Date(`${local}${frac}${zone}`)
+  else {
+    date = naiveInZone(`${local}${frac}`, local, serverTimezone)
+    // A bare day whose midnight a DST switch skips (e.g. America/Sao_Paulo, 2018-11-04) starts at 01:00.
+    if (date === undefined && time === undefined && bareDateAs === 'start') {
+      date = naiveInZone(`${y}-${mo}-${d}T01:00:00`, `${y}-${mo}-${d}T01:00:00`, serverTimezone)
+    }
+  }
+  if (date === undefined || Number.isNaN(date.getTime())) {
+    throw new Error(
+      `Invalid ISO date: "${iso}" (no such instant: a local time a daylight-saving switch skips in ${serverTimezone}, ` +
+        'an impossible offset, or a year before 1000)',
+    )
+  }
   return date
 }
 
+/**
+ * `parseInZone`, answering `undefined` where it cannot place the wall time —
+ * it throws on years it cannot format back (below 1000) — and where the
+ * instant it returns does not read back as `local`: a wall time the zone skips
+ * (the spring-forward gap) has no instant, and parseInZone would shift it
+ * silently, moving the period boundary.
+ */
+function naiveInZone(naive: string, local: string, zone: string): Date | undefined {
+  try {
+    const date = parseInZone(naive, zone)
+    return formatInZone(date, zone).slice(0, 19) === local ? date : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether the matched fields name a real calendar day and clock time (no `Date` rollover). */
+function isRealDateTime(m: RegExpExecArray): boolean {
+  const [, y, mo, d, hh = '0', mi = '0', ss = '0'] = m
+  const [year, month, day] = [Number(y), Number(mo), Number(d)]
+  // setUTCFullYear, not Date.UTC: the latter maps years 0–99 to 1900–1999.
+  const probe = new Date(0)
+  probe.setUTCFullYear(year, month - 1, day)
+  const dayOk = probe.getUTCFullYear() === year && probe.getUTCMonth() === month - 1 && probe.getUTCDate() === day
+  return dayOk && Number(hh) <= 23 && Number(mi) <= 59 && Number(ss) <= 59
+}
+
 /** Build a { from?, to? } range from periodFrom/periodTo; a lone `period` is the start. */
-function rangeFromArgs(args: RegisterQueryArgs): { from?: Date; to?: Date } | undefined {
-  const from = toDate(args.periodFrom) ?? toDate(args.period)
-  const to = toDate(args.periodTo)
+function rangeFromArgs(args: RegisterQueryArgs, tz: string): { from?: Date; to?: Date } | undefined {
+  const from = toDate(args.periodFrom, tz) ?? toDate(args.period, tz)
+  const to = toDate(args.periodTo, tz, 'end')
   if (from === undefined && to === undefined) return undefined
   const range: { from?: Date; to?: Date } = {}
   if (from !== undefined) range.from = from
@@ -380,9 +450,9 @@ function rangeFromArgs(args: RegisterQueryArgs): { from?: Date; to?: Date } | un
   return range
 }
 
-function balanceArgs(args: RegisterQueryArgs): BalanceArgs {
+function balanceArgs(args: RegisterQueryArgs, tz: string): BalanceArgs {
   const a: BalanceArgs = {}
-  const period = toDate(args.period)
+  const period = toDate(args.period, tz)
   if (period !== undefined) a.Period = period
   if (args.condition !== undefined) a.Condition = args.condition
   if (args.dimensions !== undefined) a.Dimensions = args.dimensions
@@ -391,10 +461,10 @@ function balanceArgs(args: RegisterQueryArgs): BalanceArgs {
   return a
 }
 
-function turnoversArgs(args: RegisterQueryArgs): TurnoversArgs {
+function turnoversArgs(args: RegisterQueryArgs, tz: string): TurnoversArgs {
   // Turnovers/balanceAndTurnovers are intervals (StartPeriod/EndPeriod), no point form.
   const a: TurnoversArgs = {}
-  const range = rangeFromArgs(args)
+  const range = rangeFromArgs(args, tz)
   if (range !== undefined) a.Period = range
   if (args.condition !== undefined) a.Condition = args.condition
   if (args.dimensions !== undefined) a.Dimensions = args.dimensions
@@ -403,17 +473,17 @@ function turnoversArgs(args: RegisterQueryArgs): TurnoversArgs {
   return a
 }
 
-function sliceArgs(args: RegisterQueryArgs): SliceArgs {
+function sliceArgs(args: RegisterQueryArgs, tz: string): SliceArgs {
   const a: SliceArgs = {}
-  const period = toDate(args.period)
+  const period = toDate(args.period, tz)
   if (period !== undefined) a.Period = period
   if (args.condition !== undefined) a.Condition = args.condition
   return a
 }
 
-function drCrTurnoversArgs(args: RegisterQueryArgs): DrCrTurnoversArgs {
+function drCrTurnoversArgs(args: RegisterQueryArgs, tz: string): DrCrTurnoversArgs {
   const a: DrCrTurnoversArgs = {}
-  const range = rangeFromArgs(args)
+  const range = rangeFromArgs(args, tz)
   if (range !== undefined) a.Period = range
   if (args.condition !== undefined) a.Condition = args.condition
   if (args.accountCondition !== undefined) a.AccountCondition = args.accountCondition
@@ -424,9 +494,9 @@ function drCrTurnoversArgs(args: RegisterQueryArgs): DrCrTurnoversArgs {
   return a
 }
 
-function recordsWithExtDimensionsArgs(args: RegisterQueryArgs): RecordsWithExtDimensionsArgs {
+function recordsWithExtDimensionsArgs(args: RegisterQueryArgs, tz: string): RecordsWithExtDimensionsArgs {
   const a: RecordsWithExtDimensionsArgs = {}
-  const range = rangeFromArgs(args)
+  const range = rangeFromArgs(args, tz)
   if (range !== undefined) a.Period = range
   if (args.condition !== undefined) a.Condition = args.condition
   return a
@@ -436,7 +506,8 @@ function recordsWithExtDimensionsArgs(args: RegisterQueryArgs): RecordsWithExtDi
  * Trim the optional string FI params and drop blank ones, so a whitespace-only
  * value (e.g. `condition: "   "`) is treated as "not provided" rather than
  * dispatched as an empty `Condition=` the register would reject. Date params go
- * through {@link toDate} (which trims + validates) and need no cleaning here.
+ * through {@link toDate} (which trims, validates and reads them in the server's
+ * zone) and need no cleaning here.
  */
 function cleanRegisterArgs(args: RegisterQueryArgs): RegisterQueryArgs {
   const {
@@ -480,23 +551,24 @@ function runRegisterTable(
   reg: RegisterHelper<unknown>,
   args: RegisterQueryArgs,
   opts: ReadFiOptions,
+  tz: string,
 ): Promise<Record<string, unknown>[]> {
   switch (args.table) {
     case 'balance':
-      return reg.balance(balanceArgs(args), opts)
+      return reg.balance(balanceArgs(args, tz), opts)
     case 'turnovers':
-      return reg.turnovers(turnoversArgs(args), opts)
+      return reg.turnovers(turnoversArgs(args, tz), opts)
     case 'balanceAndTurnovers':
-      return reg.balanceAndTurnovers(turnoversArgs(args), opts)
+      return reg.balanceAndTurnovers(turnoversArgs(args, tz), opts)
     case 'sliceFirst':
-      return reg.sliceFirst(sliceArgs(args), opts)
+      return reg.sliceFirst(sliceArgs(args, tz), opts)
     case 'sliceLast':
-      return reg.sliceLast(sliceArgs(args), opts)
+      return reg.sliceLast(sliceArgs(args, tz), opts)
     case 'drCrTurnovers':
-      return reg.drCrTurnovers(drCrTurnoversArgs(args), opts)
+      return reg.drCrTurnovers(drCrTurnoversArgs(args, tz), opts)
     case 'extDimensions':
       return reg.extDimensions(opts)
     case 'recordsWithExtDimensions':
-      return reg.recordsWithExtDimensions(recordsWithExtDimensionsArgs(args), opts)
+      return reg.recordsWithExtDimensions(recordsWithExtDimensionsArgs(args, tz), opts)
   }
 }

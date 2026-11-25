@@ -1,0 +1,5 @@
+---
+"@1c-odata/mcp": patch
+---
+
+MCP `register_query` reads a period without a timezone as the 1С server's time — the connection's `serverTimezone`, the same conversion the client applies to naive date-times in 1С responses. A naive date-time such as `"2026-01-01T00:00:00"` (or `"2026-01-01 00:00"`) is now accepted instead of rejected. **Behaviour change:** bare dates are now whole days in the server's timezone — `period` / `periodFrom` its start (00:00:00), `periodTo` its end (23:59:59), so `periodFrom: "2026-01-01"` + `periodTo: "2026-01-31"` is the whole of January. They used to mean UTC midnight, which for `Europe/Moscow` sent `StartPeriod=…T03:00:00` (losing the first three hours) and ended the range at 03:00 of its last day. To keep the old boundary, spell it with its zone: `"2026-01-01T00:00:00Z"`. Values with `Z` or an offset are read as before. Impossible dates (`2026-02-30`), times (`24:00`) and local times a daylight-saving switch skips are now rejected instead of silently shifted; the error message names the zone used.
