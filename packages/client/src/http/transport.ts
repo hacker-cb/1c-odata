@@ -247,9 +247,9 @@ function networkErrorMessage(e: unknown): string {
 /**
  * One call's record for retry: whether a hook's own exception ended it, and
  * the method actually sent. Retry hands a fresh one to every attempt — per
- * call, so no other request's hooks can touch it.
- *
- * @internal — written by the transport, read by `http/retry.ts`.
+ * call, so no other request's hooks can touch it. Written by the transport,
+ * read by `http/retry.ts`; reached from outside only through
+ * `@1c-odata/client/internal`, which is not semver-stable.
  */
 export interface AttemptTrace {
   threw: boolean
