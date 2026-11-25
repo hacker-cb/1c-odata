@@ -438,9 +438,9 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
 
   /**
    * The transport options of one call: the client's defaults, overridden by
-   * the call's own — except the signal. The call's `signal` travels as the
-   * request's own (`RequestConfig.signal`) and the client's stays here, so the
-   * transport combines both (`AbortSignal.any`): either one aborts the call.
+   * the call's own — except the signal. The call's `signal` travels with the
+   * request itself and the client's stays here, so the transport combines both
+   * (`AbortSignal.any`): either one aborts the call.
    */
   private callTransportOpts(callOpts: RequestOptions) {
     const { signal: _callSignal, ...overrides } = callOpts
