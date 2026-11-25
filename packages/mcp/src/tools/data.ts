@@ -340,11 +340,16 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           client.serverTimezone,
         )
         const total = page.count
-        // A publication that ignores $top would hand back more than the page:
-        // keep the page to `limit` rows and say so rather than pass them all on.
+        // A publication that ignores $top hands back more than the page: keep
+        // the page to `limit` rows and say so rather than pass them all on. All
+        // `total` rows back means it ignored $skip as well — page them here.
         const ignoredTop = page.value.length > limit
-        const value = ignoredTop ? page.value.slice(0, limit) : page.value
+        const from = ignoredTop && page.value.length === total ? offset : 0
+        const value = ignoredTop ? page.value.slice(from, from + limit) : page.value
         const fetched = value.length
+        // 1С may count a $select as grouped while returning its rows ungrouped:
+        // once the rows outrun the count it is no guide to whether more remain.
+        const countShort = !ignoredTop && offset + fetched > total
         const { rows, truncated } = shapeRows(value, args.compact, limits)
         const note = truncationNote(
           truncated,
@@ -354,10 +359,13 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           'narrow with select/condition/filter, set compact:true, or page with skip',
         )
         const topNote = ignoredTop
-          ? ` ⚠ 1С returned ${page.value.length} rows for top ${limit} — it ignored $top here; the page was cut to the first ${limit}, which may not start at skip ${offset}.`
+          ? ` ⚠ 1С returned ${page.value.length} rows for top ${limit} — it ignored $top here; the page was cut to ${limit} of them${from > 0 ? ` from skip ${offset}` : ''}.`
+          : ''
+        const countNote = countShort
+          ? ` ⚠ 1С counted ${total} row(s) but returned rows past that — with this select its count is not the number of rows; page on while hasMore is true.`
           : ''
         return {
-          summary: `${rows.length} row(s) of ${total} total from ${args.register}.${args.table}.${note}${topNote}`,
+          summary: `${rows.length} row(s) of ${total} total from ${args.register}.${args.table}.${note}${topNote}${countNote}`,
           data: {
             connection: args.connection,
             register: args.register,
@@ -368,7 +376,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
               top: limit,
               returned: rows.length,
               truncated,
-              hasMore: hasMoreRows(truncated, offset, fetched, limit, total),
+              hasMore: hasMoreRows(truncated, offset, fetched, limit, countShort ? undefined : total),
             },
             rows,
           },

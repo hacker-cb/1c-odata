@@ -232,7 +232,7 @@ const byAccount = await client.register('AccountingRegister_Хозрасчетн
 )
 ```
 
-A big table is paged by 1С itself: `skip` + `top` read one page, and `count: true` adds the total row count — a parallel request to the table's `/$count` — so the method resolves to `{ value, count }` instead of the bare rows. `orderBy` sorts on the server, so with `top` it gives a top-N; without it the rows come in 1С's own order, which 1С does not promise to keep from call to call. 1С computes the whole virtual table for each request, so each page of a big table costs that time (a deep `skip` more than the first page) — but only the page travels:
+A big table is paged by 1С itself: `skip` + `top` read one page, and `count: true` adds the total row count — a parallel request to the table's `/$count` with the same `$filter` and `$select` — so the method resolves to `{ value, count }` instead of the bare rows. `orderBy` sorts on the server, so with `top` it gives a top-N; without it the rows come in 1С's own order, which 1С does not promise to keep from call to call. 1С computes the whole virtual table for each request, so each page of a big table costs that time (a deep `skip` more than the first page) — but only the page travels:
 
 ```ts
 // Page 3 of 50 rows, largest debit turnover first, with the total

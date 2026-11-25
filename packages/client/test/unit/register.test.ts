@@ -384,7 +384,7 @@ describe('RegisterHelper ReadFiOptions ($skip / $orderby / count) — server-sid
     expect(rows[0]?.Period).toBeInstanceOf(Date)
   })
 
-  it("with count: true also asks the table's /$count — same parameters, $filter only — and resolves to both", async () => {
+  it("with count: true also asks the table's /$count — same parameters, $filter and $select — and resolves to both", async () => {
     const seen = capture(
       'AccountingRegister_X/Turnovers\\(\\)',
       { 'odata.metadata': '#X', value: [{ A: 1 }] },
@@ -401,7 +401,10 @@ describe('RegisterHelper ReadFiOptions ($skip / $orderby / count) — server-sid
     expect(seen.pageUrl()).toMatch(
       /Turnovers\(\)\?StartPeriod=.*AccountCondition=.*\$filter=A gt 0&\$select=A&\$orderby=A asc&\$top=1&\$skip=7$/,
     )
-    expect(seen.countUrl()).toMatch(/Turnovers\(\)\/\$count\?StartPeriod=.*AccountCondition=.*&\$filter=A gt 0$/)
+    // $select is the grouping on an aggregating table, so the count takes it too; paging options it does not.
+    expect(seen.countUrl()).toMatch(
+      /Turnovers\(\)\/\$count\?StartPeriod=.*AccountCondition=.*&\$filter=A gt 0&\$select=A$/,
+    )
   })
 
   it('counts a no-argument table at …/Func()/$count', async () => {
@@ -414,6 +417,35 @@ describe('RegisterHelper ReadFiOptions ($skip / $orderby / count) — server-sid
   it('fails the call when /$count fails, rather than returning rows without a count', async () => {
     capture('AccumulationRegister_X/Balance\\(\\)', { 'odata.metadata': '#X', value: [{ A: 1 }] }, { status: 400 })
     await expect(client().register('AccumulationRegister_X').balance({}, { count: true })).rejects.toThrow()
+  })
+
+  it('fails the call when /$count answers a negative number', async () => {
+    capture('AccumulationRegister_X/Balance\\(\\)', { 'odata.metadata': '#X', value: [] }, '-1')
+    await expect(client().register('AccumulationRegister_X').balance({}, { count: true })).rejects.toThrow(
+      /non-negative/,
+    )
+  })
+
+  it('aborts the page when /$count fails first', async () => {
+    let pageAborted = false
+    server.use(
+      http.get(/\/AccumulationRegister_X\/Balance\(\)\/\$count/, () =>
+        HttpResponse.json({ 'odata.error': { code: '', message: { value: 'boom' } } }, { status: 400 }),
+      ),
+      http.get(/\/AccumulationRegister_X\/Balance\(\)(\?.*)?$/, async ({ request }) => {
+        await new Promise<void>((resolve) => {
+          request.signal.addEventListener('abort', () => {
+            pageAborted = true
+            resolve()
+          })
+          setTimeout(resolve, 2000)
+        })
+        return HttpResponse.json({ 'odata.metadata': '#X', value: [] })
+      }),
+    )
+    await expect(client().register('AccumulationRegister_X').balance({}, { count: true })).rejects.toThrow()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(pageAborted).toBe(true)
   })
 
   it('fails the call when /$count answers something that is not a number', async () => {
@@ -435,6 +467,7 @@ describe('RegisterHelper ReadFiOptions ($skip / $orderby / count) — server-sid
     ['an orderBy entry with a blank field', { orderBy: [{ field: '  ' }] }],
     ['an orderBy field carrying its own direction', { orderBy: [{ field: 'Сумма desc' }] }],
     ['an orderBy field carrying a second key', { orderBy: [{ field: 'A,B' }] }],
+    ['an orderBy path with an empty segment', { orderBy: [{ field: 'Контрагент//ИНН' }] }],
     ['an orderBy entry with an unknown dir', { orderBy: [{ field: 'A', dir: 'down' }] }],
     ['a null orderBy entry', { orderBy: [null] }],
     ['a non-boolean count', { count: 'yes' }],

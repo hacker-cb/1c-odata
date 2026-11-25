@@ -2,7 +2,7 @@
 import type { RequestOptions } from './client/options.js'
 import type { ODataV3Client } from './client/v3-client.js'
 import { V3QueryBuilder } from './client/v3-query.js'
-import { InvalidArgumentError } from './errors.js'
+import { InvalidArgumentError, ParseError } from './errors.js'
 import { buildFunctionUrl } from './functions.js'
 import { parseOptsFor, parseV3Collection, parseV3Count } from './parser.js'
 import { assertNonNegativeInt } from './query/builder.js'
@@ -166,11 +166,13 @@ export interface ReadFiOptions extends RequestOptions {
  * the bare row array.
  *
  * The count is a second request, `…/Func()/$count` with the same table
- * parameters and `$filter`, sent alongside the page — not `$inlinecount`, which
+ * parameters, `$filter` and `$select` (the grouping), sent alongside the page — not `$inlinecount`, which
  * the 1С documentation says makes `$skip` / `$top` ignored. On a big table 1С
  * spends about as long counting as computing the page, in parallel. The two
  * requests see the data a moment apart, so on data changing meanwhile the
- * count and the page can briefly disagree. If either request fails, the call
+ * count and the page can briefly disagree. Some 1С publications count a
+ * `$select` as grouped while returning its rows ungrouped, so the count can
+ * fall short of the rows the pages hold. If either request fails, the call
  * fails.
  */
 export interface ReadFiCountOptions extends Omit<ReadFiOptions, 'count'> {
@@ -188,13 +190,14 @@ export interface ReadFiPage<R> {
 
 /**
  * The system query options of a virtual-table call, encoded by the collection
- * URL builder's own `qp`. `$top` and `$skip` keep the bare `$top=N` form. An
+ * URL builder's own `qp` — those of the page, and those of its `/$count`
+ * (`$filter` and `$select`). `$top` and `$skip` keep the bare `$top=N` form. An
  * untyped (JS) caller passing a non-string `filter`, a `select` that is not an
  * array of strings (a sparse array's holes included), an `orderBy` that is not
  * an array of `{ field, dir? }` or a non-boolean `count` fails with
  * `InvalidArgumentError` before any request.
  */
-function readFiQueryParams(opts: ReadFiOptions | ReadFiCountOptions): string[] {
+function readFiQueryParams(opts: ReadFiOptions | ReadFiCountOptions): { page: string[]; count: string[] } {
   const params = filterParams(opts.filter)
   if (opts.select !== undefined) {
     if (!Array.isArray(opts.select) || !Array.from(opts.select).every((f) => typeof f === 'string')) {
@@ -206,6 +209,9 @@ function readFiQueryParams(opts: ReadFiOptions | ReadFiCountOptions): string[] {
     const fields = opts.select.map((f) => f.trim()).filter((f) => f !== '')
     if (fields.length > 0) params.push(qp('$select', fields.join(',')))
   }
+  // The count takes what shapes the rows — `$filter`, and `$select`, which on
+  // the aggregating tables is the grouping — and nothing that pages them.
+  const count = [...params]
   if (opts.orderBy !== undefined) {
     const orderBy = orderByParam(opts.orderBy)
     if (orderBy !== '') params.push(qp('$orderby', orderBy))
@@ -224,7 +230,7 @@ function readFiQueryParams(opts: ReadFiOptions | ReadFiCountOptions): string[] {
       received: opts.count,
     })
   }
-  return params
+  return { page: params, count }
 }
 
 /** The `$filter` of a virtual-table call — `[]` when absent or blank; a non-string fails with `InvalidArgumentError`. */
@@ -255,8 +261,8 @@ function countUrl(fiUrl: string): string {
   return q < 0 ? `${fiUrl}/$count` : `${fiUrl.slice(0, q)}/$count${fiUrl.slice(q)}`
 }
 
-/** A single OData property name or `Nav/Field` path — no whitespace, no commas. */
-const ORDER_BY_FIELD = /^[^\s,]+$/
+/** A single OData property name or `Nav/Field` path — no whitespace, no commas, no empty segment. */
+const ORDER_BY_FIELD = /^[^\s,/]+(?:\/[^\s,/]+)*$/
 
 /**
  * The `$orderby` value of `ReadFiOptions.orderBy` — `field dir` pairs joined by
@@ -384,7 +390,7 @@ export class RegisterHelper<T> {
 
   /** Virtual-table FI: balance + turnovers over a `Period` range. Accumulation / Accounting register. */
   async balanceAndTurnovers<R = Record<string, unknown>>(
-    args: TurnoversArgs,
+    args: TurnoversArgs | undefined,
     opts: ReadFiCountOptions,
   ): Promise<ReadFiPage<R>>
   async balanceAndTurnovers<R = Record<string, unknown>>(args?: TurnoversArgs, opts?: ReadFiOptions): Promise<R[]>
@@ -437,7 +443,7 @@ export class RegisterHelper<T> {
 
   /** Virtual-table FI: Dr/Cr turnovers over a `Period` range. AccountingRegister. */
   async drCrTurnovers<R = Record<string, unknown>>(
-    args: DrCrTurnoversArgs,
+    args: DrCrTurnoversArgs | undefined,
     opts: ReadFiCountOptions,
   ): Promise<ReadFiPage<R>>
   async drCrTurnovers<R = Record<string, unknown>>(args?: DrCrTurnoversArgs, opts?: ReadFiOptions): Promise<R[]>
@@ -459,7 +465,7 @@ export class RegisterHelper<T> {
 
   /** Virtual-table FI: records with extra dimensions over a `Period` range. AccountingRegister. */
   async recordsWithExtDimensions<R = Record<string, unknown>>(
-    args: RecordsWithExtDimensionsArgs,
+    args: RecordsWithExtDimensionsArgs | undefined,
     opts: ReadFiCountOptions,
   ): Promise<ReadFiPage<R>>
   async recordsWithExtDimensions<R = Record<string, unknown>>(
@@ -481,8 +487,8 @@ export class RegisterHelper<T> {
    * `parseV3Collection` so `Edm.DateTime` values become `Date` instances and the
    * `0001-01-01T00:00:00` empty-date sentinel becomes `null` (consistent with
    * `client.functions.X.Y` dispatch). With `count: true` it also GETs the
-   * table's `/$count` (same parameters, `$filter` only) in parallel and resolves
-   * to both; a failure of either fails the call.
+   * table's `/$count` (same parameters, `$filter` and `$select`) in parallel and
+   * resolves to both; a failure of either fails the call and aborts the other.
    */
   private async callReadFi<R>(
     funcName: string,
@@ -491,17 +497,30 @@ export class RegisterHelper<T> {
   ): Promise<R[] | ReadFiPage<R>> {
     const { top, skip, orderBy, count, select, filter, ...reqOpts } = opts
     const fiUrl = buildFunctionUrl(this.client.baseUrl, this.entitySet, funcName, {}, args, this.client.serverTimezone)
-    const url = withParams(fiUrl, readFiQueryParams(opts))
+    const params = readFiQueryParams(opts)
     // withTypeHint=false: virtual-table FI results have a different shape than the entity type itself.
-    const rows = async (): Promise<R[]> =>
+    const rows = async (call: RequestOptions): Promise<R[]> =>
       parseV3Collection<R>(
-        (await this.client.transportGet(url, reqOpts)).body,
+        (await this.client.transportGet(withParams(fiUrl, params.page), call)).body,
         parseOptsFor(this.client, this.entitySet, false),
       ).value
-    if (count !== true) return rows()
-    const total = async (): Promise<number> =>
-      parseV3Count((await this.client.transportGet(withParams(countUrl(fiUrl), filterParams(filter)), reqOpts)).body)
-    const [value, n] = await Promise.all([rows(), total()])
-    return { value, count: n }
+    if (count !== true) return rows(reqOpts)
+    const total = async (call: RequestOptions): Promise<number> => {
+      const n = parseV3Count((await this.client.transportGet(withParams(countUrl(fiUrl), params.count), call)).body)
+      if (!Number.isSafeInteger(n) || n < 0)
+        throw new ParseError(`Expected a non-negative row count from /$count, got ${n}`)
+      return n
+    }
+    // One failing aborts the other rather than leave it loading a page no one reads.
+    const sibling = new AbortController()
+    const signal = reqOpts.signal !== undefined ? AbortSignal.any([reqOpts.signal, sibling.signal]) : sibling.signal
+    const call = { ...reqOpts, signal }
+    try {
+      const [value, n] = await Promise.all([rows(call), total(call)])
+      return { value, count: n }
+    } catch (err) {
+      sibling.abort()
+      throw err
+    }
   }
 }
