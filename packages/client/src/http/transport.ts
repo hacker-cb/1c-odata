@@ -58,12 +58,20 @@ interface PreparedRequest {
  * Build the `RequestEvent` + `RequestInit` shared between text and stream
  * dispatch paths. Runs the `beforeRequest` hook, combines signals, and
  * starts the timeout.
+ *
+ * The timeout covers the hook too: it starts first, the hook sees it in
+ * `req.signal`, and a hook still pending when it fires fails the call with a
+ * `TimeoutError` (`onError` fired) even where the hook ignores the signal. A
+ * hook that throws before then fails the call with its own error, unchanged;
+ * the timer is left to fire at its deadline, so work the hook started under
+ * `req.signal` stays bounded by it.
  */
 async function prepareRequest(
   config: RequestConfig,
   callOpts: TransportOptions & RequestOptions,
 ): Promise<PreparedRequest> {
   const start = Date.now()
+  const beforeRequest = callOpts.hooks?.beforeRequest
 
   // Combine signals: client.signal + per-call.signal + timeout signal.
   const signals: AbortSignal[] = []
@@ -75,6 +83,10 @@ async function prepareRequest(
   if (timeoutMs && timeoutMs > 0) {
     timeoutSignal = new AbortController()
     timeoutId = setTimeout(() => timeoutSignal?.abort(), timeoutMs)
+    // A deadline, not work: whatever the request is waiting on (a socket, the
+    // hook's own I/O) keeps the process alive; the timer alone never does, so
+    // a path that leaves it pending cannot hold a short-lived process open.
+    timeoutId.unref()
     signals.push(timeoutSignal.signal)
   }
   const combined = signals.length > 0 ? AbortSignal.any(signals) : undefined
@@ -88,16 +100,16 @@ async function prepareRequest(
     ...(combined !== undefined ? { signal: combined } : {}),
   }
 
-  // beforeRequest hook may mutate headers, body, etc. The timeout already runs
-  // (the hook sees its signal), but the callers' `finally` that clears it is
-  // not reached yet — a throwing hook must clear it here, or the pending timer
-  // holds a short-lived process open for the whole timeout.
-  if (callOpts.hooks?.beforeRequest) {
+  // beforeRequest hook may mutate headers, body, etc.
+  if (beforeRequest) {
     try {
-      const result = await callOpts.hooks.beforeRequest(reqEvent)
+      const result = await withinDeadline(beforeRequest, reqEvent, timeoutSignal?.signal)
       if (result) reqEvent = result
     } catch (e) {
-      if (timeoutId) clearTimeout(timeoutId)
+      // The deadline passed while the hook ran: a timeout, as on the wire.
+      if (timeoutSignal?.signal.aborted && e instanceof Error && e.name === 'AbortError') {
+        await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
+      }
       throw e
     }
   }
@@ -110,6 +122,34 @@ async function prepareRequest(
   }
 
   return { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs }
+}
+
+/**
+ * Run the `beforeRequest` hook, rejecting with the deadline's abort reason (an
+ * `AbortError`) the moment `deadline` fires — whether or not the hook honours
+ * `req.signal`. A hook outrun by the deadline is left to settle on its own; its
+ * later rejection is nobody's to handle and is swallowed.
+ */
+async function withinDeadline(
+  hook: NonNullable<RequestHooks['beforeRequest']>,
+  reqEvent: RequestEvent,
+  deadline: AbortSignal | undefined,
+  // biome-ignore lint/suspicious/noConfusingVoidType: mirrors the hook's own return type.
+): Promise<void | RequestEvent> {
+  const pending = Promise.resolve().then(() => hook(reqEvent))
+  if (!deadline) return pending
+  pending.catch(() => {})
+  let onAbort = (): void => {}
+  const expired = new Promise<never>((_, reject) => {
+    onAbort = () => reject(deadline.reason)
+    if (deadline.aborted) onAbort()
+    else deadline.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    return await Promise.race([pending, expired])
+  } finally {
+    deadline.removeEventListener('abort', onAbort)
+  }
 }
 
 /**
