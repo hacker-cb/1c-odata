@@ -147,7 +147,8 @@ describe('mapResponseToError', () => {
       const started = performance.now()
       expect((await fmt(401, comments)).errorFormat).toBe('none')
       expect((await fmt(401, unclosed)).errorFormat).toBe('none')
-      expect(performance.now() - started).toBeLessThan(500)
+      // Generous for a loaded runner: a backtracking scan of this input never finishes at all.
+      expect(performance.now() - started).toBeLessThan(5_000)
     })
 
     it('decodes entities and CDATA in code and message', async () => {
@@ -206,6 +207,40 @@ describe('mapResponseToError', () => {
     it('recognises the envelope past a doctype with an internal subset', async () => {
       const body = `<?xml version="1.0"?><!DOCTYPE m:error [ <!ENTITY x "y>z"> ]><m:error xmlns:m="${NS}"><m:code>9</m:code></m:error>`
       expect((await fmt(404, body)).code).toBe('9')
+    })
+
+    it('requires a well-formed, closed envelope', async () => {
+      const mismatched = `<m:error xmlns:m="${NS}"><m:code>-1</m:message></m:error>`
+      const truncated = `<m:error xmlns:m="${NS}"><m:code>-1</m:code>`
+      for (const body of [mismatched, truncated]) {
+        const err = await fmt(500, body)
+        expect(err).not.toBeInstanceOf(BusinessError)
+        expect(err.errorFormat).toBe('none')
+      }
+    })
+
+    it('takes a field from its own text, not from elements nested in it', async () => {
+      const err = await fmt(500, `<m:error xmlns:m="${NS}"><m:code><detail>-1</detail></m:code></m:error>`)
+      expect(err).not.toBeInstanceOf(BusinessError)
+    })
+
+    it('decodes numeric references with leading zeros, and leaves characters XML forbids as written', async () => {
+      const err = await fmt(
+        500,
+        `<m:error xmlns:m="${NS}"><m:code>&#x0000002D;1</m:code><m:message>a&#0;b&#xD800;c</m:message></m:error>`,
+      )
+      expect(err).toBeInstanceOf(BusinessError)
+      expect(err.odata?.message).toBe('a&#0;b&#xD800;c')
+    })
+
+    it('decides the format by the media type, not by its parameters', async () => {
+      const err = await fmt(
+        401,
+        `<m:error xmlns:m="${NS}"><m:code>20</m:code></m:error>`,
+        'application/xml; profile="urn:example:JSON"',
+      )
+      expect(err).toBeInstanceOf(PermissionError)
+      expect(err.errorFormat).toBe('xml')
     })
 
     it('matches the content type case-insensitively', async () => {

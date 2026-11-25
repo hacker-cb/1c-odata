@@ -35,8 +35,9 @@ export async function mapResponseToError(
   request: RequestContext,
 ): Promise<ODataError> {
   const ct = headers['content-type'] ?? ''
-  // Media types are case-insensitive (RFC 9110 §8.3.1).
-  const mediaType = ct.toLowerCase()
+  // The media type alone — its parameters never decide the body's format —
+  // compared case-insensitively (RFC 9110 §8.3.1).
+  const mediaType = (ct.split(';')[0] ?? '').trim().toLowerCase()
   let parsed: ODataErrorBody
   let format: 'json' | 'xml'
 
@@ -218,7 +219,8 @@ const ODATA_METADATA_NS = 'http://schemas.microsoft.com/ado/2007/08/dataservices
  * dependencies): it skips the prolog, reads attributes with their quoting,
  * resolves namespace prefixes by scope, skips comments and processing
  * instructions, takes CDATA as text and decodes the predefined and numeric
- * entities. Every step advances through the body, so no input costs more
+ * entities; a closing tag must match the element it closes, and an envelope
+ * that never closes is none. Every step advances through the body, so no input costs more
  * than one pass over it.
  */
 function parseXmlError(xml: string): ODataErrorBody | null {
@@ -231,12 +233,15 @@ function parseXmlError(xml: string): ODataErrorBody | null {
 
   const found: { code?: string; message?: string } = {}
   let capture: { field: 'code' | 'message'; parts: string[] } | null = null
-  let depth = 0 // elements open inside the root
+  const open: string[] = [] // names of the elements open inside the root
+  let closed = false
   i = root.end
   while (i < xml.length) {
     const lt = xml.indexOf('<', i)
     if (lt < 0) break
-    if (capture !== null && lt > i) capture.parts.push(decodeXmlText(xml.slice(i, lt)))
+    // A field's value is its own text; text of elements nested in it is not.
+    const ownText = capture !== null && open.length === 1
+    if (ownText && lt > i) capture?.parts.push(decodeXmlText(xml.slice(i, lt)))
     if (xml.startsWith('<!--', lt) || xml.startsWith('<?', lt)) {
       const close = xml.startsWith('<!--', lt) ? '-->' : '?>'
       const e = xml.indexOf(close, lt + 2)
@@ -247,28 +252,34 @@ function parseXmlError(xml: string): ODataErrorBody | null {
     if (xml.startsWith('<![CDATA[', lt)) {
       const e = xml.indexOf(']]>', lt + 9)
       if (e < 0) break
-      capture?.parts.push(xml.slice(lt + 9, e))
+      if (ownText) capture?.parts.push(xml.slice(lt + 9, e))
       i = e + 3
       continue
     }
     if (xml.startsWith('</', lt)) {
       const e = xml.indexOf('>', lt + 2)
-      if (e < 0 || depth === 0) break // the root closed (or the body ends)
+      if (e < 0) break
+      // A closing tag must close the innermost open element: anything else is not well-formed.
+      if (xml.slice(lt + 2, e).trim() !== (open.at(-1) ?? root.name)) return null
       i = e + 1
+      if (open.length === 0) {
+        closed = true
+        break
+      }
+      open.pop()
       scopes.pop()
-      depth--
-      if (depth === 0 && capture !== null) {
+      if (open.length === 0 && capture !== null) {
         found[capture.field] ??= capture.parts.join('')
         capture = null
       }
       continue
     }
     const tag = readStartTag(xml, lt)
-    if (tag === null) break
+    if (tag === null) return null
     i = tag.end
-    if (tag.selfClosing && depth > 0) continue
+    if (tag.selfClosing && open.length > 0) continue
     scopes.push(namespaceDecls(tag.attrs))
-    if (depth === 0) {
+    if (open.length === 0) {
       const field = isODataElement(tag.name, scopes, 'code')
         ? 'code'
         : isODataElement(tag.name, scopes, 'message')
@@ -281,9 +292,10 @@ function parseXmlError(xml: string): ODataErrorBody | null {
       }
       if (field !== undefined && found[field] === undefined) capture = { field, parts: [] }
     }
-    depth++
+    open.push(tag.name)
   }
-  if (found.code === undefined && found.message === undefined) return null
+  // A truncated or unclosed envelope is not one.
+  if (!closed || (found.code === undefined && found.message === undefined)) return null
   return { code: found.code?.trim() ?? '0', message: found.message ?? 'Unknown XML error' }
 }
 
@@ -399,11 +411,23 @@ const XML_NAMED_ENTITIES: Readonly<Record<string, string>> = { lt: '<', gt: '>',
 /** Decode the predefined and numeric character references; an unknown or out-of-range one is left as written. */
 function decodeXmlText(s: string): string {
   if (!s.includes('&')) return s
-  return s.replace(/&(?:#x([0-9a-fA-F]{1,6})|#([0-9]{1,7})|(lt|gt|amp|quot|apos));/g, (ref, hex, dec, named) => {
+  return s.replace(/&(?:#x([0-9a-fA-F]+)|#([0-9]+)|(lt|gt|amp|quot|apos));/g, (ref, hex, dec, named) => {
     if (named !== undefined) return XML_NAMED_ENTITIES[named] ?? ref
     const cp = Number.parseInt(hex ?? dec, hex !== undefined ? 16 : 10)
-    return cp <= 0x10ffff ? String.fromCodePoint(cp) : ref
+    return isXmlChar(cp) ? String.fromCodePoint(cp) : ref
   })
+}
+
+/** Whether `cp` is a character XML allows (XML 1.0 §2.2 `Char`). */
+function isXmlChar(cp: number): boolean {
+  return (
+    cp === 0x9 ||
+    cp === 0xa ||
+    cp === 0xd ||
+    (cp >= 0x20 && cp <= 0xd7ff) ||
+    (cp >= 0xe000 && cp <= 0xfffd) ||
+    (cp >= 0x10000 && cp <= 0x10ffff)
+  )
 }
 
 /** Trim + cap a raw response body for use as a diagnostic snippet. */
