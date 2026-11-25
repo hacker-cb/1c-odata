@@ -8,6 +8,11 @@ interface RetryWrapperOpts extends TransportOptions, RequestOptions {}
  * Wrap `request` with optional retry. Skips retry for a hook's own exception,
  * a caller's abort, TimeoutError, BusinessError, and any non-retryable status,
  * or method — the method that was sent, after `beforeRequest`.
+ *
+ * The pause between attempts hears the caller's abort — the per-call signal
+ * (`config.signal`) or the client's (`callOpts.signal`): it ends at once with
+ * the abort's reason, and no next attempt starts (its `beforeRequest` is never
+ * called).
  */
 export async function requestWithRetry(config: RequestConfig, callOpts: RetryWrapperOpts): Promise<RawResponse> {
   const policy = resolvePolicy(callOpts.retry)
@@ -20,7 +25,7 @@ export async function requestWithRetry(config: RequestConfig, callOpts: RetryWra
       return await request(config, callOpts, trace)
     } catch (e) {
       if (attempt >= policy.maxRetries || !mayRetry(e, trace, policy, config, callOpts)) throw e
-      await sleep(applyJitter(delayMs, policy.jitter))
+      await sleep(applyJitter(delayMs, policy.jitter), callerSignals(config, callOpts))
       delayMs = Math.min(delayMs * policy.backoffMultiplier, policy.maxDelayMs)
     }
   }
@@ -59,6 +64,34 @@ function applyJitter(delay: number, mode: 'full' | 'none'): number {
   return Math.random() * delay
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms))
+/** The caller's own signals — the per-call one and the client's; never a timeout's. */
+function callerSignals(config: RequestConfig, callOpts: RetryWrapperOpts): AbortSignal[] {
+  const signals: AbortSignal[] = []
+  if (config.signal) signals.push(config.signal)
+  if (callOpts.signal) signals.push(callOpts.signal)
+  return signals
+}
+
+/**
+ * Wait `ms`, or reject with the reason of the first of `signals` to abort — at
+ * once where one already has. The timer and the listeners go either way.
+ */
+function sleep(ms: number, signals: readonly AbortSignal[]): Promise<void> {
+  const aborted = signals.find((s) => s.aborted)
+  if (aborted) return Promise.reject(aborted.reason)
+  return new Promise((resolve, reject) => {
+    const done = (): void => {
+      clearTimeout(timer)
+      for (const s of signals) s.removeEventListener('abort', onAbort)
+    }
+    const onAbort = (ev: Event): void => {
+      done()
+      reject((ev.target as AbortSignal).reason)
+    }
+    const timer = setTimeout(() => {
+      done()
+      resolve()
+    }, ms)
+    for (const s of signals) s.addEventListener('abort', onAbort, { once: true })
+  })
 }

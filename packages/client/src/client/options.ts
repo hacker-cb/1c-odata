@@ -14,7 +14,11 @@ export interface ClientOptions {
   /** Authentication strategy. Use `BasicAuth({ username, password })`. */
   auth: AuthOptions
 
-  /** Client-level "umbrella" signal — aborts ALL pending requests of this client when fired. */
+  /**
+   * Client-level "umbrella" signal — aborts ALL pending requests of this client
+   * when fired, a call given its own `RequestOptions.signal` included, and ends
+   * a retry's pause between attempts at once.
+   */
   signal?: AbortSignal
 
   /**
@@ -39,7 +43,10 @@ export interface ClientOptions {
  * @public
  */
 export interface RequestOptions {
-  /** Per-call signal — combined with client-level signal via `AbortSignal.any`. */
+  /**
+   * Per-call signal — combined with the client-level signal via
+   * `AbortSignal.any`: either one aborts the call, a retry's pause included.
+   */
   signal?: AbortSignal
   /** Override timeout. `0` = disable. */
   timeout?: number
