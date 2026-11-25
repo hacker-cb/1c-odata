@@ -3,7 +3,7 @@
 import { assertExpectedVersion } from '../concurrency.js'
 import { buildFunctionUrl } from '../functions.js'
 import { parseOptsFor, parseV3Single } from '../parser.js'
-import { buildV3KeyUrl, type EntityKey, encodeSegment } from '../url-builder.js'
+import { buildV3KeyUrl, dateTime, type EntityKey, encodeSegment } from '../url-builder.js'
 import { type ReadStreamResult, readStream, type WriteStreamInput, writeStream } from '../value-storage.js'
 import type { MutationOptions, RequestOptions } from './options.js'
 import type { ODataV3Client } from './v3-client.js'
@@ -74,7 +74,12 @@ export class V3EntityHandle<T> {
     const key = this.key
     if (typeof key !== 'object' || key === null || Array.isArray(key)) return key
     // A Date value is itself mutable: copy it too, or a setTime() in between would still split the two requests.
-    return Object.fromEntries(Object.entries(key).map(([k, v]) => [k, v instanceof Date ? new Date(v.getTime()) : v]))
+    return Object.fromEntries(
+      Object.entries(key).map(([k, v]) => {
+        const instant = dateTime(v)
+        return [k, instant === undefined ? v : new Date(instant)]
+      }),
+    )
   }
 
   /**

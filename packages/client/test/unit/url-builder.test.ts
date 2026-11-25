@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm'
 import { InvalidArgumentError, QueryBuilder } from '@1c-odata/client'
 import { describe, expect, it } from 'vitest'
 import { buildV3CollectionUrl, buildV3CountUrl, buildV3KeyUrl, type EntityKey } from '../../src/url-builder.js'
@@ -161,6 +162,21 @@ describe('V3 URL builder — entity keys cannot rewrite the path', () => {
     )
     // A string number is still a string literal.
     expect(keyUrl(base, 'Document_X_Товары', { LineNumber: '1' })).toContain("(LineNumber='1')")
+  })
+
+  it('writes a Date from another realm, by its own time value (#194)', () => {
+    const foreign = runInNewContext("new Date('2024-12-31T21:00:00Z')") as Date
+    expect(keyUrl(base, 'InformationRegister_X', { Period: foreign })).toContain(
+      "(Period=datetime'2025-01-01T00:00:00')",
+    )
+    class Shifted extends Date {
+      override getTime(): number {
+        return super.getTime() + 3_600_000
+      }
+    }
+    expect(keyUrl(base, 'InformationRegister_X', { Period: new Shifted('2024-12-31T21:00:00Z') })).toContain(
+      "(Period=datetime'2025-01-01T00:00:00')",
+    )
   })
 
   it('writes a Date key in the connection serverTimezone, milliseconds kept', () => {

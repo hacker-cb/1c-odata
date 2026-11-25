@@ -12,11 +12,12 @@ import { formatInZone } from './timezone.js'
  * or `bigint` bare (`LineNumber=1`), a `boolean` as `true` / `false`, a `Date`
  * as `datetime'…'` in the connection's `serverTimezone`
  * (`Period=datetime'2025-01-01T00:00:00'`) — so a value read back from a
- * record keys it as it came. Three that do not: the empty date, read as
+ * record keys it as it came. Those that do not: the empty date, read as
  * `null` (pass `ONEC_EMPTY_DATE`); an `Edm.Int64` past 2^53 read as a
  * `number` (read it with `int64Mode: 'bigint'` or `'string'`); a wall-clock
- * time a daylight-saving switch skips, which a `Date` cannot hold (read it
- * with `dateMode: 'string'`).
+ * time a daylight-saving switch skips, which a `Date` cannot hold, and a
+ * string field the schema-less date heuristic took for a date-time (read
+ * with a schema, or with `dateMode: 'string'`).
  *
  * @public
  */
@@ -249,20 +250,36 @@ function formatKeyValue(field: string, v: unknown, serverTimezone: string): stri
   }
   if (typeof v === 'bigint') return String(v)
   if (typeof v === 'boolean') return v ? 'true' : 'false'
-  if (v instanceof Date) {
-    if (Number.isNaN(v.getTime())) {
+  const instant = dateTime(v)
+  if (instant !== undefined) {
+    if (Number.isNaN(instant)) {
       throw new InvalidArgumentError(`Composite-key field ${field} is an invalid Date`, {
         argument: 'key',
         received: v,
       })
     }
     // Digits, `-`, `:`, `.` and `T` — `:` is a legal path character, written raw as 1С writes it in its own links.
-    return `datetime'${formatInZone(v, serverTimezone)}'`
+    return `datetime'${formatInZone(new Date(instant), serverTimezone)}'`
   }
   throw new InvalidArgumentError(`Composite-key field ${field} must be a string, number, bigint, boolean or Date`, {
     argument: 'key',
     received: v,
   })
+}
+
+/**
+ * The time value of a `Date` — any realm's (`node:vm`), read by
+ * `Date.prototype.getTime` itself, so a subclass overriding `getTime` cannot
+ * move it — or `undefined` for anything that is not a `Date`.
+ *
+ * @internal
+ */
+export function dateTime(v: unknown): number | undefined {
+  try {
+    return Date.prototype.getTime.call(v)
+  } catch {
+    return undefined
+  }
 }
 
 function formatKeyString(v: string): string {
