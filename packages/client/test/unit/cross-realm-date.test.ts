@@ -74,6 +74,12 @@ describe('a Date of another realm (node:vm) (#205)', () => {
     const m = new Map([['a', 1]])
     expect(transformDateValuesUntyped(p, TZ)).toBe(p)
     expect(transformDateValuesUntyped(m, TZ)).toBe(m)
+    // A custom prototype, null-prototype included, is no plain object either.
+    const custom = Object.assign(Object.create(Object.create(null)) as object, { Date: new Date(0) })
+    expect(transformDateValuesUntyped(custom, TZ)).toBe(custom)
+    // A null-prototype object (a dictionary) still is.
+    const dict = Object.assign(Object.create(null) as object, { Date: new Date(Date.UTC(2025, 0, 15, 7, 30)) })
+    expect(transformDateValuesUntyped(dict, TZ)).toEqual({ Date: WALL })
   })
 
   it('write without a schema: an object with its own toJSON passes as is; an own __proto__ field stays a field', () => {

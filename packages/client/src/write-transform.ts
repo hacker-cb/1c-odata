@@ -28,13 +28,11 @@ export function transformDateValuesUntyped(v: unknown, tz: string): unknown {
   if (isDate(v)) return formatInZone(v, tz)
   if (Array.isArray(v)) return v.map((item) => transformDateValuesUntyped(item, tz))
   // Recurse into plain objects only — of any realm (`node:vm`), so their dates
-  // convert too: a prototype that is a realm's `Object.prototype` (it has none
-  // of its own), or none. Exotic objects (Map, Buffer, class instances) and an
-  // object serializing itself (`toJSON`) keep the old passthrough behavior and
-  // serialize as before.
+  // convert too. Exotic objects (Map, Buffer, class instances, a custom
+  // prototype) and an object serializing itself (`toJSON`) keep the old
+  // passthrough behavior and serialize as before.
   if (typeof v === 'object' && v !== null) {
-    const proto = Object.getPrototypeOf(v)
-    if (proto !== null && Object.getPrototypeOf(proto) !== null) return v
+    if (!isPlainObject(v)) return v
     if (typeof (v as { toJSON?: unknown }).toJSON === 'function') return v
     // fromEntries defines each key as its own — an own `__proto__` field included.
     return Object.fromEntries(
@@ -44,6 +42,20 @@ export function transformDateValuesUntyped(v: unknown, tz: string): unknown {
     )
   }
   return v
+}
+
+/**
+ * An object literal of any realm (`node:vm`): its prototype is none, or a
+ * realm's own `Object.prototype` — the root of the chain, whose own
+ * `constructor` is that realm's `Object`. A custom prototype, a null-prototype
+ * one included, is not.
+ */
+function isPlainObject(v: object): boolean {
+  const proto: unknown = Object.getPrototypeOf(v)
+  if (proto === null) return true
+  if (typeof proto !== 'object' || Object.getPrototypeOf(proto) !== null) return false
+  const ctor: unknown = Object.getOwnPropertyDescriptor(proto, 'constructor')?.value
+  return typeof ctor === 'function' && ctor.name === 'Object' && (ctor as { prototype?: unknown }).prototype === proto
 }
 
 /**
