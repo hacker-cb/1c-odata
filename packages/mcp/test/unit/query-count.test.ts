@@ -135,23 +135,44 @@ describe('query with count: a parallel /$count, never $inlinecount (#206)', () =
     const { data, summary } = await run({ count: true, skip: 8 })
     expect(data.value.map((r) => r.n)).toEqual([8, 9])
     expect(data.pagination.hasMore).toBe(false)
-    expect(JSON.stringify(summary)).toContain('starting at skip 8')
+    expect(JSON.stringify(summary)).toContain('the page starts at skip 8')
   })
 
-  it('without count passes rows sent past top on as sent, ending the paging, and says so', async () => {
+  it('without count cuts a page past top to top, and offers no paging on (1С may ignore $skip too)', async () => {
     const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true })
     const { data, summary } = await run({ skip: 4 })
-    // Cutting them would hand rows 0..3 back as every page, with hasMore set.
-    expect(data.value).toHaveLength(10)
+    expect(data.value).toHaveLength(4)
     expect(data.pagination.hasMore).toBe(false)
-    expect(JSON.stringify(summary)).toContain('all of them are passed on')
+    expect(JSON.stringify(summary)).toContain('page with count:true')
   })
 
-  it('a short page ends the paging even where the count says more (rows a $select rolls up)', async () => {
-    const { run } = setup(2, limits, { count: 178 })
-    const { data } = await run({ count: true })
-    expect(data.count).toBe(178)
+  it('without count offers no paging on past top even where the byte budget cut the page', async () => {
+    const { run } = setup(10, { ...limits, maxBytes: 12 }, { ignoreTop: true, ignoreSkip: true })
+    const { data } = await run({})
+    expect(data.pagination.truncated).toBe(true)
     expect(data.pagination.hasMore).toBe(false)
+  })
+
+  it('applies skip here when 1С ignored it and the whole set fits in top', async () => {
+    const { run } = setup(3, limits, { ignoreTop: true, ignoreSkip: true })
+    const { data, summary } = await run({ count: true, skip: 2 })
+    expect(data.value.map((r) => r.n)).toEqual([2])
+    expect(data.pagination.hasMore).toBe(false)
+    expect(JSON.stringify(summary)).toContain('ignored $skip here')
+  })
+
+  it('an empty page ends the paging even where the count says more (rows a $select rolls up)', async () => {
+    const { run } = setup(2, limits, { count: 178 })
+    const { data } = await run({ count: true, skip: 4 })
+    expect(data.value).toHaveLength(0)
+    expect(data.pagination.hasMore).toBe(false)
+  })
+
+  it('a full page goes on once the rows outran the count', async () => {
+    const { run } = setup(10, limits, { count: 6 })
+    const { data } = await run({ count: true, skip: 4 })
+    expect(data.value.map((r) => r.n)).toEqual([4, 5, 6, 7])
+    expect(data.pagination.hasMore).toBe(true)
   })
 
   it('says nothing about $top when 1С kept to it', async () => {

@@ -95,39 +95,49 @@ interface QueryPage<T> {
   value: T[]
   /** Whether rows remain past this page — the byte budget aside. */
   more: boolean
+  /** Whether paging on by `skip` reaches the rows left — false where 1С may ignore `$skip`. */
+  pageable: boolean
   note: string
 }
 
 /**
- * The page `query` returns from the `rows` 1С sent for `limit` at `offset`.
- * A short page ends the paging whatever the `total` says (a register virtual
- * table may count rows a `$select` rolls up); a full one goes on while the
- * total, where known, says rows remain. Rows past `limit` — a publication
- * ignoring `$top` — are cut back to `limit` only where the `total` places
- * them: matching the whole of it, `$skip` was ignored too and the page starts
- * at `offset` here. Without a total they are passed on as sent, and the note
- * says so: cutting them would hand the first rows back on every page where
- * `$skip` was ignored as well.
+ * The page `query` returns from the `rows` 1С sent for `limit` at `offset`,
+ * never more than `limit` rows. A publication may ignore `$top` (rows past
+ * `limit`) or `$skip`: where the rows match the whole `total`, 1С sent the
+ * whole set and the page starts at `offset` here. Without a total a page past
+ * `limit` is cut, but whether 1С honoured `$skip` is unknown, so it offers no
+ * paging on — the note points to `count`.
  */
 function queryPage<T>(rows: T[], limit: number, offset: number, total: number | undefined): QueryPage<T> {
-  if (rows.length <= limit) {
-    const more = rows.length === limit && (total === undefined || offset + rows.length < total)
-    return { value: rows, more, note: '' }
+  const skipIgnored = offset > 0 && total !== undefined && total > 0 && rows.length === total
+  const topIgnored = rows.length > limit
+  if (!skipIgnored && !topIgnored) {
+    return { value: rows, more: moreAfter(offset, rows.length, limit, total), pageable: true, note: '' }
   }
-  const ignored = ` ⚠ 1С returned ${rows.length} rows for top ${limit} — it ignored $top here;`
-  if (total === undefined) {
-    return { value: rows, more: false, note: `${ignored} all of them are passed on (count:true has them cut to top).` }
-  }
-  const from = offset > 0 && rows.length === total ? offset : 0
+  const from = skipIgnored ? offset : 0
   const value = rows.slice(from, from + limit)
-  const start =
-    from > 0 ? `taking them as the whole set and starting at skip ${offset}` : 'taking them as starting at skip'
-  // Every row from where 1С started is in hand: what is left of them says whether more remain.
-  return {
-    value,
-    more: from + value.length < rows.length,
-    note: `${ignored} the page was cut to ${limit} of them, ${start}.`,
+  const sent = ` ⚠ 1С returned ${rows.length} rows for top ${limit}${offset > 0 ? ` at skip ${offset}` : ''}`
+  if (total === undefined) {
+    const note = `${sent} — it ignored $top here; the page was cut to ${limit}, taking them as starting at skip. Whether 1С honoured $skip is unknown: page with count:true.`
+    return { value, more: false, pageable: false, note }
   }
+  const ignored = skipIgnored
+    ? `${topIgnored ? '$top and $skip' : '$skip'} here (it sent the whole set); the page starts at skip ${offset}`
+    : `$top here; the page was cut to ${limit} of them, taking them as starting at skip`
+  // Every row from where 1С started is in hand: what is left of them says whether more remain.
+  return { value, more: from + value.length < rows.length, pageable: true, note: `${sent} — it ignored ${ignored}.` }
+}
+
+/**
+ * Whether rows remain past a page of `fetched` rows at `offset`, 1С having
+ * kept to `$skip` / `$top`. An empty page ends the paging; the `total`, where
+ * known, decides — unless the rows already outran it (a register virtual table
+ * may count rows a `$select` rolls up differently), when a full page goes on.
+ */
+function moreAfter(offset: number, fetched: number, limit: number, total: number | undefined): boolean {
+  if (fetched === 0) return false
+  if (total !== undefined && offset + fetched <= total) return offset + fetched < total
+  return fetched === limit
 }
 
 /**
@@ -223,7 +233,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
 
         const page = await pageAndCount(q, count === true)
         const total = page.count
-        const { value, more, note: topNote } = queryPage(page.value, limit, offset, total)
+        const { value, more, pageable, note: topNote } = queryPage(page.value, limit, offset, total)
         const fetched = value.length
         const { rows, truncated } = shapeRows(value, compact, limits)
         const note = truncationNote(
@@ -245,7 +255,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
               fetched,
               returned: rows.length,
               truncated,
-              hasMore: truncated || more,
+              hasMore: pageable && (truncated || more),
             },
             value: rows,
           },
