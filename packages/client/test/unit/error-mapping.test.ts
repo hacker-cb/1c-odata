@@ -137,6 +137,84 @@ describe('mapResponseToError', () => {
       })
     }
 
+    const NS = 'http://schemas.microsoft.com/ado/2007/08/dataservices/metadata'
+    const fmt = async (status: number, body: string, ct = 'application/xml') =>
+      (await mapResponseToError(status, 'X', { 'content-type': ct }, body, req)) as HTTPError
+
+    it('scans hostile prologs in linear time', async () => {
+      const comments = `${'<!--x-->'.repeat(5000)}${'<?x?>'.repeat(5000)}<html><body>no envelope</body></html>`
+      const unclosed = `<!--${'-'.repeat(100_000)}`
+      const started = performance.now()
+      expect((await fmt(401, comments)).errorFormat).toBe('none')
+      expect((await fmt(401, unclosed)).errorFormat).toBe('none')
+      expect(performance.now() - started).toBeLessThan(500)
+    })
+
+    it('decodes entities and CDATA in code and message', async () => {
+      const err = await fmt(
+        500,
+        `<m:error xmlns:m="${NS}"><m:code>&#45;1</m:code><m:message>A &amp; B <![CDATA[<x>]]> &#x416;</m:message></m:error>`,
+      )
+      expect(err).toBeInstanceOf(BusinessError)
+      expect(err.odata).toEqual({ code: '-1', message: 'A & B <x> Ж' })
+    })
+
+    it('reads only the direct children, skipping comments and nested elements', async () => {
+      const err = await fmt(
+        500,
+        `<m:error xmlns:m="${NS}"><!-- <m:code>0</m:code> --><m:innererror><m:code>7</m:code></m:innererror>` +
+          `<m:code >-1</m:code ><m:message>ok</m:message></m:error>`,
+      )
+      expect(err).toBeInstanceOf(BusinessError)
+      expect(err.code).toBe('-1')
+    })
+
+    it('resolves child prefixes by namespace, not by spelling', async () => {
+      const otherPrefix = await fmt(
+        500,
+        `<m:error xmlns:m="${NS}" xmlns:d="${NS}"><d:code>-1</d:code><d:message>x</d:message></m:error>`,
+      )
+      expect(otherPrefix).toBeInstanceOf(BusinessError)
+      const rebound = await fmt(
+        500,
+        `<m:error xmlns:m="${NS}"><m:code xmlns:m="urn:other">-1</m:code><m:message>x</m:message></m:error>`,
+      )
+      expect(rebound).not.toBeInstanceOf(BusinessError)
+      expect(rebound.code).toBe('0')
+    })
+
+    it('does not take a nested <m:error> past a comment for the root', async () => {
+      const body = `<!-- a --><html xmlns="http://www.w3.org/1999/xhtml"><!-- b --><m:error xmlns:m="${NS}"><m:code>1</m:code></m:error></html>`
+      const err = await fmt(401, body, 'application/xhtml+xml')
+      expect(err).not.toBeInstanceOf(PermissionError)
+      expect(err.errorFormat).toBe('none')
+    })
+
+    it('reads xmlns from attributes, not from text inside another attribute', async () => {
+      const spoofed = `<m:error note='xmlns:m="${NS}"' xmlns:m="urn:proxy"><m:code>1</m:code></m:error>`
+      expect((await fmt(401, spoofed)).errorFormat).toBe('none')
+      const gt = `<m:error note="a > b" xmlns:m="${NS}"><m:code>9</m:code></m:error>`
+      expect((await fmt(404, gt)).code).toBe('9')
+    })
+
+    it('requires a code or a message: a bare opening <m:error> is no envelope', async () => {
+      const err = await fmt(401, `<m:error xmlns:m="${NS}">`)
+      expect(err).not.toBeInstanceOf(PermissionError)
+      expect(err.errorFormat).toBe('none')
+    })
+
+    it('recognises the envelope past a doctype with an internal subset', async () => {
+      const body = `<?xml version="1.0"?><!DOCTYPE m:error [ <!ENTITY x "y>z"> ]><m:error xmlns:m="${NS}"><m:code>9</m:code></m:error>`
+      expect((await fmt(404, body)).code).toBe('9')
+    })
+
+    it('matches the content type case-insensitively', async () => {
+      const err = await fmt(401, `<m:error xmlns:m="${NS}"><m:code>20</m:code></m:error>`, 'Application/XML')
+      expect(err).toBeInstanceOf(PermissionError)
+      const json = await fmt(404, '{"odata.error":{"code":"9","message":"x"}}', 'Application/JSON')
+      expect(json.errorFormat).toBe('json')
+    })
+
     it('rejects an <error> root outside the OData metadata namespace', async () => {
       const foreign = '<error xmlns="urn:example:proxy"><code>401</code><message>denied</message></error>'
       const unbound = '<error><code>401</code><message>denied</message></error>'
