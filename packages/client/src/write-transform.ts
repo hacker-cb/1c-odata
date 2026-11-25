@@ -1,18 +1,19 @@
 import type { DateMode } from './connection.js'
 import { formatInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
+import { isDate } from './url-builder.js'
 import type { EntitySchema, MetadataIndex } from './validate.js'
 
 /** Transform a single Edm.DateTime field value into wire form. */
 function transformDateTime(v: unknown, tz: string): unknown {
   if (v === null) return ONEC_EMPTY_DATE
-  if (v instanceof Date) return formatInZone(v, tz)
+  if (isDate(v)) return formatInZone(v, tz)
   return v // string passthrough
 }
 
 /**
  * Value-based write fallback for fields/bodies with no schema: convert every
- * `Date` instance to naive ISO in the server timezone, recursing into plain
+ * `Date` — any realm's (`node:vm`) — to naive ISO in the server timezone, recursing into plain
  * objects and arrays. Mirror of the read-side regex heuristic (parser.ts) —
  * a `Date` in a write payload can only mean an `Edm.DateTime` field, the
  * sole Date-shaped type in 1С EDMX.
@@ -24,21 +25,37 @@ function transformDateTime(v: unknown, tz: string): unknown {
  * @internal
  */
 export function transformDateValuesUntyped(v: unknown, tz: string): unknown {
-  if (v instanceof Date) return formatInZone(v, tz)
+  if (isDate(v)) return formatInZone(v, tz)
   if (Array.isArray(v)) return v.map((item) => transformDateValuesUntyped(item, tz))
-  // Recurse into plain objects only — exotic objects (Map, Buffer, class
-  // instances) keep the old passthrough behavior and serialize as before.
+  // Recurse into plain objects only — of any realm (`node:vm`), so their dates
+  // convert too. Exotic objects (Map, Buffer, class instances, a custom
+  // prototype) and an object serializing itself (`toJSON`) keep the old
+  // passthrough behavior and serialize as before.
   if (typeof v === 'object' && v !== null) {
-    const proto = Object.getPrototypeOf(v)
-    if (proto !== Object.prototype && proto !== null) return v
-    const out: Record<string, unknown> = {}
-    for (const [name, value] of Object.entries(v)) {
-      if (value === undefined) continue
-      out[name] = transformDateValuesUntyped(value, tz)
-    }
-    return out
+    if (!isPlainObject(v)) return v
+    if (typeof (v as { toJSON?: unknown }).toJSON === 'function') return v
+    // fromEntries defines each key as its own — an own `__proto__` field included.
+    return Object.fromEntries(
+      Object.entries(v)
+        .filter(([, value]) => value !== undefined)
+        .map(([name, value]) => [name, transformDateValuesUntyped(value, tz)]),
+    )
   }
   return v
+}
+
+/**
+ * An object literal of any realm (`node:vm`): its prototype is none, or a
+ * realm's own `Object.prototype` — the root of the chain, whose own
+ * `constructor` is that realm's `Object`. A custom prototype, a null-prototype
+ * one included, is not.
+ */
+function isPlainObject(v: object): boolean {
+  const proto: unknown = Object.getPrototypeOf(v)
+  if (proto === null) return true
+  if (typeof proto !== 'object' || Object.getPrototypeOf(proto) !== null) return false
+  const ctor: unknown = Object.getOwnPropertyDescriptor(proto, 'constructor')?.value
+  return typeof ctor === 'function' && ctor.name === 'Object' && (ctor as { prototype?: unknown }).prototype === proto
 }
 
 /**
