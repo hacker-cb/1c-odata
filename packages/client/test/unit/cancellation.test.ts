@@ -18,11 +18,12 @@ const GUID = '11111111-2222-3333-4444-555555555555'
 function hanging(aborted: string[], name: string, answer: () => Response = () => HttpResponse.json({ value: [] })) {
   return async ({ request }: { request: Request }) => {
     await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 2000)
       request.signal.addEventListener('abort', () => {
         aborted.push(name)
+        clearTimeout(timer)
         resolve()
       })
-      setTimeout(resolve, 2000)
     })
     return answer()
   }
@@ -147,6 +148,30 @@ describe('requestWithRetry — the pause hears the abort (#203)', () => {
     expect(Date.now() - started).toBeLessThan(5_000)
     expect(n).toBe(1)
     expect(beforeRequest).toHaveBeenCalledOnce()
+  })
+
+  it('the pause ends on the abort even where an earlier listener stops the event, and not on a forged one', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        return busy()
+      }),
+    )
+    const ctrl = new AbortController()
+    ctrl.signal.addEventListener('abort', (ev) => ev.stopImmediatePropagation())
+    const reason = new Error('cancelled')
+    const onError = vi.fn(() => {
+      setTimeout(() => ctrl.signal.dispatchEvent(new Event('abort')), 5)
+      setTimeout(() => ctrl.abort(reason), 30)
+    })
+    const started = Date.now()
+    const err = await requestWithRetry({ ...get, signal: ctrl.signal }, { retry: policy, hooks: { onError } }).catch(
+      (e: unknown) => e,
+    )
+    expect(err).toBe(reason)
+    expect(Date.now() - started).toBeLessThan(5_000)
+    expect(n).toBe(1)
   })
 
   it('a signal aborted before the call never calls beforeRequest, and is not retried', async () => {

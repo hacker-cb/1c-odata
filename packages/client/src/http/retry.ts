@@ -1,6 +1,13 @@
 import type { RequestOptions, RetryPolicy } from '../client/options.js'
 import { BusinessError, HTTPError, NetworkError, TimeoutError } from '../errors.js'
-import { type AttemptTrace, type RawResponse, type RequestConfig, request, type TransportOptions } from './transport.js'
+import {
+  type AttemptTrace,
+  type RawResponse,
+  type RequestConfig,
+  request,
+  settleWithin,
+  type TransportOptions,
+} from './transport.js'
 
 interface RetryWrapperOpts extends TransportOptions, RequestOptions {}
 
@@ -72,26 +79,25 @@ function callerSignals(config: RequestConfig, callOpts: RetryWrapperOpts): Abort
   return signals
 }
 
+/** The longest delay `setTimeout` keeps: past it Node fires after 1 ms. */
+const MAX_TIMER_MS = 2 ** 31 - 1
+
 /**
- * Wait `ms`, or reject with the reason of the first of `signals` to abort — at
- * once where one already has. The timer and the listeners go either way.
+ * Wait `ms`, or reject with the abort's reason the moment one of `signals`
+ * aborts — at once where one already has. Heard through one signal derived by
+ * `AbortSignal.any`, so only a real abort ends it, whatever other listeners on
+ * the caller's signals do. The timer goes either way.
  */
-function sleep(ms: number, signals: readonly AbortSignal[]): Promise<void> {
-  const aborted = signals.find((s) => s.aborted)
-  if (aborted) return Promise.reject(aborted.reason)
-  return new Promise((resolve, reject) => {
-    const done = (): void => {
-      clearTimeout(timer)
-      for (const s of signals) s.removeEventListener('abort', onAbort)
-    }
-    const onAbort = (ev: Event): void => {
-      done()
-      reject((ev.target as AbortSignal).reason)
-    }
-    const timer = setTimeout(() => {
-      done()
-      resolve()
-    }, ms)
-    for (const s of signals) s.addEventListener('abort', onAbort, { once: true })
-  })
+async function sleep(ms: number, signals: AbortSignal[]): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await settleWithin(
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, Math.min(ms, MAX_TIMER_MS))
+      }),
+      signals.length > 0 ? AbortSignal.any(signals) : undefined,
+    )
+  } finally {
+    clearTimeout(timer)
+  }
 }

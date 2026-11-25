@@ -142,8 +142,11 @@ async function prepareRequest(
  * Await `value`, rejecting with `signal`'s abort reason the moment it aborts —
  * whether or not the work behind `value` honours the signal. Work outrun by
  * the signal is left to settle on its own (the race keeps its rejection handled).
+ * Shared with the retry pause (`http/retry.ts`).
+ *
+ * @internal
  */
-async function settleWithin<T>(value: T | PromiseLike<T>, signal: AbortSignal | undefined): Promise<T> {
+export async function settleWithin<T>(value: T | PromiseLike<T>, signal: AbortSignal | undefined): Promise<T> {
   if (!signal) return value
   let onAbort = (): void => {}
   const aborted = new Promise<never>((_, reject) => {
