@@ -48,30 +48,50 @@ describe('transport write methods', () => {
   // in test/client.test.ts) instead of a string template.
   it('transportPatch sends PATCH with JSON body', async () => {
     server.use(
-      http.patch(/Catalog_X\(guid'g'\)/, () => HttpResponse.json({ Ref_Key: 'g', Code: 'Y' }, { status: 200 })),
+      http.patch(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, () =>
+        HttpResponse.json({ Ref_Key: 'g', Code: 'Y' }, { status: 200 }),
+      ),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    const r = await c.transportPatch(`${baseUrl}/Catalog_X(guid'g')`, { Code: 'Y' }, {}, 'Catalog_X')
+    const r = await c.transportPatch(
+      `${baseUrl}/Catalog_X(guid'00000000-0000-0000-0000-00000000000a')`,
+      { Code: 'Y' },
+      {},
+      'Catalog_X',
+    )
     expect(r.status).toBe(200)
   })
 
   it('transportPut sends PUT with JSON body', async () => {
-    server.use(http.put(/Catalog_X\(guid'g'\)/, () => HttpResponse.json({ Ref_Key: 'g', Code: 'Z' }, { status: 200 })))
+    server.use(
+      http.put(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, () =>
+        HttpResponse.json({ Ref_Key: 'g', Code: 'Z' }, { status: 200 }),
+      ),
+    )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    const r = await c.transportPut(`${baseUrl}/Catalog_X(guid'g')`, { Code: 'Z' }, {}, 'Catalog_X')
+    const r = await c.transportPut(
+      `${baseUrl}/Catalog_X(guid'00000000-0000-0000-0000-00000000000a')`,
+      { Code: 'Z' },
+      {},
+      'Catalog_X',
+    )
     expect(r.status).toBe(200)
   })
 
   it('transportDelete sends DELETE with no body but explicit Content-Length: 0', async () => {
     let cl: string | null = null
     server.use(
-      http.delete(/Catalog_X\(guid'g'\)/, ({ request }) => {
+      http.delete(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, ({ request }) => {
         cl = request.headers.get('content-length')
         return new HttpResponse(null, { status: 204 })
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    const r = await c.transportDelete(`${baseUrl}/Catalog_X(guid'g')`, {}, 'Catalog_X')
+    const r = await c.transportDelete(
+      `${baseUrl}/Catalog_X(guid'00000000-0000-0000-0000-00000000000a')`,
+      {},
+      'Catalog_X',
+    )
     expect(r.status).toBe(204)
     expect(cl).toBe('0')
   })
@@ -103,7 +123,11 @@ describe('transport write methods', () => {
   it('strips a caller-supplied Content-Length on a body write', async () => {
     // A user `withHeader('content-length', ...)` must not survive onto a body
     // write — it is the exact forbidden header undici can reject.
-    server.use(http.patch(/Catalog_X\(guid'g'\)/, () => HttpResponse.json({ Ref_Key: 'g' }, { status: 200 })))
+    server.use(
+      http.patch(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, () =>
+        HttpResponse.json({ Ref_Key: 'g' }, { status: 200 }),
+      ),
+    )
     let outgoing: Record<string, string> | undefined
     const c = new ODataV3Client({
       baseUrl,
@@ -115,7 +139,10 @@ describe('transport write methods', () => {
         },
       },
     })
-    await c.entity('Catalog_X', 'g').withHeader('content-length', '999').patch({ Code: 'Y' })
+    await c
+      .entity('Catalog_X', '00000000-0000-0000-0000-00000000000a')
+      .withHeader('content-length', '999')
+      .patch({ Code: 'Y' })
     const keys = Object.keys(outgoing ?? {}).map((k) => k.toLowerCase())
     expect(keys).not.toContain('content-length')
   })
@@ -123,7 +150,7 @@ describe('transport write methods', () => {
   it('withHeader merges case-insensitively (user override wins, no duplicates)', async () => {
     const received: { current: { allHeaders: Record<string, string> } | null } = { current: null }
     server.use(
-      http.patch(/Catalog_X\(guid'g'\)/, ({ request }) => {
+      http.patch(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, ({ request }) => {
         const all: Record<string, string> = {}
         request.headers.forEach((v, k) => {
           all[k] = v
@@ -133,7 +160,10 @@ describe('transport write methods', () => {
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    await c.entity('Catalog_X', 'g').withHeader('authorization', 'Bearer custom-token').patch({ Code: 'Y' })
+    await c
+      .entity('Catalog_X', '00000000-0000-0000-0000-00000000000a')
+      .withHeader('authorization', 'Bearer custom-token')
+      .patch({ Code: 'Y' })
 
     expect(received.current).not.toBeNull()
     expect(received.current?.allHeaders?.authorization).toBe('Bearer custom-token')
@@ -142,13 +172,16 @@ describe('transport write methods', () => {
   it('withHeader cannot override library-managed Content-Type on write', async () => {
     const received: { current: { ct: string | null } | null } = { current: null }
     server.use(
-      http.patch(/Catalog_X\(guid'g'\)/, ({ request }) => {
+      http.patch(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, ({ request }) => {
         received.current = { ct: request.headers.get('content-type') }
         return HttpResponse.json({ Ref_Key: 'g', Code: 'Y' }, { status: 200 })
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    await c.entity('Catalog_X', 'g').withHeader('content-type', 'text/plain').patch({ Code: 'Y' })
+    await c
+      .entity('Catalog_X', '00000000-0000-0000-0000-00000000000a')
+      .withHeader('content-type', 'text/plain')
+      .patch({ Code: 'Y' })
     expect(received.current?.ct).toBe('application/json')
   })
 })
@@ -171,7 +204,7 @@ describe('transport write — transformDatesToWire integration', () => {
   it('serializes Date instance to naive ISO in server tz on PATCH', async () => {
     let capturedBody: unknown
     server.use(
-      http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
+      http.patch(/Document_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         capturedBody = await request.json()
         return HttpResponse.json({ Ref_Key: 'a', Date: '2025-03-15T15:00:00' })
       }),
@@ -182,7 +215,9 @@ describe('transport write — transformDatesToWire integration', () => {
       auth,
       metadataIndex,
     })
-    await client.entity('Document_X', 'a').patch({ Date: new Date('2025-03-15T12:00:00Z') })
+    await client
+      .entity('Document_X', '00000000-0000-0000-0000-00000000000a')
+      .patch({ Date: new Date('2025-03-15T12:00:00Z') })
     // 12:00 UTC + 3h Moscow tz = 15:00 local naive
     expect(capturedBody).toMatchObject({ Date: '2025-03-15T15:00:00' })
   })
@@ -190,7 +225,7 @@ describe('transport write — transformDatesToWire integration', () => {
   it('serializes null Date to ONEC_EMPTY_DATE sentinel', async () => {
     let capturedBody: unknown
     server.use(
-      http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
+      http.patch(/Document_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         capturedBody = await request.json()
         return HttpResponse.json({ Ref_Key: 'a' })
       }),
@@ -201,14 +236,14 @@ describe('transport write — transformDatesToWire integration', () => {
       auth,
       metadataIndex,
     })
-    await client.entity('Document_X', 'a').patch({ Date: null })
+    await client.entity('Document_X', '00000000-0000-0000-0000-00000000000a').patch({ Date: null })
     expect(capturedBody).toMatchObject({ Date: '0001-01-01T00:00:00' })
   })
 
   it('converts Date via the value heuristic when no metadataIndex is loaded', async () => {
     let capturedBody: unknown
     server.use(
-      http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
+      http.patch(/Document_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         capturedBody = await request.json()
         return HttpResponse.json({ Ref_Key: 'a' })
       }),
@@ -221,7 +256,9 @@ describe('transport write — transformDatesToWire integration', () => {
     // No schema → value heuristic: Date → naive ISO in serverTimezone (the
     // old passthrough sent an ISO-Z string the server reads as a shifted
     // wall-clock time); null stays null (no sentinel without a schema).
-    await client.entity('Document_X', 'a').patch({ Date: new Date('2025-03-15T12:00:00Z'), Cleared: null })
+    await client
+      .entity('Document_X', '00000000-0000-0000-0000-00000000000a')
+      .patch({ Date: new Date('2025-03-15T12:00:00Z'), Cleared: null })
     expect(capturedBody).toMatchObject({ Date: '2025-03-15T15:00:00', Cleared: null })
   })
 
@@ -247,7 +284,7 @@ describe('transport write — transformDatesToWire integration', () => {
   it('leaves Date untouched without a schema when dateMode is string', async () => {
     let capturedBody: unknown
     server.use(
-      http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
+      http.patch(/Document_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         capturedBody = await request.json()
         return HttpResponse.json({ Ref_Key: 'a' })
       }),
@@ -260,33 +297,39 @@ describe('transport write — transformDatesToWire integration', () => {
     })
     // DataShape contract: in string mode the write path does NOT touch
     // Edm.DateTime values — a Date here is a user error, serialized as-is.
-    await client.entity('Document_X', 'a').patch({ Date: new Date('2025-03-15T12:00:00Z') })
+    await client
+      .entity('Document_X', '00000000-0000-0000-0000-00000000000a')
+      .patch({ Date: new Date('2025-03-15T12:00:00Z') })
     expect(capturedBody).toMatchObject({ Date: '2025-03-15T12:00:00.000Z' })
   })
 
   it('converts Date for an entity set missing from the loaded index (forward-compat)', async () => {
     let capturedBody: unknown
     server.use(
-      http.patch(/Document_New\(guid'a'\)/, async ({ request }) => {
+      http.patch(/Document_New\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         capturedBody = await request.json()
         return HttpResponse.json({ Ref_Key: 'a' })
       }),
     )
     const client = new ODataV3Client({ baseUrl, serverTimezone: 'Europe/Moscow', auth, metadataIndex })
-    await client.entity('Document_New', 'a').patch({ Date: new Date('2025-03-15T12:00:00Z') })
+    await client
+      .entity('Document_New', '00000000-0000-0000-0000-00000000000a')
+      .patch({ Date: new Date('2025-03-15T12:00:00Z') })
     expect(capturedBody).toMatchObject({ Date: '2025-03-15T15:00:00' })
   })
 
   it('converts Date in a field missing from the schema (newer server field)', async () => {
     let capturedBody: unknown
     server.use(
-      http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
+      http.patch(/Document_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         capturedBody = await request.json()
         return HttpResponse.json({ Ref_Key: 'a' })
       }),
     )
     const client = new ODataV3Client({ baseUrl, serverTimezone: 'Europe/Moscow', auth, metadataIndex })
-    await client.entity('Document_X', 'a').patch({ НоваяДата: new Date('2025-03-15T12:00:00Z') })
+    await client
+      .entity('Document_X', '00000000-0000-0000-0000-00000000000a')
+      .patch({ НоваяДата: new Date('2025-03-15T12:00:00Z') })
     expect(capturedBody).toMatchObject({ НоваяДата: '2025-03-15T15:00:00' })
   })
 })
@@ -309,7 +352,7 @@ describe('transport write — bigint serialization', () => {
   it('serializes bigint as the wire string WITH a loaded index (int64Mode bigint round-trip)', async () => {
     let rawBody: string | undefined
     server.use(
-      http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
+      http.patch(/Document_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         rawBody = await request.text()
         return HttpResponse.json({ Ref_Key: 'a' })
       }),
@@ -321,20 +364,22 @@ describe('transport write — bigint serialization', () => {
       metadataIndex: int64Index,
     })
     // Was: TypeError from JSON.stringify — bigint round-trip impossible.
-    await client.entity('Document_X', 'a').patch({ BigNum: 123456789012345678901234n })
+    await client
+      .entity('Document_X', '00000000-0000-0000-0000-00000000000a')
+      .patch({ BigNum: 123456789012345678901234n })
     expect(JSON.parse(rawBody ?? '')).toEqual({ BigNum: '123456789012345678901234' })
   })
 
   it('serializes bigint as the wire string without a metadataIndex', async () => {
     let rawBody: string | undefined
     server.use(
-      http.patch(/Document_X\(guid'a'\)/, async ({ request }) => {
+      http.patch(/Document_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         rawBody = await request.text()
         return HttpResponse.json({ Ref_Key: 'a' })
       }),
     )
     const client = new ODataV3Client({ baseUrl, serverTimezone: 'Europe/Moscow', auth })
-    await client.entity('Document_X', 'a').patch({ BigNum: 9007199254740993n })
+    await client.entity('Document_X', '00000000-0000-0000-0000-00000000000a').patch({ BigNum: 9007199254740993n })
     expect(JSON.parse(rawBody ?? '')).toEqual({ BigNum: '9007199254740993' })
   })
 })

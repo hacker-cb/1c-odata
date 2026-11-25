@@ -16,11 +16,11 @@ describe('readStream', () => {
     server.use(
       // NOTE: regex matcher — MSW's path-to-regexp interprets `(` in string
       // templates as parameter syntax, so a string template never matches a
-      // URL containing parens (e.g. `Catalog_Файлы(guid'g')`). Cyrillic
+      // URL containing parens (e.g. `Catalog_Файлы(guid'00000000-0000-0000-0000-00000000000a')`). Cyrillic
       // segment names are URL-encoded by `buildV3KeyUrl`, so the regex is
       // matched against the encoded form.
       http.get(
-        /Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(guid'g'\)\/%D0%A4%D0%B0%D0%B9%D0%BB%D0%A5%D1%80%D0%B0%D0%BD%D0%B8%D0%BB%D0%B8%D1%89%D0%B5\/\$value/,
+        /Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(guid'00000000-0000-0000-0000-00000000000a'\)\/%D0%A4%D0%B0%D0%B9%D0%BB%D0%A5%D1%80%D0%B0%D0%BD%D0%B8%D0%BB%D0%B8%D1%89%D0%B5\/\$value/,
         () => {
           return new HttpResponse(new Uint8Array([0xff, 0xd8, 0xff, 0xe0]), {
             status: 200,
@@ -30,7 +30,7 @@ describe('readStream', () => {
       ),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    const stream = await c.entity('Catalog_Файлы', 'g').readStream('ФайлХранилище')
+    const stream = await c.entity('Catalog_Файлы', '00000000-0000-0000-0000-00000000000a').readStream('ФайлХранилище')
     expect(stream.contentType).toBe('image/jpeg')
     const reader = stream.body.getReader()
     const chunk = await reader.read()
@@ -40,15 +40,18 @@ describe('readStream', () => {
   it('readStream surfaces server contentType + body even for empty payload', async () => {
     // Server explicitly sends application/octet-stream and a 1-byte payload.
     server.use(
-      http.get(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(guid'g'\)\/X\/\$value/, () => {
-        return new HttpResponse(new Uint8Array([0]), {
-          status: 200,
-          headers: { 'Content-Type': 'application/octet-stream' },
-        })
-      }),
+      http.get(
+        /Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(guid'00000000-0000-0000-0000-00000000000a'\)\/X\/\$value/,
+        () => {
+          return new HttpResponse(new Uint8Array([0]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/octet-stream' },
+          })
+        },
+      ),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    const stream = await c.entity('Catalog_Файлы', 'g').readStream('X')
+    const stream = await c.entity('Catalog_Файлы', '00000000-0000-0000-0000-00000000000a').readStream('X')
     expect(stream.contentType).toBe('application/octet-stream')
     expect(stream.body).toBeDefined()
   })
@@ -60,16 +63,19 @@ describe('writeStream', () => {
     server.use(
       // NOTE: regex matcher — see readStream above for rationale. The Cyrillic
       // entity-set name is URL-encoded by `buildV3KeyUrl`.
-      http.patch(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(guid'g'\)/, async ({ request }) => {
-        received = await request.json()
-        return HttpResponse.json({
-          'odata.metadata': `${baseUrl}/$metadata#Catalog_Файлы/@Element`,
-          Ref_Key: 'g',
-        })
-      }),
+      http.patch(
+        /Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(guid'00000000-0000-0000-0000-00000000000a'\)/,
+        async ({ request }) => {
+          received = await request.json()
+          return HttpResponse.json({
+            'odata.metadata': `${baseUrl}/$metadata#Catalog_Файлы/@Element`,
+            Ref_Key: 'g',
+          })
+        },
+      ),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    await c.entity('Catalog_Файлы', 'g').writeStream('ФайлХранилище', {
+    await c.entity('Catalog_Файлы', '00000000-0000-0000-0000-00000000000a').writeStream('ФайлХранилище', {
       contentType: 'image/jpeg',
       base64Data: 'AQID',
     })

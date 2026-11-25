@@ -41,7 +41,7 @@ describe('V3EntitySetHandle.create', () => {
       // NOTE: regex matcher — MSW's path-to-regexp interprets `(` in string
       // templates as parameter syntax, so a string template never matches a
       // URL containing parens (e.g. `Catalog_X(guid'...')`).
-      http.get(/Catalog_X\(guid'g'\)/, () =>
+      http.get(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, () =>
         HttpResponse.json({
           'odata.metadata': `${baseUrl}/$metadata#Catalog_X/@Element`,
           Ref_Key: 'g',
@@ -50,7 +50,9 @@ describe('V3EntitySetHandle.create', () => {
       ),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    const r = await c.entity<{ Ref_Key: string; Code: string }>('Catalog_X', 'g').get()
+    const r = await c
+      .entity<{ Ref_Key: string; Code: string }>('Catalog_X', '00000000-0000-0000-0000-00000000000a')
+      .get()
     expect(r.Code).toBe('B')
   })
 })

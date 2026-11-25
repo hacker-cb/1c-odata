@@ -2,8 +2,7 @@
 import { InvalidArgumentError } from './errors.js'
 import { formatNumberLiteral } from './format-number.js'
 import { formatInZone } from './timezone.js'
-
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+import { GUID_RE, NAME_RE } from './url-builder.js'
 
 /**
  * Empty placeholder type — used as the default `TFunctions` for `ODataV3Client`
@@ -77,9 +76,6 @@ function formatValue(v: unknown, serverTimezone: string, argument: string): stri
   // produce a visibly stringified value (`'[object Object]'`) instead of a bare one.
   return `'${String(v).replace(/'/g, "''")}'`
 }
-
-/** A 1С metadata name — an entity set or a function: letters (Cyrillic included), digits, `_`. */
-const NAME_RE = /^[\p{L}\p{N}_]+$/u
 
 /**
  * One path segment for a metadata name. Anything but a plain name — a `/`, `?`,

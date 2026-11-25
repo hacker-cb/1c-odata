@@ -190,7 +190,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
       inputSchema: {
         connection: z.string().describe('Connection name'),
         entitySet: z.string().describe('Entity set, e.g. Catalog_Валюты'),
-        key: z.string().describe('Entity key — usually the Ref_Key GUID'),
+        key: z.string().describe('Entity key — the Ref_Key GUID (8-4-4-4-12 hex); anything else is rejected'),
         compact: z
           .boolean()
           .optional()

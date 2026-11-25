@@ -115,3 +115,35 @@ describe('V3 URL builder — entity set as one segment', () => {
     )
   })
 })
+
+describe('V3 URL builder — entity keys cannot rewrite the path', () => {
+  const base = 'http://h/odata'
+  const G = '11111111-2222-3333-4444-555555555555'
+
+  it.each([
+    ['a path-escaping string', "x')/../../hs/svc?a=('"],
+    ['a non-GUID string', 'abc'],
+    ['an empty string', ''],
+  ])('rejects %s as a key', (_name, key) => {
+    expect(() => buildV3KeyUrl(base, 'Catalog_X', key)).toThrow(InvalidArgumentError)
+  })
+
+  it.each([
+    ['a field with a slash', { 'Recorder/../x': G }],
+    ['a field with a quote', { "A')": G }],
+    ['an empty composite key', {}],
+  ])('rejects %s', (_name, key) => {
+    expect(() => buildV3KeyUrl(base, 'InformationRegister_X', key as Record<string, string>)).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
+  it('keeps a GUID key and a composite key of 1С names', () => {
+    expect(buildV3KeyUrl(base, 'Catalog_X', G)).toBe(
+      `${base}/Catalog_X(guid'${G}')?%24format=application%2Fjson%3Bodata%3Dnometadata`,
+    )
+    expect(buildV3KeyUrl(base, 'InformationRegister_X', { Recorder: G, Валюта: "a/b'c" })).toContain(
+      `(Recorder=guid'${G}',Валюта='a%2Fb''c')`,
+    )
+  })
+})

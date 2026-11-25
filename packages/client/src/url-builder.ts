@@ -8,6 +8,12 @@ import type { QueryBuilder } from './query/builder.js'
  */
 export type EntityKey = string | Record<string, string>
 
+/** A GUID in the 8-4-4-4-12 hex form — the only string key 1С entities take (`Ref_Key`). @internal */
+export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** A 1С metadata name — an entity set, a function, a key field: letters (Cyrillic included), digits, `_`. @internal */
+export const NAME_RE = /^[\p{L}\p{N}_]+$/u
+
 /**
  * Encode a caller-supplied path (an entity set, or a set path such as
  * `Register_X/Balance(…)`) as ONE segment. A dot segment or an empty name has
@@ -18,15 +24,14 @@ export type EntityKey = string | Record<string, string>
  * @internal
  */
 export function encodeSegment(name: string, argument = 'entitySet'): string {
-  const reject = (): never => {
+  if (typeof name !== 'string' || name === '' || name === '.' || name === '..') {
     throw new InvalidArgumentError(`${argument} must be a name, not ${String(name)}`, { argument, received: name })
   }
-  if (typeof name !== 'string' || name === '' || name === '.' || name === '..') return reject()
   try {
     return encodeURIComponent(name)
   } catch {
     // A lone UTF-16 surrogate: encodeURIComponent throws a raw URIError.
-    return reject()
+    throw new InvalidArgumentError(`${argument} must be a name, not ${String(name)}`, { argument, received: name })
   }
 }
 
@@ -105,19 +110,54 @@ export function normalizeBaseUrl(url: string): string {
 
 /**
  * Format a key as it appears inside `(...)`:
- *   string → `guid'...'` (assumes Guid)
- *   object → `field1=guid'...',field2='string'`
+ *   string → `guid'...'` — must be a GUID (a 1С `Ref_Key`)
+ *   object → `field1=guid'...',field2='string'` — field names must be 1С names
+ * Anything else is an `InvalidArgumentError`: a key goes into the URL path, so a
+ * caller-supplied string (an MCP `get_entity` argument, say) with `'`, `)` or
+ * `/` must not rewrite the path the request — with its credentials — reaches.
  */
 export function formatKey(key: EntityKey): string {
-  if (typeof key === 'string') return `guid'${key}'`
-  return Object.entries(key)
-    .map(([k, v]) => `${k}=${formatKeyValue(v)}`)
+  if (typeof key === 'string') {
+    if (!GUID_RE.test(key)) {
+      throw new InvalidArgumentError('Entity key must be a GUID (8-4-4-4-12 hex form) or a composite-key object', {
+        argument: 'key',
+        received: key,
+      })
+    }
+    return `guid'${key}'`
+  }
+  const entries = typeof key === 'object' && key !== null ? Object.entries(key) : []
+  if (entries.length === 0) {
+    throw new InvalidArgumentError('Entity key must be a GUID or a non-empty composite-key object', {
+      argument: 'key',
+      received: key,
+    })
+  }
+  return entries
+    .map(([k, v]) => {
+      if (!NAME_RE.test(k)) {
+        throw new InvalidArgumentError(
+          `Composite-key field must be a 1С name (letters, digits, _), got ${JSON.stringify(k)}`,
+          {
+            argument: 'key',
+            received: k,
+          },
+        )
+      }
+      if (typeof v !== 'string') {
+        throw new InvalidArgumentError(`Composite-key field ${k} must be a string value`, {
+          argument: 'key',
+          received: v,
+        })
+      }
+      return `${k}=${formatKeyValue(v)}`
+    })
     .join(',')
 }
 
 function formatKeyValue(v: string): string {
   // GUID-shaped: quote as guid. Hex+hyphens only — URL-safe by construction.
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) return `guid'${v}'`
+  if (GUID_RE.test(v)) return `guid'${v}'`
   // Otherwise treat as string literal. Two-step encoding: OData apostrophe
   // doubling first (so a literal `'` inside the value survives parsing), then
   // URL-encode the inner content. `encodeURIComponent` percent-encodes the

@@ -49,7 +49,7 @@ describe('V3EntityHandle.put', () => {
       // NOTE: regex matcher — MSW's path-to-regexp interprets `(` in string
       // templates as parameter syntax, so a string template never matches a
       // URL containing parens (e.g. `Catalog_X(guid'...')`).
-      http.put(/Catalog_X\(guid'g'\)/, async ({ request }) => {
+      http.put(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         receivedMethod = request.method
         receivedBody = await request.json()
         return HttpResponse.json({
@@ -63,7 +63,10 @@ describe('V3EntityHandle.put', () => {
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     const r = await c
-      .entity<{ Ref_Key: string; Code: string; Description: string; DataVersion: string }>('Catalog_X', 'g')
+      .entity<{ Ref_Key: string; Code: string; Description: string; DataVersion: string }>(
+        'Catalog_X',
+        '00000000-0000-0000-0000-00000000000a',
+      )
       .put({ Ref_Key: 'g', Code: 'A', Description: 'B', DataVersion: 'v1' })
     expect(receivedMethod).toBe('PUT')
     expect(r.Description).toBe('B')
@@ -77,10 +80,13 @@ describe('V3EntityHandle.delete', () => {
       // NOTE: regex matcher — MSW's path-to-regexp interprets `(` in string
       // templates as parameter syntax, so a string template never matches a
       // URL containing parens (e.g. `Catalog_X(guid'...')`).
-      http.delete(/Catalog_X\(guid'g'\)/, () => new HttpResponse(null, { status: 204 })),
+      http.delete(
+        /Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/,
+        () => new HttpResponse(null, { status: 204 }),
+      ),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    await expect(c.entity('Catalog_X', 'g').delete()).resolves.toBeUndefined()
+    await expect(c.entity('Catalog_X', '00000000-0000-0000-0000-00000000000a').delete()).resolves.toBeUndefined()
   })
 })
 
@@ -91,7 +97,7 @@ describe('V3EntityHandle.markForDeletion / unmarkForDeletion', () => {
       // NOTE: regex matcher — MSW's path-to-regexp interprets `(` in string
       // templates as parameter syntax, so a string template never matches a
       // URL containing parens (e.g. `Catalog_X(guid'...')`).
-      http.patch(/Catalog_X\(guid'g'\)/, async ({ request }) => {
+      http.patch(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         received = await request.json()
         return HttpResponse.json({
           'odata.metadata': `${baseUrl}/$metadata#Catalog_X/@Element`,
@@ -101,7 +107,9 @@ describe('V3EntityHandle.markForDeletion / unmarkForDeletion', () => {
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    const r = await c.entity<{ Ref_Key: string; DeletionMark: boolean }>('Catalog_X', 'g').markForDeletion()
+    const r = await c
+      .entity<{ Ref_Key: string; DeletionMark: boolean }>('Catalog_X', '00000000-0000-0000-0000-00000000000a')
+      .markForDeletion()
     expect(received).toEqual({ DeletionMark: true })
     expect(r.DeletionMark).toBe(true)
   })
@@ -112,7 +120,7 @@ describe('V3EntityHandle.markForDeletion / unmarkForDeletion', () => {
       // NOTE: regex matcher — MSW's path-to-regexp interprets `(` in string
       // templates as parameter syntax, so a string template never matches a
       // URL containing parens (e.g. `Catalog_X(guid'...')`).
-      http.patch(/Catalog_X\(guid'g'\)/, async ({ request }) => {
+      http.patch(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         received = await request.json()
         return HttpResponse.json({
           'odata.metadata': `${baseUrl}/$metadata#Catalog_X/@Element`,
@@ -122,7 +130,9 @@ describe('V3EntityHandle.markForDeletion / unmarkForDeletion', () => {
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    const r = await c.entity<{ Ref_Key: string; DeletionMark: boolean }>('Catalog_X', 'g').unmarkForDeletion()
+    const r = await c
+      .entity<{ Ref_Key: string; DeletionMark: boolean }>('Catalog_X', '00000000-0000-0000-0000-00000000000a')
+      .unmarkForDeletion()
     expect(received).toEqual({ DeletionMark: false })
     expect(r.DeletionMark).toBe(false)
   })
@@ -133,7 +143,7 @@ describe('V3EntityHandle.withHeader', () => {
     let dataLoadMode: string | null = null
     server.use(
       // NOTE: regex matcher — see CRUD describes above for rationale.
-      http.patch(/Catalog_X\(guid'g'\)/, async ({ request }) => {
+      http.patch(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         dataLoadMode = request.headers.get('1c_odata-dataloadmode')
         return HttpResponse.json({
           'odata.metadata': `${baseUrl}/$metadata#Catalog_X/@Element`,
@@ -143,7 +153,10 @@ describe('V3EntityHandle.withHeader', () => {
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    await c.entity('Catalog_X', 'g').withHeader('1C_OData-DataLoadMode', 'true').patch({ Code: 'A' })
+    await c
+      .entity('Catalog_X', '00000000-0000-0000-0000-00000000000a')
+      .withHeader('1C_OData-DataLoadMode', 'true')
+      .patch({ Code: 'A' })
     expect(dataLoadMode).toBe('true')
   })
 
@@ -151,7 +164,7 @@ describe('V3EntityHandle.withHeader', () => {
     let h1: string | null = null
     let h2: string | null = null
     server.use(
-      http.patch(/Catalog_X\(guid'g'\)/, async ({ request }) => {
+      http.patch(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async ({ request }) => {
         h1 = request.headers.get('x-custom-1')
         h2 = request.headers.get('x-custom-2')
         return HttpResponse.json({
@@ -161,7 +174,11 @@ describe('V3EntityHandle.withHeader', () => {
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    await c.entity('Catalog_X', 'g').withHeader('X-Custom-1', 'a').withHeader('X-Custom-2', 'b').patch({})
+    await c
+      .entity('Catalog_X', '00000000-0000-0000-0000-00000000000a')
+      .withHeader('X-Custom-1', 'a')
+      .withHeader('X-Custom-2', 'b')
+      .patch({})
     expect(h1).toBe('a')
     expect(h2).toBe('b')
   })
