@@ -383,6 +383,18 @@ describe('V3 parser — date-times parseInZone used to drop or shift (#193)', ()
     expect(parseV3Single<{ D: unknown }>(JSON.stringify({ D: ONEC_EMPTY_DATE }), { serverTimezone: TZ }).D).toBeNull()
   })
 
+  it('takes only the exact empty date for null — not a value it merely starts', () => {
+    expect(() => typed([{ Date: '0001-01-01T00:00:00garbage' }])).toThrow(ParseError)
+    const r = parseV3Single<{ D: unknown }>(JSON.stringify({ D: '0001-01-01T00:00:00.250' }), { serverTimezone: 'UTC' })
+    expect((r.D as Date).toISOString()).toBe('0001-01-01T00:00:00.250Z')
+  })
+
+  it('fails a schema-typed Edm.DateTime that is not a string or null', () => {
+    expect(() => typed([{ Date: 20260315 }])).toThrow(
+      'Edm.DateTime field Date: expected a date-time string or null, got number',
+    )
+  })
+
   it('reads a time a daylight-saving switch skips moved forward by the gap', () => {
     const r = typed([{ Date: '2018-11-04T00:30:00' }], 'America/Sao_Paulo')
     // 00:30 does not exist that night; 01:30 -02:00 does.
@@ -392,7 +404,7 @@ describe('V3 parser — date-times parseInZone used to drop or shift (#193)', ()
   it('fails a schema-typed Edm.DateTime that names no real date with a ParseError naming the field', () => {
     expect(() => typed([{ Date: '2026-02-30T00:00:00' }])).toThrow(ParseError)
     expect(() => typed([{ Date: '2026-02-30T00:00:00' }])).toThrow(
-      /Edm\.DateTime field Date holds "2026-02-30T00:00:00"/,
+      'Edm.DateTime field Date: Invalid naive date-time "2026-02-30T00:00:00"',
     )
   })
 

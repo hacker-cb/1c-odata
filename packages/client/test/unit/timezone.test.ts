@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { InvalidArgumentError } from '../../src/errors.js'
 import { formatInZone, parseInZone } from '../../src/timezone.js'
@@ -111,8 +112,21 @@ describe('parseInZone — years, calendar and daylight saving (#193)', () => {
     expect(parseInZone('2025-01-10 15:30:00', 'Europe/Moscow').toISOString()).toBe('2025-01-10T12:30:00.000Z')
   })
 
-  it('rejects a zone that is not an IANA timezone', () => {
+  it('rejects a zone that is not an IANA timezone, and no zone rather than taking the host’s', () => {
     expect(() => parseInZone('2025-01-10T15:30:00', 'Mars/Base')).toThrow(InvalidArgumentError)
+    expect(() => parseInZone('2025-01-10T15:30:00', undefined as unknown as string)).toThrow(
+      'An IANA timezone is required',
+    )
+    expect(() => formatInZone(new Date(0), '')).toThrow('An IANA timezone is required')
+  })
+
+  it('takes null options as the defaults', () => {
+    const opts = null as unknown as undefined
+    expect(parseInZone('2025-03-30T02:30:00', 'Europe/Berlin', opts).toISOString()).toBe('2025-03-30T01:30:00.000Z')
+  })
+
+  it('shows at most 64 characters of a rejected value', () => {
+    expect(() => parseInZone('x'.repeat(1000), 'UTC')).toThrow(`"${'x'.repeat(64)}…"`)
   })
 
   it.each([
@@ -157,6 +171,15 @@ describe('formatInZone — 1С’s year range (#193)', () => {
   it('writes a year below 1000 with its leading zeros', () => {
     expect(formatInZone(new Date('0999-05-01T00:00:00Z'), 'UTC')).toBe('0999-05-01T00:00:00')
     expect(formatInZone(new Date('0001-01-01T00:00:00Z'), 'UTC')).toBe('0001-01-01T00:00:00')
+  })
+
+  it('formats a Date from another realm (node:vm)', () => {
+    const foreign = runInNewContext("new Date('2025-01-10T12:30:00Z')") as Date
+    expect(formatInZone(foreign, 'Europe/Moscow')).toBe('2025-01-10T15:30:00')
+  })
+
+  it('rejects a Date whose wall-clock in the zone is past the dates JS can hold', () => {
+    expect(() => formatInZone(new Date(8_640_000_000_000_000), 'Etc/GMT-1')).toThrow('past the dates JS can hold')
   })
 
   it('rejects an invalid Date and a year outside 0001–9999 in the zone', () => {

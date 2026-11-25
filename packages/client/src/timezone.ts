@@ -2,7 +2,7 @@ import { InvalidArgumentError } from './errors.js'
 
 /**
  * How `parseInZone` places a wall-clock time a daylight-saving switch makes
- * ambiguous or skips — the names are those of `Temporal`'s `disambiguation`:
+ * ambiguous or skips:
  *
  * - `'compatible'` (default) — a time the zone passes twice (the clocks go
  *   back) is the EARLIER instant; a time the zone skips (the clocks go forward)
@@ -11,7 +11,11 @@ import { InvalidArgumentError } from './errors.js'
  *   real calendar date: 1С stores a wall-clock time without checking it against
  *   daylight saving, so a value it returns always has an instant.
  * - `'reject'` — a skipped time is an `InvalidArgumentError`; a time passed
- *   twice is still the earlier instant.
+ *   twice is still the earlier instant. Unlike `Temporal`'s `'reject'`, which
+ *   refuses an ambiguous time as well: this one refuses only a time that has
+ *   no instant.
+ *
+ * `'compatible'` is `Temporal`'s rule of that name.
  *
  * @public
  */
@@ -42,6 +46,8 @@ const MAX_YEAR = 9999
 const YEAR_RANGE = '0001–9999'
 
 const formatters = new Map<string, Intl.DateTimeFormat>()
+/** Formatters kept at most — one per zone spelling seen; a caller cycling through more starts the cache over. */
+const MAX_FORMATTERS = 64
 
 /**
  * One formatter per zone. `hourCycle: 'h23'` keeps midnight `00` (not `24`);
@@ -49,6 +55,13 @@ const formatters = new Map<string, Intl.DateTimeFormat>()
  * WITHOUT leading zeros (`999`), so it is read as a number, never as a string.
  */
 function formatterFor(zone: string): Intl.DateTimeFormat {
+  // No zone is not the host's zone: `Intl` would silently take the process's.
+  if (typeof zone !== 'string' || zone === '') {
+    throw new InvalidArgumentError(`An IANA timezone is required, got ${JSON.stringify(zone) ?? String(zone)}`, {
+      argument: 'zone',
+      received: zone,
+    })
+  }
   let fmt = formatters.get(zone)
   if (fmt === undefined) {
     try {
@@ -69,6 +82,7 @@ function formatterFor(zone: string): Intl.DateTimeFormat {
         received: zone,
       })
     }
+    if (formatters.size >= MAX_FORMATTERS) formatters.clear()
     formatters.set(zone, fmt)
   }
   return fmt
@@ -103,11 +117,13 @@ function offsetAt(instant: number, zone: string): number {
   return wall - (instant - (((instant % 1000) + 1000) % 1000))
 }
 
+/** At most this many characters of a rejected value go into an error message. */
+const SHOWN_CHARS = 64
+
 function invalidNaive(naive: unknown, why: string): InvalidArgumentError {
-  return new InvalidArgumentError(
-    `Invalid naive date-time ${typeof naive === 'string' ? JSON.stringify(naive) : String(naive)}: ${why}`,
-    { argument: 'naive', received: naive },
-  )
+  const text = typeof naive === 'string' ? naive : String(naive)
+  const shown = JSON.stringify(text.length > SHOWN_CHARS ? `${text.slice(0, SHOWN_CHARS)}…` : text)
+  return new InvalidArgumentError(`Invalid naive date-time ${shown}: ${why}`, { argument: 'naive', received: naive })
 }
 
 /**
@@ -127,7 +143,7 @@ function invalidNaive(naive: unknown, why: string): InvalidArgumentError {
  *   the zone skips.
  * @public
  */
-export function parseInZone(naive: string, zone: string, opts: ParseInZoneOptions = {}): Date {
+export function parseInZone(naive: string, zone: string, opts?: ParseInZoneOptions): Date {
   const m = typeof naive === 'string' ? NAIVE_RE.exec(naive) : null
   if (m === null) throw invalidNaive(naive, 'expected YYYY-MM-DDTHH:mm[:ss[.fff]] without an offset')
   const [, y, mo, d, hh, mi, ss = '00', frac] = m
@@ -146,17 +162,18 @@ export function parseInZone(naive: string, zone: string, opts: ParseInZoneOption
     throw invalidNaive(naive, 'no such calendar date or time of day')
   }
   // Read the wall-clock as UTC, then place it by the offsets in force a day on
-  // either side — before and after any switch near it. An offset that maps the
-  // wall-clock back onto itself is a real reading of it: two such are a time
-  // passed twice (the earlier wins), none a time the zone skips.
+  // either side — before and after any switch near it — and those in force at
+  // the instants they give, which catch an offset between two switches close
+  // together. An offset that maps the wall-clock back onto itself is a real
+  // reading of it: two such are a time passed twice (the earlier wins), none a
+  // time the zone skips.
   const before = offsetAt(wall - DAY_MS, zone)
   const after = offsetAt(wall + DAY_MS, zone)
-  const readings = [...new Set([before, after])]
-    .map((offset) => wall - offset)
-    .filter((t) => wall - t === offsetAt(t, zone))
+  const offsets = new Set([before, after, offsetAt(wall - before, zone), offsetAt(wall - after, zone)])
+  const readings = [...offsets].map((offset) => wall - offset).filter((t) => wall - t === offsetAt(t, zone))
   let instant: number
   if (readings.length > 0) instant = Math.min(...readings)
-  else if (opts.disambiguation === 'reject') {
+  else if (opts?.disambiguation === 'reject') {
     throw invalidNaive(naive, `a wall-clock time a daylight-saving switch skips in ${zone}`)
   } else {
     // 'compatible': the offset before the switch moves the time forward by the gap.
@@ -194,15 +211,22 @@ function parseFractionMs(frac: string | undefined): number {
  * @public
  */
 export function formatInZone(date: Date, zone: string): string {
-  const instant = date instanceof Date ? date.getTime() : Number.NaN
+  // Date.prototype.getTime reads any realm's Date (a `node:vm` one included) and throws for anything else.
+  let instant: number
+  try {
+    instant = Date.prototype.getTime.call(date)
+  } catch {
+    instant = Number.NaN
+  }
   if (Number.isNaN(instant)) {
     throw new InvalidArgumentError('formatInZone needs a valid Date', { argument: 'date', received: date })
   }
   const wall = new Date(instant + offsetAt(instant, zone))
   const year = wall.getUTCFullYear()
-  if (year < MIN_YEAR || year > MAX_YEAR) {
+  // Negated, so a wall-clock past the range `Date` holds (NaN) fails too.
+  if (!(year >= MIN_YEAR && year <= MAX_YEAR)) {
     throw new InvalidArgumentError(
-      `Date ${date.toISOString()} falls in year ${year} in ${zone}, outside 1С's ${YEAR_RANGE}`,
+      `Date ${new Date(instant).toISOString()} falls ${Number.isNaN(year) ? 'past the dates JS can hold' : `in year ${year}`} in ${zone}, outside 1С's ${YEAR_RANGE}`,
       { argument: 'date', received: date },
     )
   }

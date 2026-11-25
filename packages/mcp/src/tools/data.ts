@@ -9,7 +9,7 @@ import type {
   UntypedEntity,
   V3QueryBuilder,
 } from '@1c-odata/client'
-import { InvalidArgumentError, parseInZone } from '@1c-odata/client'
+import { formatInZone, InvalidArgumentError, parseInZone } from '@1c-odata/client'
 import { raw } from '@1c-odata/client/filter'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -404,18 +404,21 @@ function toDate(
   const [hh, mi, ss] = time === undefined ? bareDay : [time, minute, second]
   const local = `${y}-${mo}-${d}T${hh}:${mi}:${ss}`
   let date: Date | undefined
-  if (zone !== undefined) date = new Date(`${local}${frac}${zone}`)
-  else {
+  if (zone !== undefined) {
+    date = new Date(`${local}${frac}${zone}`)
+    // The instant must also be a 1С date on the server, as it is sent there in serverTimezone.
+    if (!Number.isNaN(date.getTime()) && !isServerDate(date, serverTimezone)) date = undefined
+  } else {
     date = strictInZone(`${local}${frac}`, serverTimezone)
-    // A bare day whose midnight a DST switch skips (e.g. America/Sao_Paulo, 2018-11-04) starts at 01:00.
+    // A bare day whose midnight a DST switch skips starts at the switch (e.g. America/Sao_Paulo, 2018-11-04: 01:00).
     if (date === undefined && time === undefined && bareDateAs === 'start') {
-      date = strictInZone(`${y}-${mo}-${d}T01:00:00`, serverTimezone)
+      date = switchedDayStart(`${y}-${mo}-${d}`, serverTimezone)
     }
   }
   if (date === undefined || Number.isNaN(date.getTime())) {
     throw new Error(
       `Invalid ISO date: "${iso}" (no such instant: a local time a daylight-saving switch skips in ${serverTimezone}, ` +
-        'an impossible offset, or the year 0000)',
+        `an impossible offset, or a year outside 0001–9999 in ${serverTimezone})`,
     )
   }
   return date
@@ -433,6 +436,37 @@ function strictInZone(naive: string, zone: string): Date | undefined {
     return parseInZone(naive, zone, { disambiguation: 'reject' })
   } catch (err) {
     if (err instanceof InvalidArgumentError && err.argument === 'naive') return undefined
+    throw err
+  }
+}
+
+/**
+ * The first instant of a server day whose midnight a daylight-saving switch
+ * skips: the switch itself — 01:00 in America/Sao_Paulo on 2018-11-04, 00:15
+ * in Asia/Kathmandu on 1986-01-01. `undefined` where the zone skips the whole
+ * day (Pacific/Apia, 2011-12-30).
+ */
+function switchedDayStart(day: string, zone: string): Date | undefined {
+  // 'compatible' moves midnight forward by the gap: on that day (or past it), never before the switch.
+  let hi = parseInZone(`${day}T00:00:00`, zone).getTime()
+  if (formatInZone(new Date(hi), zone).slice(0, 10) !== day) return undefined
+  // A day earlier is on the previous day; narrow to the first second whose wall-clock is on `day`.
+  let lo = hi - 86_400_000
+  while (hi - lo > 1000) {
+    const mid = lo + Math.floor((hi - lo) / 2000) * 1000
+    if (formatInZone(new Date(mid), zone).slice(0, 10) >= day) hi = mid
+    else lo = mid
+  }
+  return new Date(hi)
+}
+
+/** Whether `date` reads as a 1С date (years 0001–9999) in the server's zone. */
+function isServerDate(date: Date, zone: string): boolean {
+  try {
+    formatInZone(date, zone)
+    return true
+  } catch (err) {
+    if (err instanceof InvalidArgumentError && err.argument === 'date') return false
     throw err
   }
 }

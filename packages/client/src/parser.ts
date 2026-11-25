@@ -158,6 +158,10 @@ function mapValue(
 ): unknown {
   const propType = schema?.properties[fieldName]?.type
   if (typeof v === 'string') return convertStringValue(v, fieldName, propType, shape, opts)
+  // A schema-typed date-time is a string or null on the wire; anything else would reach a `Date`-typed field as-is.
+  if (propType === 'Edm.DateTime' && v !== null) {
+    throw new ParseError(`Edm.DateTime field ${fieldName}: expected a date-time string or null, got ${typeof v}`)
+  }
   // Nested entities (tabular parts, ComplexTypes) are parsed with THEIR OWN
   // schema, resolved from the field's declared type — not the parent's. Without
   // this, a nested `Edm.Int64` / `Edm.DateTime` / ValueStorage field is looked
@@ -202,7 +206,7 @@ function convertStringValue(
   // full design rationale.
   if (propType === 'Edm.DateTime' || (propType === undefined && DATETIME_FIELD.test(v))) {
     if (shape?.dateMode === 'string') return v
-    if (v.startsWith(ONEC_EMPTY_DATE)) return null
+    if (v === ONEC_EMPTY_DATE) return null
     return parseDateTime(v, fieldName, propType !== undefined, opts.serverTimezone)
   }
   return v
@@ -223,12 +227,7 @@ function parseDateTime(v: string, fieldName: string, typed: boolean, serverTimez
   } catch (err) {
     if (!(err instanceof InvalidArgumentError) || err.argument !== 'naive') throw err
     if (!typed) return v
-    throw new ParseError(
-      `Edm.DateTime field ${fieldName} holds ${JSON.stringify(v)}, not a date-time: ${err.message}`,
-      {
-        cause: err,
-      },
-    )
+    throw new ParseError(`Edm.DateTime field ${fieldName}: ${err.message}`, { cause: err })
   }
 }
 
