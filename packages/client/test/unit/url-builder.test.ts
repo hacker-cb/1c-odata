@@ -179,6 +179,22 @@ describe('V3 URL builder — entity keys cannot rewrite the path', () => {
     )
   })
 
+  it('writes a Date key before year 1000 with four digits, and refuses one outside 0001–9999 (#194)', () => {
+    expect(keyUrl(base, 'InformationRegister_X', { Period: new Date('0999-04-30T21:29:43Z') })).toContain(
+      "(Period=datetime'0999-05-01T00:00:00')", // Moscow local mean time then: +02:30:17
+    )
+    expect(() => keyUrl(base, 'InformationRegister_X', { Period: new Date('9999-12-31T22:00:00Z') })).toThrow(
+      'Composite-key field Period: Date 9999-12-31T22:00:00.000Z falls in year 10000',
+    )
+    try {
+      keyUrl(base, 'InformationRegister_X', { Period: new Date('0000-06-01T00:00:00Z') })
+      expect.unreachable()
+    } catch (err) {
+      expect(err).toBeInstanceOf(InvalidArgumentError)
+      expect((err as InvalidArgumentError).argument).toBe('key')
+    }
+  })
+
   it('writes a Date key in the connection serverTimezone, milliseconds kept', () => {
     const period = new Date('2025-07-01T09:30:00.250Z')
     expect(buildV3KeyUrl(base, 'InformationRegister_X', { Period: period }, 'America/New_York')).toContain(

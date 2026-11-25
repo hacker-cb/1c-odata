@@ -259,7 +259,19 @@ function formatKeyValue(field: string, v: unknown, serverTimezone: string): stri
       })
     }
     // Digits, `-`, `:`, `.` and `T` — `:` is a legal path character, written raw as 1С writes it in its own links.
-    return `datetime'${formatInZone(new Date(instant), serverTimezone)}'`
+    let wall: string
+    try {
+      wall = formatInZone(new Date(instant), serverTimezone)
+    } catch (err) {
+      // A year outside 1С's 0001–9999 in the zone: name the key field, as every other key error does.
+      if (!(err instanceof InvalidArgumentError) || err.argument !== 'date') throw err
+      throw new InvalidArgumentError(`Composite-key field ${field}: ${err.message}`, {
+        argument: 'key',
+        received: v,
+        cause: err,
+      })
+    }
+    return `datetime'${wall}'`
   }
   throw new InvalidArgumentError(`Composite-key field ${field} must be a string, number, bigint, boolean or Date`, {
     argument: 'key',
