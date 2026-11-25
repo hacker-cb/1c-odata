@@ -72,7 +72,9 @@ export class V3EntityHandle<T> {
    */
   private keyNow(): EntityKey {
     const key = this.key
-    return typeof key === 'object' && key !== null && !Array.isArray(key) ? { ...key } : key
+    if (typeof key !== 'object' || key === null || Array.isArray(key)) return key
+    // A Date value is itself mutable: copy it too, or a setTime() in between would still split the two requests.
+    return Object.fromEntries(Object.entries(key).map(([k, v]) => [k, v instanceof Date ? new Date(v.getTime()) : v]))
   }
 
   /**

@@ -9,13 +9,18 @@ import { formatInZone } from './timezone.js'
  * key field → value for entities with several key fields (registers, tabular
  * rows). A composite value is written by its JS type, as the 1С docs show it:
  * a GUID string as `guid'…'`, any other string as a quoted literal, a `number`
- * or `bigint` bare (`LineNumber=1`), a `Date` as `datetime'…'` in the
- * connection's `serverTimezone` (`Period=datetime'2025-01-01T00:00:00'`) — so
- * a `Period` read back from a record keys it as it came.
+ * or `bigint` bare (`LineNumber=1`), a `boolean` as `true` / `false`, a `Date`
+ * as `datetime'…'` in the connection's `serverTimezone`
+ * (`Period=datetime'2025-01-01T00:00:00'`) — so a value read back from a
+ * record keys it as it came. Three that do not: the empty date, read as
+ * `null` (pass `ONEC_EMPTY_DATE`); an `Edm.Int64` past 2^53 read as a
+ * `number` (read it with `int64Mode: 'bigint'` or `'string'`); a wall-clock
+ * time a daylight-saving switch skips, which a `Date` cannot hold (read it
+ * with `dateMode: 'string'`).
  *
  * @public
  */
-export type EntityKey = string | Record<string, string | number | bigint | Date>
+export type EntityKey = string | Record<string, string | number | bigint | boolean | Date>
 
 /** A GUID in the 8-4-4-4-12 hex form — the only string key 1С entities take (`Ref_Key`). @internal */
 export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -233,8 +238,17 @@ export function formatKey(key: EntityKey, serverTimezone: string): string {
 function formatKeyValue(field: string, v: unknown, serverTimezone: string): string {
   if (typeof v === 'string') return formatKeyString(v)
   // Digits, `.` and `-` only — URL-safe by construction.
-  if (typeof v === 'number') return formatNumberLiteral(v, `key ${field}`)
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) {
+      throw new InvalidArgumentError(`Composite-key field ${field} must be a finite number, got ${String(v)}`, {
+        argument: 'key',
+        received: v,
+      })
+    }
+    return formatNumberLiteral(v, 'key')
+  }
   if (typeof v === 'bigint') return String(v)
+  if (typeof v === 'boolean') return v ? 'true' : 'false'
   if (v instanceof Date) {
     if (Number.isNaN(v.getTime())) {
       throw new InvalidArgumentError(`Composite-key field ${field} is an invalid Date`, {
@@ -245,7 +259,7 @@ function formatKeyValue(field: string, v: unknown, serverTimezone: string): stri
     // Digits, `-`, `:`, `.` and `T` — `:` is a legal path character, written raw as 1С writes it in its own links.
     return `datetime'${formatInZone(v, serverTimezone)}'`
   }
-  throw new InvalidArgumentError(`Composite-key field ${field} must be a string, number, bigint or Date`, {
+  throw new InvalidArgumentError(`Composite-key field ${field} must be a string, number, bigint, boolean or Date`, {
     argument: 'key',
     received: v,
   })

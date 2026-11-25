@@ -156,6 +156,9 @@ describe('V3 URL builder — entity keys cannot rewrite the path', () => {
     expect(keyUrl(base, 'Document_X_Товары', { Ref_Key: G, LineNumber: 12345678901234567890n })).toContain(
       'LineNumber=12345678901234567890)',
     )
+    expect(keyUrl(base, 'InformationRegister_X', { НомерСообщения: 1, Исходящее: false, ЕстьОшибка: true })).toContain(
+      '(НомерСообщения=1,Исходящее=false,ЕстьОшибка=true)',
+    )
     // A string number is still a string literal.
     expect(keyUrl(base, 'Document_X_Товары', { LineNumber: '1' })).toContain("(LineNumber='1')")
   })
@@ -170,13 +173,17 @@ describe('V3 URL builder — entity keys cannot rewrite the path', () => {
   it.each([
     ['an invalid Date', new Date(Number.NaN), 'invalid Date'],
     ['a non-finite number', Number.POSITIVE_INFINITY, 'finite number'],
-    ['a boolean', true, 'must be a string, number, bigint or Date'],
-    ['null', null, 'must be a string, number, bigint or Date'],
-    ['an object', { a: 1 }, 'must be a string, number, bigint or Date'],
+    ['null', null, 'must be a string, number, bigint, boolean or Date'],
+    ['an object', { a: 1 }, 'must be a string, number, bigint, boolean or Date'],
   ])('rejects %s as a composite-key value', (_name, value, why) => {
     const key = { Period: value } as unknown as EntityKey
     expect(() => keyUrl(base, 'InformationRegister_X', key)).toThrow(InvalidArgumentError)
     expect(() => keyUrl(base, 'InformationRegister_X', key)).toThrow(why)
+    try {
+      keyUrl(base, 'InformationRegister_X', key)
+    } catch (err) {
+      expect((err as InvalidArgumentError).argument).toBe('key')
+    }
   })
 
   it('keeps a virtual-table path whose quoted argument holds slashes', () => {

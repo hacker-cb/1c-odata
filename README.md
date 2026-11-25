@@ -163,7 +163,15 @@ Everything URL-shaped works without a schema: query builder + filter DSL, CRUD, 
 
 Daylight saving: 1С stores wall-clock time without checking it against the zone, so a time a switch skips reads moved forward by the gap and a time passed twice reads as the earlier instant (`Temporal`'s `'compatible'` rule); `parseInZone(naive, zone, { disambiguation: 'reject' })` refuses a skipped time instead. A string that names no real date-time (`2026-02-30T00:00:00`) is a `ParseError` in a field the schema types `Edm.DateTime`, and stays a string where only the schema-less heuristic matched it.
 
-A composite key (registers, tabular rows) is an object whose values go by JS type, as the 1С docs write them: a GUID string → `guid'…'`, another string → a quoted literal, a `number` / `bigint` bare, a `Date` → `datetime'…'` in `serverTimezone`. So a row read back keys itself: `client.entity('InformationRegister_КурсыВалют', { Period: row.Period, Валюта_Key: row.Валюта_Key }).get()`.
+A composite key (registers, tabular rows) is an object whose values go by JS type, as the 1С docs write them: a GUID string → `guid'…'`, another string → a quoted literal, a `number` / `bigint` bare, a `boolean` → `true` / `false`, a `Date` → `datetime'…'` in `serverTimezone`. So a row read back keys itself:
+
+```ts
+type Rate = { Period: Date; Валюта_Key: string; Курс: number }
+const { value: [row] } = await client.query<Rate>('InformationRegister_КурсыВалют').top(1).get()
+if (row) await client.entity<Rate>('InformationRegister_КурсыВалют', { Period: row.Period, Валюта_Key: row.Валюта_Key }).get()
+```
+
+The empty date reads as `null` — key it with `ONEC_EMPTY_DATE`.
 
 Recipes: opt out of all date handling with `shape: { dateMode: 'string' }` and convert manually via `parseInZone` / `formatInZone`. With a runtime index (previous section) you can also introspect the base: `Object.keys(client.metadataIndex?.entitySetToType ?? {})` lists every entity set.
 
