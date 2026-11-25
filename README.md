@@ -203,7 +203,7 @@ try {
 }
 ```
 
-Narrow before broad: `ConcurrencyError` / `BusinessError` / `PermissionError` extend `HTTPError`, so check them first. Caller-supplied `AbortSignal` aborts are rethrown unchanged (the native `AbortError`); library-issued timeouts surface as `TimeoutError`. The full hierarchy and field-level guarantees are in [`STABILITY.md`](./STABILITY.md#error-contract).
+Narrow before broad: `ConcurrencyError` / `BusinessError` / `PermissionError` extend `HTTPError`, so check them first. Caller-supplied `AbortSignal` aborts are rethrown unchanged (the native `AbortError`); library-issued timeouts surface as `TimeoutError`. An exception thrown by one of your hooks is rethrown unchanged too, and never retried. The full hierarchy and field-level guarantees are in [`STABILITY.md`](./STABILITY.md#error-contract).
 
 ## Registers
 
