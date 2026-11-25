@@ -1,5 +1,17 @@
 # @1c-odata/client
 
+## 0.8.0
+
+### Minor Changes
+
+- [#184](https://github.com/hacker-cb/1c-odata/pull/184) [`a2334fd`](https://github.com/hacker-cb/1c-odata/commit/a2334fd33035bd6f55b6ae5c8d477b9b116982c2) Thanks [@hacker-cb](https://github.com/hacker-cb)! - Register virtual tables take `$select` and `$filter`. `ReadFiOptions` gains `select?: string[]` and `filter?: string`, honoured by every `RegisterHelper` virtual-table method (`balance`, `turnovers`, `balanceAndTurnovers`, `sliceFirst`, `sliceLast`, `drCrTurnovers`, `extDimensions`, `recordsWithExtDimensions`) and encoded like a collection query. On a virtual table `select` is also the grouping — 1С sums the resources over the selected dimensions only, so on the aggregating tables (`Balance`, `Turnovers`, `BalanceAndTurnovers`, `DrCrTurnovers`) e.g. `AccountingRegister_Хозрасчетный.Turnovers` for one account and month drops from 178 rows to 45 with six fields selected. `filter` is a raw OData expression on the resulting rows. MCP `register_query` takes the same `select` and `filter` parameters. Empty values send nothing; existing calls are unchanged.
+
+### Patch Changes
+
+- [#185](https://github.com/hacker-cb/1c-odata/pull/185) [`7432911`](https://github.com/hacker-cb/1c-odata/commit/7432911062c53652241da8f86d45b0358c6c7e56) Thanks [@hacker-cb](https://github.com/hacker-cb)! - IIS's `400 Bad Request — Invalid URL` page now gets its own message instead of the generic "no OData error envelope" text. Where a decoded path segment of the request is over 260 characters (http.sys `UrlSegmentMaxLength`, its default) the message names that limit and the usual cause — a register virtual table called with its parameters in the path, `…/Turnovers(StartPeriod=…,AccountCondition='…')`, where they all share one segment (about two GUIDs in a condition) — and points to `client.register(…)` (in the MCP server: `register_query`), which sends them in the query string with no such limit, or to splitting the condition over disjoint subsets. The MCP `query` tool's description and its virtual-table tip say the same; `register_query` is not affected by the limit.
+
+- [#183](https://github.com/hacker-cb/1c-odata/pull/183) [`d717164`](https://github.com/hacker-cb/1c-odata/commit/d7171641b4eaa907d3b859b61ff9f554e2559aa4) Thanks [@hacker-cb](https://github.com/hacker-cb)! - `NetworkError` now names the underlying cause instead of undici's bare `fetch failed`: the code and text of `error.cause` are appended — `Network error: fetch failed (UNABLE_TO_GET_ISSUER_CERT_LOCALLY: unable to get local issuer certificate)`, `ENOTFOUND`, `ECONNREFUSED` — including the per-address errors of a multi-address connect failure, whose own message is empty. A certificate-trust failure also gets a hint to trust the issuing CA with `NODE_EXTRA_CA_CERTS` or the OS store with `NODE_USE_SYSTEM_CA=1`. The MCP server shows the same text, so `add_connection` (when it verifies a password) and every tool that reaches a base now say why it is unreachable. The original error stays in `error.cause`. README "Network configuration" documents `NODE_USE_SYSTEM_CA` and the MCP server's `env` block.
+
 ## 0.7.0
 
 ### Minor Changes

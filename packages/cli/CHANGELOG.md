@@ -1,5 +1,13 @@
 # @1c-odata/cli
 
+## 0.8.0
+
+### Patch Changes
+
+- Updated dependencies [[`7432911`](https://github.com/hacker-cb/1c-odata/commit/7432911062c53652241da8f86d45b0358c6c7e56), [`d717164`](https://github.com/hacker-cb/1c-odata/commit/d7171641b4eaa907d3b859b61ff9f554e2559aa4), [`a2334fd`](https://github.com/hacker-cb/1c-odata/commit/a2334fd33035bd6f55b6ae5c8d477b9b116982c2)]:
+  - @1c-odata/client@0.8.0
+  - @1c-odata/metadata@0.8.0
+
 ## 0.7.0
 
 ### Minor Changes
