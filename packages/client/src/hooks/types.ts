@@ -30,7 +30,17 @@ export interface ResponseEvent {
  *
  * An exception a hook throws reaches the caller as is: it is not wrapped in a
  * library error, not passed to `onError`, and never retried — a hook that
- * throws on a 401 to trigger a re-login gets its own error back.
+ * throws on a 401 to trigger a re-login gets its own error back. The one
+ * exception: `onError` rethrowing the very error it was handed leaves it the
+ * library's error, retried as its type and status say — so "log and rethrow"
+ * keeps retry working:
+ *
+ * ```ts
+ * onError: (req, err) => {
+ *   log.warn({ url: req.url, err })
+ *   throw err // still the library's error: a retryable 503 is retried
+ * }
+ * ```
  * @public
  */
 export interface RequestHooks {

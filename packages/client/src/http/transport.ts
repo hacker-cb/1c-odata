@@ -1,5 +1,5 @@
 import type { RequestOptions } from '../client/options.js'
-import { NetworkError, ODataError, type RequestContext, TimeoutError } from '../errors.js'
+import { NetworkError, type RequestContext, TimeoutError } from '../errors.js'
 import type { RequestEvent, RequestHooks, ResponseEvent } from '../hooks/types.js'
 import { mapResponseToError } from './error-mapping.js'
 
@@ -97,20 +97,22 @@ async function prepareRequest(
   }
 
   // beforeRequest hook may mutate headers, body, etc.
-  if (callOpts.hooks?.beforeRequest) {
-    try {
-      const result = await settleWithin(callOpts.hooks.beforeRequest(reqEvent), combined)
-      if (result) reqEvent = result
-    } catch (e) {
-      // The deadline passed while the hook ran: a timeout, as on the wire.
-      if (timeoutSignal?.signal.aborted && e instanceof Error && e.name === 'AbortError') {
-        await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
-      }
-      // The callers' `finally` that clears the timer is not reached from here.
-      if (timeoutId) clearTimeout(timeoutId)
-      timeoutSignal?.abort()
-      throw e
+  // Read inside runHook, so even a throwing `hooks` getter counts as the hook's.
+  try {
+    const result = await settleWithin(
+      runHook(() => callOpts.hooks?.beforeRequest?.(reqEvent)),
+      combined,
+    )
+    if (result) reqEvent = result
+  } catch (e) {
+    // The deadline passed while the hook ran: a timeout, as on the wire.
+    if (timeoutSignal?.signal.aborted && e instanceof Error && e.name === 'AbortError') {
+      await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
     }
+    // The callers' `finally` that clears the timer is not reached from here.
+    if (timeoutId) clearTimeout(timeoutId)
+    timeoutSignal?.abort()
+    throw e
   }
 
   const fetchInit: RequestInit = {
@@ -238,6 +240,39 @@ function networkErrorMessage(e: unknown): string {
   }
 }
 
+/** Errors a request hook threw — kept apart so retry never repeats a request for them. */
+const hookErrors = new WeakSet<object>()
+
+/**
+ * Whether `e` was thrown by a request hook rather than by the library. The
+ * one exception is `onError` rethrowing the very error it was handed: that
+ * stays the library's error, retried as its type and status say.
+ *
+ * @internal — read by `http/retry.ts`.
+ */
+export function isHookError(e: unknown): boolean {
+  return typeof e === 'object' && e !== null && hookErrors.has(e)
+}
+
+/**
+ * Call a hook (synchronously, as the caller wrote it — `this` intact) and mark
+ * what it throws as the hook's own; `handed` — the error given to `onError` —
+ * stays unmarked when rethrown.
+ */
+async function runHook<T>(call: () => T | PromiseLike<T>, handed?: unknown): Promise<T> {
+  try {
+    return await call()
+  } catch (e) {
+    if (typeof e === 'object' && e !== null) {
+      // Rethrowing the error handed to onError gives it back to the library —
+      // even if another request's hook threw the same object earlier.
+      if (e === handed) hookErrors.delete(e)
+      else hookErrors.add(e)
+    }
+    throw e
+  }
+}
+
 /**
  * Translate an exception from the wire — the fetch, or reading the body —
  * into the typed error hierarchy and fire the `onError` hook. Shared between
@@ -252,24 +287,21 @@ async function translateAndFireError(
   timeoutMs: number | undefined,
 ): Promise<never> {
   const request: RequestContext = { method: reqEvent.method, url: reqEvent.url }
-  if (e instanceof Error && e.name === 'AbortError') {
-    // timeoutMs is paired with timeoutSignal in prepareRequest: set whenever the signal can fire.
-    if (timeoutSignal?.signal.aborted && timeoutMs !== undefined) {
-      const err = new TimeoutError(`Request timed out after ${timeoutMs}ms`, {
-        timeoutMs,
-        cause: e,
-        request,
-      })
-      if (hooks?.onError) await hooks.onError(reqEvent, err)
-      throw err
-    }
-    // Pass through user-issued abort: rethrow original
-    throw e
+  // timeoutMs is paired with timeoutSignal in prepareRequest: set whenever the signal can fire.
+  if (e instanceof Error && e.name === 'AbortError' && timeoutSignal?.signal.aborted && timeoutMs !== undefined) {
+    const err = new TimeoutError(`Request timed out after ${timeoutMs}ms`, {
+      timeoutMs,
+      cause: e,
+      request,
+    })
+    await runHook(() => hooks?.onError?.(reqEvent, err), err)
+    throw err
   }
-  if (e instanceof ODataError) throw e
+  // Pass through user-issued abort: rethrow original
+  if (e instanceof Error && e.name === 'AbortError') throw e
   // Anything else failed on the wire: a network-level error
   const err = new NetworkError(networkErrorMessage(e), { cause: e, request })
-  if (hooks?.onError) await hooks.onError(reqEvent, err)
+  await runHook(() => hooks?.onError?.(reqEvent, err), err)
   throw err
 }
 
@@ -331,14 +363,15 @@ export async function request(
       durationMs,
     }
 
-    if (callOpts.hooks?.afterResponse) await callOpts.hooks.afterResponse(reqEvent, resEvent)
+    const { hooks } = callOpts
+    await runHook(() => hooks?.afterResponse?.(reqEvent, resEvent))
 
     if (response.status >= 400) {
       const err = await mapResponseToError(response.status, response.statusText, headers, body, {
         method: reqEvent.method,
         url: reqEvent.url,
       })
-      if (callOpts.hooks?.onError) await callOpts.hooks.onError(reqEvent, err)
+      await runHook(() => hooks?.onError?.(reqEvent, err), err)
       throw err
     }
 
@@ -409,7 +442,8 @@ export async function requestStream(
       durationMs,
     }
 
-    if (callOpts.hooks?.afterResponse) await callOpts.hooks.afterResponse(reqEvent, resEvent)
+    const { hooks } = callOpts
+    await runHook(() => hooks?.afterResponse?.(reqEvent, resEvent))
 
     // For error responses we DO consume the body to map to a typed error —
     // the caller never gets a chance to read it. For success, the body is
@@ -426,7 +460,7 @@ export async function requestStream(
         method: reqEvent.method,
         url: reqEvent.url,
       })
-      if (callOpts.hooks?.onError) await callOpts.hooks.onError(reqEvent, err)
+      await runHook(() => hooks?.onError?.(reqEvent, err), err)
       throw err
     }
 

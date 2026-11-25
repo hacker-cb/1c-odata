@@ -1,4 +1,12 @@
-import { BasicAuth, BusinessError, NetworkError, ParseError, PermissionError, type RetryPolicy } from '@1c-odata/client'
+import {
+  BasicAuth,
+  BusinessError,
+  HTTPError,
+  NetworkError,
+  ParseError,
+  PermissionError,
+  type RetryPolicy,
+} from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { requestWithRetry } from '../../src/http/retry.js'
@@ -192,6 +200,157 @@ describe('requestWithRetry — only wire failures are network errors (#189)', ()
     )
     const err = await requestWithRetry(patch, { retry: writePolicy }).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(NetworkError)
+    expect(n).toBe(3)
+  })
+})
+
+describe('requestWithRetry — hook errors are never retried, whatever their type (#189)', () => {
+  const policy: RetryPolicy = { ...retryPolicy, retryableStatuses: [503], retryableMethods: ['GET', 'PATCH'] }
+  const get = { method: 'GET' as const, url: `${base}/Catalog_X`, headers: { Authorization: auth.header } }
+
+  it('a NetworkError thrown from afterResponse (a nested call) is not retried', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const nested = new NetworkError('Network error: fetch failed')
+    const err = await requestWithRetry(get, {
+      retry: policy,
+      hooks: {
+        afterResponse: () => {
+          throw nested
+        },
+      },
+    }).catch((e: unknown) => e)
+    expect(err).toBe(nested)
+    expect(n).toBe(1)
+  })
+
+  it('onError rethrowing the error it was handed keeps it the library’s: a 503 is still retried', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        return new HttpResponse('{"odata.error":{"code":"0","message":{"value":"busy"}}}', {
+          status: 503,
+          headers: { 'content-type': 'application/json' },
+        })
+      }),
+    )
+    const err = await requestWithRetry(get, {
+      retry: policy,
+      hooks: {
+        onError: (_req, e) => {
+          throw e
+        },
+      },
+    }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(HTTPError)
+    expect(n).toBe(3)
+  })
+})
+
+describe('requestWithRetry — what stops a retry, re-read (#189)', () => {
+  const policy: RetryPolicy = { ...retryPolicy, retryableStatuses: [503], retryableMethods: ['GET'] }
+  const get = { method: 'GET' as const, url: `${base}/Catalog_X`, headers: { Authorization: auth.header } }
+  const busy = () =>
+    new HttpResponse('{"odata.error":{"code":"0","message":{"value":"busy"}}}', {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    })
+
+  it('a primitive thrown by a hook reaches the caller as is and is not retried', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const err = await requestWithRetry(get, {
+      retry: policy,
+      hooks: {
+        afterResponse: () => {
+          throw 'audit failed'
+        },
+      },
+    }).catch((e: unknown) => e)
+    expect(err).toBe('audit failed')
+    expect(n).toBe(1)
+  })
+
+  it('a hook thrown from a throwing hooks getter counts as the hook’s and is not retried', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const nested = new NetworkError('Network error: lazy init failed')
+    let reads = 0
+    const hooks = {
+      get afterResponse(): () => void {
+        reads++
+        throw nested
+      },
+    }
+    const err = await requestWithRetry(get, { retry: policy, hooks }).catch((e: unknown) => e)
+    expect(err).toBe(nested)
+    expect(reads).toBe(1)
+    expect(n).toBe(1)
+  })
+  it('onError rethrowing the error it was handed is retried even if another request’s hook threw that object meanwhile', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        return busy()
+      }),
+      http.get(`${base}/Other`, () => HttpResponse.json({ value: [] })),
+    )
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    let shared: unknown
+    let held = (): void => {}
+    const holding = new Promise<void>((r) => {
+      held = r
+    })
+    let first = true
+    const pending = requestWithRetry(get, {
+      retry: policy,
+      hooks: {
+        onError: async (_req, e) => {
+          if (first) {
+            first = false
+            shared = e
+            held()
+            await gate
+          }
+          throw e
+        },
+      },
+    }).catch((e: unknown) => e)
+    await holding
+    // Meanwhile another request's hook throws that very object, marking it as a hook's …
+    await requestWithRetry(
+      { ...get, url: `${base}/Other` },
+      {
+        hooks: {
+          afterResponse: () => {
+            throw shared
+          },
+        },
+      },
+    ).catch(() => {})
+    release()
+    // … yet the first onError rethrowing it as handed gives it back to the library: retried.
+    expect(await pending).toBeInstanceOf(HTTPError)
     expect(n).toBe(3)
   })
 })

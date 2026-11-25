@@ -53,11 +53,13 @@ export async function mapResponseToError(
       typeof obj === 'object' && obj !== null && !Array.isArray(obj)
         ? (obj as { 'odata.error'?: unknown })['odata.error']
         : undefined
-    if (!err) return new ParseError(`Response missing odata.error wrapper (status ${status})`, { request })
+    if (err === undefined || err === null)
+      return new ParseError(`Response missing odata.error wrapper (status ${status})`, { request })
     // Tolerate envelope-shape drift: a present-but-odd `odata.error` still yields
     // a usable HTTPError instead of a misleading "Invalid JSON" ParseError.
     const { code, message } = typeof err === 'object' ? (err as { code?: unknown; message?: unknown }) : {}
-    parsed = { code: scalarText(code), message: extractODataMessage(message) }
+    // A bare-string `odata.error` is the message itself.
+    parsed = { code: safeText(code), message: extractODataMessage(typeof err === 'string' ? err : message) }
     format = 'json'
   } else if (mediaType.includes('xml')) {
     // Only a real `<m:error>` envelope counts as XML. An XHTML/proxy error page
@@ -193,9 +195,14 @@ function longestPathSegment(url: string): number {
   return longest
 }
 
-/** A JSON scalar as text; `''` for anything else (absent, `null`, an object or array). Never throws. */
-function scalarText(v: unknown): string {
-  return typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? String(v) : ''
+/** `String(v)` — `''` for an absent or `null` value, or where converting throws. */
+function safeText(v: unknown): string {
+  if (v === undefined || v === null) return ''
+  try {
+    return String(v)
+  } catch {
+    return ''
+  }
 }
 
 /**
