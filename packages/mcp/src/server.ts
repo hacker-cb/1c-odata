@@ -4,6 +4,7 @@ import { ConnectionPool } from './connection-pool.js'
 import { FileConnectionSource } from './file-connection-source.js'
 import { type Limits, resolveLimits } from './limits.js'
 import { registerDataTools } from './tools/data.js'
+import { registerFileTools } from './tools/files.js'
 import { registerManagementTools } from './tools/management.js'
 import { registerSchemaTools } from './tools/schema.js'
 import { registerServerInfoTool } from './tools/server-info.js'
@@ -31,6 +32,7 @@ export function createMcpServer(opts: CreateServerOptions): McpServer {
   const server = new McpServer({ name: '1c-odata', version })
   registerSchemaTools(server, pool, limits)
   registerDataTools(server, pool, limits)
+  registerFileTools(server, pool, { dataDir: opts.dataDir })
   registerManagementTools(server, pool, { dataDir: opts.dataDir, insecure })
   registerServerInfoTool(server, { version, dataDir: opts.dataDir })
   return server
