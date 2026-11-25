@@ -18,6 +18,9 @@ import { clampTop, type Limits } from '../limits.js'
 import { capLongStrings, type FitResult, fitRows, stripNoise, toJsonSafe } from '../rows.js'
 import { toolResult } from './_result.js'
 
+/** A Ref_Key GUID — checked in the schema so a malformed key fails before any connection is opened. */
+const GUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 /** Register virtual tables, keyed by RegisterHelper method name. */
 const REGISTER_TABLES = [
   'balance',
@@ -190,7 +193,10 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
       inputSchema: {
         connection: z.string().describe('Connection name'),
         entitySet: z.string().describe('Entity set, e.g. Catalog_Валюты'),
-        key: z.string().describe('Entity key — the Ref_Key GUID (8-4-4-4-12 hex); anything else is rejected'),
+        key: z
+          .string()
+          .regex(GUID_SHAPE, 'key must be a Ref_Key GUID (8-4-4-4-12 hex)')
+          .describe('Entity key — the Ref_Key GUID (8-4-4-4-12 hex); anything else is rejected'),
         compact: z
           .boolean()
           .optional()

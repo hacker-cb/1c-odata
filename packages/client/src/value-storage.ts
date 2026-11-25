@@ -1,6 +1,6 @@
 import type { TransportClient } from './client/contract.js'
 import type { RequestOptions } from './client/options.js'
-import { buildV3KeyUrl, type EntityKey, encodeSegment, formatKey } from './url-builder.js'
+import { buildV3KeyUrl, type EntityKey, encodeName, encodeSegment, formatKey } from './url-builder.js'
 
 export interface ReadStreamResult {
   /** `Content-Type` header value, or `null` if the server omitted it. */
@@ -18,7 +18,7 @@ export interface ReadStreamResult {
  */
 function buildValueUrl(base: string, entitySet: string, key: EntityKey, prop: string): string {
   const keyExpr = formatKey(key)
-  return `${base}/${encodeSegment(entitySet)}(${keyExpr})/${encodeSegment(prop, 'property')}/$value`
+  return `${base}/${encodeSegment(entitySet)}(${keyExpr})/${encodeName(prop, 'ValueStorage property')}/$value`
 }
 
 /**

@@ -1,4 +1,4 @@
-import { BasicAuth, ODataV3Client } from '@1c-odata/client'
+import { BasicAuth, InvalidArgumentError, ODataV3Client } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -83,5 +83,14 @@ describe('writeStream', () => {
       ФайлХранилище_Type: 'image/jpeg',
       ФайлХранилище_Base64Data: 'AQID',
     })
+  })
+})
+
+describe('ValueStorage property as one 1С name', () => {
+  it.each(['A B', 'X/../Y', ''])('rejects the property %j before any request', async (prop) => {
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    await expect(c.entity('Catalog_Файлы', '00000000-0000-0000-0000-00000000000a').readStream(prop)).rejects.toThrow(
+      InvalidArgumentError,
+    )
   })
 })

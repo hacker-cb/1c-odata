@@ -2,7 +2,7 @@
 import { InvalidArgumentError } from './errors.js'
 import { formatNumberLiteral } from './format-number.js'
 import { formatInZone } from './timezone.js'
-import { encodeComponent, GUID_RE, NAME_RE } from './url-builder.js'
+import { encodeComponent, encodeName, GUID_RE } from './url-builder.js'
 
 /**
  * Empty placeholder type — used as the default `TFunctions` for `ODataV3Client`
@@ -78,24 +78,6 @@ function formatValue(v: unknown, serverTimezone: string, argument: string): stri
 }
 
 /**
- * One path segment for a metadata name. Anything but a plain name — a `/`, `?`,
- * `#`, `%`, `(`, a dot segment, an empty or malformed string — is rejected
- * rather than encoded: a caller-supplied name (an MCP tool argument, say) must
- * not reach another path of the host with this connection's credentials, push
- * the query into a fragment, address an entity instead of the set, or rely on
- * how a proxy in between decodes `%2F`.
- */
-function pathSegment(name: string, argument: string): string {
-  if (typeof name !== 'string' || !NAME_RE.test(name)) {
-    throw new InvalidArgumentError(
-      `FunctionImport ${argument} must be a 1С metadata name (letters, digits, _), got ${typeof name === 'string' ? JSON.stringify(name) : String(name)}`,
-      { argument, received: name },
-    )
-  }
-  return encodeURIComponent(name)
-}
-
-/**
  * Build the OData V3 FunctionImport URL. If `target.ref` is provided, the FI
  * is treated as instance-bound and the URL becomes `<base>/<set>(guid'<ref>')/<func>()`.
  * Otherwise it's treated as set-bound: `<base>/<set>/<func>()`.
@@ -111,15 +93,15 @@ export function buildFunctionUrl(
   serverTimezone: string,
 ): string {
   const trimmedBase = base.replace(/\/$/, '')
-  // Each name is ONE path segment (see pathSegment).
-  const set = pathSegment(entitySet, 'entitySet')
-  const fn = pathSegment(funcName, 'funcName')
+  // Each name is ONE path segment (see encodeName).
+  const set = encodeName(entitySet, 'FunctionImport entitySet')
+  const fn = encodeName(funcName, 'FunctionImport funcName')
   let head: string
   if (target.ref !== undefined) {
     // Reject non-GUID `ref` early — a stray apostrophe would terminate the
     // OData literal and silently mutate the URL. Mirrors `formatKey`'s GUID
     // shape check in `url-builder.ts`.
-    if (!GUID_RE.test(target.ref)) {
+    if (typeof target.ref !== 'string' || !GUID_RE.test(target.ref)) {
       throw new InvalidArgumentError('FunctionImport `ref` must be a GUID (8-4-4-4-12 hex form)', {
         argument: 'ref',
         received: target.ref,

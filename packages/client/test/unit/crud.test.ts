@@ -183,3 +183,21 @@ describe('V3EntityHandle.withHeader', () => {
     expect(h2).toBe('b')
   })
 })
+
+describe('V3EntityHandle — composite key snapshot', () => {
+  it('keeps the key it was created with when the caller mutates the object afterwards', async () => {
+    const urls: string[] = []
+    server.use(
+      http.delete(/InformationRegister_X\(.*\)/, ({ request }) => {
+        urls.push(decodeURIComponent(request.url))
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    const key = { Period: 'A' }
+    const handle = c.entity('InformationRegister_X', key)
+    key.Period = 'B'
+    await handle.delete()
+    expect(urls[0]).toContain("(Period='A')")
+  })
+})

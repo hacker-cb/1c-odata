@@ -33,6 +33,27 @@ export function encodeComponent(value: string, argument: string): string {
 }
 
 /**
+ * One path segment for a metadata name — an entity set or function in a
+ * FunctionImport URL, a ValueStorage property. Anything but a plain name — a
+ * `/`, `?`, `#`, `%`, `(`, a dot segment, an empty or malformed string — is
+ * rejected rather than encoded: a caller-supplied name (an MCP tool argument,
+ * say) must not reach another path of the host with this connection's
+ * credentials, push the query into a fragment, address an entity instead of
+ * the set, or rely on how a proxy in between decodes `%2F`.
+ *
+ * @internal
+ */
+export function encodeName(name: string, argument: string): string {
+  if (typeof name !== 'string' || !NAME_RE.test(name)) {
+    throw new InvalidArgumentError(
+      `${argument} must be a 1С metadata name (letters, digits, _), got ${typeof name === 'string' ? JSON.stringify(name) : String(name)}`,
+      { argument, received: name },
+    )
+  }
+  return encodeURIComponent(name)
+}
+
+/**
  * Encode a caller-supplied path (an entity set, or a set path such as
  * `Register_X/Balance(…)`) as ONE segment. A dot segment or an empty name has
  * no encoded form a URL parser keeps as a name — `<base>/..` collapses into the
@@ -42,7 +63,9 @@ export function encodeComponent(value: string, argument: string): string {
  * @internal
  */
 export function encodeSegment(name: string, argument = 'entitySet'): string {
-  if (typeof name !== 'string' || name === '' || name === '.' || name === '..') {
+  // Any empty or dot part — `..`, `X/..`, `X//Y` — would collapse once a server or
+  // proxy splits on the encoded `/`, so a set path made of names only passes.
+  if (typeof name !== 'string' || name.split('/').some((part) => part === '' || part === '.' || part === '..')) {
     throw new InvalidArgumentError(`${argument} must be a name, not ${String(name)}`, { argument, received: name })
   }
   return encodeComponent(name, argument)
@@ -139,7 +162,7 @@ export function formatKey(key: EntityKey): string {
     }
     return `guid'${key}'`
   }
-  const entries = typeof key === 'object' && key !== null ? Object.entries(key) : []
+  const entries = typeof key === 'object' && key !== null && !Array.isArray(key) ? Object.entries(key) : []
   if (entries.length === 0) {
     throw new InvalidArgumentError('Entity key must be a GUID or a non-empty composite-key object', {
       argument: 'key',
@@ -157,13 +180,14 @@ export function formatKey(key: EntityKey): string {
           },
         )
       }
-      if (typeof v !== 'string') {
+      // A number is quoted as its string, as it always was for untyped callers.
+      if (typeof v !== 'string' && typeof v !== 'number') {
         throw new InvalidArgumentError(`Composite-key field ${k} must be a string value`, {
           argument: 'key',
           received: v,
         })
       }
-      return `${k}=${formatKeyValue(v)}`
+      return `${k}=${formatKeyValue(String(v))}`
     })
     .join(',')
 }

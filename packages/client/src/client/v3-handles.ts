@@ -58,11 +58,17 @@ export class V3EntitySetHandle<T> {
 export class V3EntityHandle<T> {
   private extraHeaders: Record<string, string> = {}
 
+  private readonly key: EntityKey
+
   constructor(
     private readonly client: ODataV3Client<unknown>,
     private readonly entitySet: string,
-    private readonly key: EntityKey,
-  ) {}
+    key: EntityKey,
+  ) {
+    // Snapshot a composite key: the caller's object could change between an
+    // `expectVersion` check and the mutation it guards, aiming them at two rows.
+    this.key = typeof key === 'object' && key !== null && !Array.isArray(key) ? Object.freeze({ ...key }) : key
+  }
 
   /**
    * Chainable: add a header to subsequent mutations on this handle. Headers

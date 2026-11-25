@@ -138,6 +138,20 @@ describe('V3 URL builder — entity keys cannot rewrite the path', () => {
     )
   })
 
+  it('rejects an array as a composite key', () => {
+    const key = ['11111111-2222-3333-4444-555555555555'] as unknown as Record<string, string>
+    expect(() => buildV3KeyUrl(base, 'Catalog_X', key)).toThrow(InvalidArgumentError)
+  })
+
+  it('still quotes a numeric composite-key value from an untyped caller', () => {
+    const key = { LineNumber: 1 } as unknown as Record<string, string>
+    expect(buildV3KeyUrl(base, 'Document_X_Товары', key)).toContain("(LineNumber='1')")
+  })
+
+  it.each(['X/..', 'X//Y', './X'])('rejects the set path %j, whose parts would collapse', (set) => {
+    expect(() => buildV3CollectionUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).toThrow(InvalidArgumentError)
+  })
+
   it('keeps a GUID key and a composite key of 1С names', () => {
     expect(buildV3KeyUrl(base, 'Catalog_X', G)).toBe(
       `${base}/Catalog_X(guid'${G}')?%24format=application%2Fjson%3Bodata%3Dnometadata`,

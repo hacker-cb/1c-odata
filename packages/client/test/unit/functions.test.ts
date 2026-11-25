@@ -116,6 +116,15 @@ describe('buildFunctionUrl', () => {
     )
   })
 
+  it.each([
+    ['an array holding a GUID', ['11111111-2222-3333-4444-555555555555']],
+    ['a symbol', Symbol('x')],
+  ])('rejects a ref that is %s, not a GUID string', (_name, ref) => {
+    expect(() =>
+      buildFunctionUrl(base, 'Document_X', 'Post', { ref: ref as unknown as string }, {}, 'Europe/Moscow'),
+    ).toThrow(InvalidArgumentError)
+  })
+
   it('rejects a function name that is not a plain name', () => {
     expect(() => buildFunctionUrl(base, 'Catalog_X', 'Post/../Delete', {}, {}, 'Europe/Moscow')).toThrow(
       InvalidArgumentError,
