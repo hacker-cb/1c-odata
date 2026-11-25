@@ -1,7 +1,7 @@
 import { BasicAuth, HTTPError, NetworkError, type RequestEvent, TimeoutError } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { request } from '../../src/http/transport.js'
+import { request, requestStream } from '../../src/http/transport.js'
 import { createMswServer } from '../fixtures/msw-server.js'
 
 const server = createMswServer()
@@ -274,5 +274,94 @@ describe('transport.request — NetworkError carries the undici cause (#180)', (
     expect((await networkErrorFor(fetchFailed(new Error('failed')))).message).toBe(
       'Network error: fetch failed (failed)',
     )
+  })
+})
+
+describe('transport — timeout around beforeRequest (#190)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const target = { method: 'GET' as const, url: `${base}/X`, headers: { Authorization: auth.header } }
+
+  for (const [name, call] of [
+    ['request', request],
+    ['requestStream', requestStream],
+  ] as const) {
+    it(`${name}: a rejecting hook fails the call with its own error, leaving no timer and its signal aborted`, async () => {
+      vi.useFakeTimers()
+      const hookErr = new Error('token fetch failed')
+      let hookSignal: AbortSignal | undefined
+      const onError = vi.fn()
+      const err = await call(target, {
+        timeout: 60_000,
+        hooks: {
+          beforeRequest: async (req) => {
+            hookSignal = req.signal
+            throw hookErr
+          },
+          onError,
+        },
+      }).catch((e: unknown) => e)
+      expect(err).toBe(hookErr)
+      expect(onError).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+      // The call is over: work the hook left running under its signal is cancelled.
+      expect(hookSignal?.aborted).toBe(true)
+    })
+
+    it(`${name}: a hook still pending at the deadline fails the call with TimeoutError, even ignoring the signal`, async () => {
+      const onError = vi.fn()
+      const err = await call(target, {
+        timeout: 30,
+        hooks: { beforeRequest: () => new Promise<void>(() => {}), onError },
+      }).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(TimeoutError)
+      expect((err as TimeoutError).timeoutMs).toBe(30)
+      expect(onError).toHaveBeenCalledOnce()
+      expect(onError.mock.calls[0]?.[1]).toBe(err)
+    })
+
+    it(`${name}: a hook aborted by the deadline through its signal yields TimeoutError, not a bare AbortError`, async () => {
+      const err = await call(target, {
+        timeout: 30,
+        hooks: {
+          beforeRequest: (req) =>
+            new Promise<void>((_, reject) => {
+              req.signal?.addEventListener('abort', () => reject(req.signal?.reason), { once: true })
+            }),
+        },
+      }).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(TimeoutError)
+    })
+
+    it(`${name}: a caller's abort during the hook stays the caller's abort, not a timeout`, async () => {
+      const ctrl = new AbortController()
+      const onError = vi.fn()
+      setTimeout(() => ctrl.abort(), 10)
+      const err = await call(target, {
+        timeout: 5_000,
+        signal: ctrl.signal,
+        hooks: { beforeRequest: () => new Promise<void>(() => {}), onError },
+      }).catch((e: unknown) => e)
+      expect(err).not.toBeInstanceOf(TimeoutError)
+      expect((err as Error).name).toBe('AbortError')
+      expect(onError).not.toHaveBeenCalled()
+    })
+  }
+
+  it('calls beforeRequest as a method of the hooks object, synchronously', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
+    let ran = false
+    const hooks = {
+      token: 'abc',
+      beforeRequest(this: { token: string }, req: RequestEvent): RequestEvent {
+        ran = true
+        return { ...req, headers: { ...req.headers, 'x-token': this.token } }
+      },
+    }
+    const pending = request(target, { timeout: 60_000, hooks })
+    expect(ran).toBe(true)
+    await expect(pending).resolves.toMatchObject({ status: 200 })
   })
 })
