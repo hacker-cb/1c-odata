@@ -24,6 +24,8 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 | `get_entity` | Fetch a single entity by `Ref_Key`. |
 | `count` | Count rows matching an optional `$filter`. |
 | `register_query` | Register virtual tables: balance / turnovers / slices / accounting (read-only analytics). `select` sets the server-side grouping; `filter` narrows the resulting rows. |
+| `download_attached_file` | Save a file attached to a 1С object (`Catalog_*ПрисоединенныеФайлы` card) to the download directory; checks size and hash against 1С. Returns the path, never the bytes. |
+| `download_value_storage` | Save one ValueStorage (`ХранилищеЗначения`) property of one record to the download directory via `…/<property>/$value`. |
 | `add_connection` | Add/update a connection (writes config; optional `label` + password; password stored securely, never returned). |
 | `set_credentials` | Change a connection's login and/or password in place (keeps URL/timezone/label; password never returned). |
 | `set_label` | Set or clear a connection's display label (empty clears it → falls back to the name). |
@@ -174,6 +176,30 @@ one `ONEC_A_B_PASSWORD` — `add` rejects the colliding second name, so pick a d
 > `config.json`, `credentials.json`, and env passwords are unaffected. Likewise, **moving the data dir**
 > re-hashes the keychain service and orphans keychain-stored secrets — the `credentials.json` file travels with
 > the dir and env passwords are independent, so both survive a move.
+
+## Downloading files
+
+Two read-only tools save binary content from 1С **to disk** instead of returning it to the model: the result
+carries the file path, size, SHA-256 and `Content-Type`, so a large PDF never touches the context window.
+
+- **`download_attached_file`** takes a file card from an attached-files catalog (e.g.
+  `Catalog_ПоступлениеТоваровУслугПрисоединенныеФайлы`) and follows the БСП «Работа с файлами» chain:
+  card → `InformationRegister_ХранилищеФайлов` → `Catalog_ХранилищеДвоичныхДанных.ДвоичныеДанные`, falling back
+  to the card's own `ФайлХранилище` (older БСП). It compares the downloaded size with the card's `Размер` and the
+  SHA-256 with `ХранилищеДвоичныхДанных.Хеш`, and reports `sizeMatches` / `hashMatches`. Files kept in disk volumes
+  (`ТипХраненияФайла = ВТомахНаДиске`) are not reachable through OData and are refused with a clear error.
+- **`download_value_storage`** saves any ValueStorage property of any record: `GET <entitySet>(<key>)/<property>/$value`.
+
+Publish the objects in the 1С «Настройка автоматического REST-сервиса»: the attached-files catalog, the
+**Хранилище файлов** information register and the **Хранилище двоичных данных** catalog. Note that the last two
+expose the content of *every* file stored in the infobase to the OData user.
+
+Files are written only inside the download directory, one sub-folder per connection, as
+`<first 8 hex of the card key>_<card description>.<extension>`, via a temp file + rename (mode 0600):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ONEC_MCP_DOWNLOAD_DIR` | `<data dir>/downloads` | Where downloads go. Must be absolute. |
 
 ## Output size
 
