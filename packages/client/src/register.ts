@@ -104,7 +104,9 @@ export interface RecordsWithExtDimensionsArgs {
  * {@link RequestOptions} (`signal` / `timeout` / `retry`) honoured by every read
  * path. `$top` bounds the response — register FIs can return very large
  * collections (e.g. `Balance` / `ExtDimensions` over a big AccountingRegister),
- * and without a bound the whole collection is fetched and parsed.
+ * and without a bound the whole collection is fetched and parsed. `$skip` with
+ * `$top` reads one page of it, and {@link ReadFiCountOptions} adds the total
+ * row count — so a large table is paged by the server instead of read whole.
  */
 export interface ReadFiOptions extends RequestOptions {
   /**
@@ -113,6 +115,22 @@ export interface ReadFiOptions extends RequestOptions {
    * {@link RecordsWithExtDimensionsArgs.Top}), which is a virtual-table parameter.
    */
   top?: number
+  /**
+   * `$skip` — skip this many rows of the result. Must be a non-negative
+   * integer. 1С computes the whole virtual table for every call and skips on
+   * the server, so a page deep into a big table costs more than the first —
+   * but only the page travels. Without {@link ReadFiOptions.orderBy} the rows
+   * come in 1С's own order, which live bases returned identically on every
+   * call carrying `$top` (no 1С guarantee).
+   */
+  skip?: number
+  /**
+   * `$orderby` — sort the result rows on the server, applied in order, e.g.
+   * `[{ field: 'СуммаTurnoverDr', dir: 'desc' }]` with `top: 10` for the ten
+   * largest. `dir` defaults to `asc`. Sorting costs 1С time on a big table.
+   * An empty list sends no `$orderby`.
+   */
+  orderBy?: { field: string; dir?: 'asc' | 'desc' }[]
   /**
    * `$select` — the fields to return. On the aggregating tables (`Balance`,
    * `Turnovers`, `BalanceAndTurnovers`, `DrCrTurnovers`) this also sets the
@@ -135,13 +153,36 @@ export interface ReadFiOptions extends RequestOptions {
 }
 
 /**
+ * {@link ReadFiOptions} plus `count: true` — `$inlinecount=allpages`: also
+ * return the total row count of the result (after `$filter`, before `$skip` /
+ * `$top`). A virtual-table method called with it resolves to a
+ * {@link ReadFiPage} `{ value, count }` instead of the bare row array. 1С
+ * counts in a separate query, so on a big table it adds about as much time as
+ * computing the page.
+ */
+export interface ReadFiCountOptions extends ReadFiOptions {
+  count: true
+}
+
+/**
+ * One page of a virtual-table call made with `count: true`: the rows and the
+ * total row count of the result (`odata.count`). `count` is absent only when
+ * 1С did not report one.
+ */
+export interface ReadFiPage<R> {
+  value: R[]
+  count?: number
+}
+
+/**
  * The system query options of a virtual-table call, encoded by the collection
- * URL builder's own `qp`. `$top` keeps its historical bare `$top=N` form. An
- * untyped (JS) caller passing a non-string `filter` or a `select` that is not
- * an array of strings (a sparse array's holes included) fails with
+ * URL builder's own `qp`. `$top` and `$skip` keep the bare `$top=N` form. An
+ * untyped (JS) caller passing a non-string `filter`, a `select` that is not an
+ * array of strings (a sparse array's holes included), an `orderBy` that is not
+ * an array of `{ field, dir? }` or a non-boolean `count` fails with
  * `InvalidArgumentError` before any request.
  */
-function readFiQueryParams(opts: ReadFiOptions): string[] {
+function readFiQueryParams(opts: ReadFiOptions & { count?: boolean }): string[] {
   const params: string[] = []
   if (opts.filter !== undefined) {
     if (typeof opts.filter !== 'string') {
@@ -163,11 +204,46 @@ function readFiQueryParams(opts: ReadFiOptions): string[] {
     const fields = opts.select.map((f) => f.trim()).filter((f) => f !== '')
     if (fields.length > 0) params.push(qp('$select', fields.join(',')))
   }
+  if (opts.orderBy !== undefined) {
+    const orderBy = orderByParam(opts.orderBy)
+    if (orderBy !== '') params.push(qp('$orderby', orderBy))
+  }
   if (opts.top !== undefined) {
     assertNonNegativeInt(opts.top, 'ReadFiOptions.top')
     params.push(`$top=${opts.top}`)
   }
+  if (opts.skip !== undefined) {
+    assertNonNegativeInt(opts.skip, 'ReadFiOptions.skip')
+    params.push(`$skip=${opts.skip}`)
+  }
+  if (opts.count !== undefined && typeof opts.count !== 'boolean') {
+    throw new InvalidArgumentError('ReadFiOptions.count must be a boolean', {
+      argument: 'ReadFiOptions.count',
+      received: opts.count,
+    })
+  }
+  if (opts.count === true) params.push(qp('$inlinecount', 'allpages'))
   return params
+}
+
+/** The `$orderby` value of `ReadFiOptions.orderBy` — `field dir` pairs joined by commas; `''` for an empty list. */
+function orderByParam(orderBy: unknown): string {
+  const bad = (): never => {
+    throw new InvalidArgumentError(
+      "ReadFiOptions.orderBy must be an array of { field: string, dir?: 'asc' | 'desc' } with a non-blank field",
+      { argument: 'ReadFiOptions.orderBy', received: orderBy },
+    )
+  }
+  if (!Array.isArray(orderBy)) return bad()
+  return Array.from(orderBy as unknown[])
+    .map((o) => {
+      if (typeof o !== 'object' || o === null) return bad()
+      const { field, dir } = o as { field?: unknown; dir?: unknown }
+      if (typeof field !== 'string' || field.trim() === '') return bad()
+      if (dir !== undefined && dir !== 'asc' && dir !== 'desc') return bad()
+      return `${field.trim()} ${dir ?? 'asc'}`
+    })
+    .join(',')
 }
 
 /**
@@ -220,9 +296,11 @@ function expandRangeArgs(args: Record<string, unknown>): Record<string, unknown>
  *     (also `balance()` / `turnovers()` / `balanceAndTurnovers()`)
  *
  * Every virtual-table method takes an optional trailing {@link ReadFiOptions}
- * (`$top` / `$select` / `$filter` + per-call `signal` / `timeout` / `retry`) —
- * `select` doubles as the server-side grouping, and `top` bounds the large
- * collections big registers return.
+ * (`$top` / `$skip` / `$orderby` / `$select` / `$filter` + per-call `signal` /
+ * `timeout` / `retry`) — `select` doubles as the server-side grouping, `top`
+ * bounds the large collections big registers return, and `top` + `skip` page
+ * through them. With `count: true` a method resolves to a {@link ReadFiPage}
+ * `{ value, count }` instead of the bare rows.
  *
  * See spec §4.7.
  */
@@ -243,20 +321,35 @@ export class RegisterHelper<T> {
   }
 
   /** Virtual-table FI: balance at `Period`. Accumulation / Accounting register. */
-  async balance<R = Record<string, unknown>>(args: BalanceArgs = {}, opts: ReadFiOptions = {}): Promise<R[]> {
+  async balance<R = Record<string, unknown>>(args: BalanceArgs, opts: ReadFiCountOptions): Promise<ReadFiPage<R>>
+  async balance<R = Record<string, unknown>>(args?: BalanceArgs, opts?: ReadFiOptions): Promise<R[]>
+  async balance<R = Record<string, unknown>>(
+    args: BalanceArgs = {},
+    opts: ReadFiOptions | ReadFiCountOptions = {},
+  ): Promise<R[] | ReadFiPage<R>> {
     return this.callReadFi<R>('Balance', args as Record<string, unknown>, opts)
   }
 
   /** Virtual-table FI: turnovers over a `Period` range. Accumulation / Accounting register. */
-  async turnovers<R = Record<string, unknown>>(args: TurnoversArgs = {}, opts: ReadFiOptions = {}): Promise<R[]> {
+  async turnovers<R = Record<string, unknown>>(args: TurnoversArgs, opts: ReadFiCountOptions): Promise<ReadFiPage<R>>
+  async turnovers<R = Record<string, unknown>>(args?: TurnoversArgs, opts?: ReadFiOptions): Promise<R[]>
+  async turnovers<R = Record<string, unknown>>(
+    args: TurnoversArgs = {},
+    opts: ReadFiOptions | ReadFiCountOptions = {},
+  ): Promise<R[] | ReadFiPage<R>> {
     return this.callReadFi<R>('Turnovers', expandRangeArgs(args as Record<string, unknown>), opts)
   }
 
   /** Virtual-table FI: balance + turnovers over a `Period` range. Accumulation / Accounting register. */
   async balanceAndTurnovers<R = Record<string, unknown>>(
+    args: TurnoversArgs,
+    opts: ReadFiCountOptions,
+  ): Promise<ReadFiPage<R>>
+  async balanceAndTurnovers<R = Record<string, unknown>>(args?: TurnoversArgs, opts?: ReadFiOptions): Promise<R[]>
+  async balanceAndTurnovers<R = Record<string, unknown>>(
     args: TurnoversArgs = {},
-    opts: ReadFiOptions = {},
-  ): Promise<R[]> {
+    opts: ReadFiOptions | ReadFiCountOptions = {},
+  ): Promise<R[] | ReadFiPage<R>> {
     return this.callReadFi<R>('BalanceAndTurnovers', expandRangeArgs(args as Record<string, unknown>), opts)
   }
 
@@ -268,7 +361,12 @@ export class RegisterHelper<T> {
    * bound to the record type, register the `_RecordType` set instead —
    * `register('InformationRegister_X_RecordType')`.
    */
-  async sliceFirst<R = Record<string, unknown>>(args: SliceArgs = {}, opts: ReadFiOptions = {}): Promise<R[]> {
+  async sliceFirst<R = Record<string, unknown>>(args: SliceArgs, opts: ReadFiCountOptions): Promise<ReadFiPage<R>>
+  async sliceFirst<R = Record<string, unknown>>(args?: SliceArgs, opts?: ReadFiOptions): Promise<R[]>
+  async sliceFirst<R = Record<string, unknown>>(
+    args: SliceArgs = {},
+    opts: ReadFiOptions | ReadFiCountOptions = {},
+  ): Promise<R[] | ReadFiPage<R>> {
     return this.callReadFi<R>('SliceFirst', args as Record<string, unknown>, opts)
   }
 
@@ -280,47 +378,76 @@ export class RegisterHelper<T> {
    * bound to the record type, register the `_RecordType` set instead —
    * `register('InformationRegister_X_RecordType')`.
    */
-  async sliceLast<R = Record<string, unknown>>(args: SliceArgs = {}, opts: ReadFiOptions = {}): Promise<R[]> {
+  async sliceLast<R = Record<string, unknown>>(args: SliceArgs, opts: ReadFiCountOptions): Promise<ReadFiPage<R>>
+  async sliceLast<R = Record<string, unknown>>(args?: SliceArgs, opts?: ReadFiOptions): Promise<R[]>
+  async sliceLast<R = Record<string, unknown>>(
+    args: SliceArgs = {},
+    opts: ReadFiOptions | ReadFiCountOptions = {},
+  ): Promise<R[] | ReadFiPage<R>> {
     return this.callReadFi<R>('SliceLast', args as Record<string, unknown>, opts)
   }
 
   /** Virtual-table FI: Dr/Cr turnovers over a `Period` range. AccountingRegister. */
   async drCrTurnovers<R = Record<string, unknown>>(
+    args: DrCrTurnoversArgs,
+    opts: ReadFiCountOptions,
+  ): Promise<ReadFiPage<R>>
+  async drCrTurnovers<R = Record<string, unknown>>(args?: DrCrTurnoversArgs, opts?: ReadFiOptions): Promise<R[]>
+  async drCrTurnovers<R = Record<string, unknown>>(
     args: DrCrTurnoversArgs = {},
-    opts: ReadFiOptions = {},
-  ): Promise<R[]> {
+    opts: ReadFiOptions | ReadFiCountOptions = {},
+  ): Promise<R[] | ReadFiPage<R>> {
     return this.callReadFi<R>('DrCrTurnovers', expandRangeArgs(args as Record<string, unknown>), opts)
   }
 
   /** Virtual-table FI: extra-dimension types for the register. Takes no FI arguments. AccountingRegister. */
-  async extDimensions<R = Record<string, unknown>>(opts: ReadFiOptions = {}): Promise<R[]> {
+  async extDimensions<R = Record<string, unknown>>(opts: ReadFiCountOptions): Promise<ReadFiPage<R>>
+  async extDimensions<R = Record<string, unknown>>(opts?: ReadFiOptions): Promise<R[]>
+  async extDimensions<R = Record<string, unknown>>(
+    opts: ReadFiOptions | ReadFiCountOptions = {},
+  ): Promise<R[] | ReadFiPage<R>> {
     return this.callReadFi<R>('ExtDimensions', {}, opts)
   }
 
   /** Virtual-table FI: records with extra dimensions over a `Period` range. AccountingRegister. */
   async recordsWithExtDimensions<R = Record<string, unknown>>(
+    args: RecordsWithExtDimensionsArgs,
+    opts: ReadFiCountOptions,
+  ): Promise<ReadFiPage<R>>
+  async recordsWithExtDimensions<R = Record<string, unknown>>(
+    args?: RecordsWithExtDimensionsArgs,
+    opts?: ReadFiOptions,
+  ): Promise<R[]>
+  async recordsWithExtDimensions<R = Record<string, unknown>>(
     args: RecordsWithExtDimensionsArgs = {},
-    opts: ReadFiOptions = {},
-  ): Promise<R[]> {
+    opts: ReadFiOptions | ReadFiCountOptions = {},
+  ): Promise<R[] | ReadFiPage<R>> {
     return this.callReadFi<R>('RecordsWithExtDimensions', expandRangeArgs(args as Record<string, unknown>), opts)
   }
 
   /**
    * Shared dispatch for read-style virtual-table FIs. Builds the URL via
    * `buildFunctionUrl` (no `ref` — set-bound), appends `$filter` / `$select` /
-   * `$top` when requested, GETs through the transport (threading the per-call
-   * `RequestOptions`), and parses through `parseV3Collection` so `Edm.DateTime`
-   * values become `Date` instances and the `0001-01-01T00:00:00` empty-date
-   * sentinel becomes `null` (consistent with `client.functions.X.Y` dispatch).
+   * `$orderby` / `$top` / `$skip` / `$inlinecount` when requested, GETs through
+   * the transport (threading the per-call `RequestOptions`), and parses through
+   * `parseV3Collection` so `Edm.DateTime` values become `Date` instances and the
+   * `0001-01-01T00:00:00` empty-date sentinel becomes `null` (consistent with
+   * `client.functions.X.Y` dispatch). With `count: true` it resolves to the rows
+   * and `odata.count` together.
    */
-  private async callReadFi<R>(funcName: string, args: Record<string, unknown>, opts: ReadFiOptions): Promise<R[]> {
-    const { top, select, filter, ...reqOpts } = opts
+  private async callReadFi<R>(
+    funcName: string,
+    args: Record<string, unknown>,
+    opts: ReadFiOptions & { count?: boolean },
+  ): Promise<R[] | ReadFiPage<R>> {
+    const { top, skip, orderBy, count, select, filter, ...reqOpts } = opts
     let url = buildFunctionUrl(this.client.baseUrl, this.entitySet, funcName, {}, args, this.client.serverTimezone)
     const params = readFiQueryParams(opts)
     if (params.length > 0) url += `${url.includes('?') ? '&' : '?'}${params.join('&')}`
     const raw = await this.client.transportGet(url, reqOpts)
     // withTypeHint=false: virtual-table FI results have a different shape than the entity type itself.
     const parsed = parseV3Collection<R>(raw.body, parseOptsFor(this.client, this.entitySet, false))
-    return parsed.value
+    if (count !== true) return parsed.value
+    return parsed.count !== undefined ? { value: parsed.value, count: parsed.count } : { value: parsed.value }
   }
 }

@@ -1,0 +1,5 @@
+---
+"@1c-odata/client": minor
+---
+
+Register virtual-table methods (`client.register(…).balance()` / `turnovers()` / `balanceAndTurnovers()` / `sliceFirst()` / `sliceLast()` / `drCrTurnovers()` / `extDimensions()` / `recordsWithExtDimensions()`) page and sort on the 1С server: `ReadFiOptions` gains `skip` (`$skip`) and `orderBy` (`$orderby`, `[{ field, dir? }]`), and passing `count: true` (`ReadFiCountOptions`, `$inlinecount=allpages`) makes the method resolve to a `ReadFiPage` — `{ value, count }` — instead of the bare row array. Calls without `count` are unchanged and still resolve to `R[]`. 1С computes the whole virtual table on every call, so a page of a big table still costs that time and the count about as much again — but only the page travels. An untyped caller passing a negative or fractional `skip`, an `orderBy` that is not an array of `{ field, dir? }` (a blank field or a `dir` other than `asc` / `desc` included) or a non-boolean `count` gets an `InvalidArgumentError` before any request.

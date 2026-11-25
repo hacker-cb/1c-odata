@@ -1,7 +1,9 @@
 import type {
   BalanceArgs,
   DrCrTurnoversArgs,
+  ReadFiCountOptions,
   ReadFiOptions,
+  ReadFiPage,
   RecordsWithExtDimensionsArgs,
   RegisterHelper,
   SliceArgs,
@@ -251,7 +253,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     {
       title: 'Query register virtual table',
       description:
-        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Control grouping with select: on balance/turnovers/balanceAndTurnovers/drCrTurnovers 1С sums the resources over the selected dimensions only, so fewer dimensions return fewer, coarser rows (e.g. on an AccountingRegister turnovers, select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account); on slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from (extDimensions takes neither); filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601 in the 1С server time unless they carry Z or an offset. Paginated via top/skip.',
+        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Control grouping with select: on balance/turnovers/balanceAndTurnovers/drCrTurnovers 1С sums the resources over the selected dimensions only, so fewer dimensions return fewer, coarser rows (e.g. on an AccountingRegister turnovers, select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account); on slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from (extDimensions takes neither); filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601 in the 1С server time unless they carry Z or an offset. Paginated via top/skip on the 1С server: each call reads one page and the exact total (1С computes the whole virtual table on every call, so a big table costs seconds per page — and a deep skip more than the first; narrow with condition/period/select rather than paging through it). orderBy sorts on the server (costs time on a big table) — with top it gives a server-side top-N, e.g. orderBy [{"field":"СуммаTurnoverDr","dir":"desc"}], top 10. Without orderBy rows come in 1С\'s own order, which stays the same from page to page.',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         register: z.string().describe('Register entity set, e.g. AccumulationRegister_ТоварыНаСкладах'),
@@ -301,6 +303,12 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           .describe(
             'Raw OData $filter on the resulting rows, e.g. "СуммаTurnoverDr gt 100000". Use condition/accountCondition to restrict the records the table is computed from.',
           ),
+        orderBy: z
+          .array(z.object({ field: z.string(), dir: z.enum(['asc', 'desc']).optional() }))
+          .optional()
+          .describe(
+            'Sort the resulting rows on the 1С server ($orderby, applied in order; dir defaults to asc). Costs 1С time on a big table. With top it gives the top-N, e.g. [{"field":"СуммаTurnoverDr","dir":"desc"}].',
+          ),
         top: z.number().int().optional().describe('Max rows to return this page (server-capped; omit for the default)'),
         skip: z.number().int().min(0).optional().describe('Offset for pagination (default 0)'),
         compact: z
@@ -314,50 +322,41 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     async (args) =>
       toolResult(async () => {
         const { client } = await pool.get(args.connection)
-        // Register FIs return the whole virtual table; bound the server-side fetch
-        // ($top = cap + 1) so a huge register can't OOM us, then paginate
-        // client-side. `total` is exact below the cap; above it we degrade to a
-        // floor with `totalCapped` and a nudge to narrow.
-        const cap = limits.maxRegisterRows
-        const fetched = await runRegisterTable(
-          client.register(args.register),
-          cleanRegisterArgs(args),
-          { top: cap + 1, ...readOptions(args) },
-          client.serverTimezone,
-        )
-        const totalCapped = fetched.length > cap
-        const allRows = totalCapped ? fetched.slice(0, cap) : fetched
-        const total = allRows.length
+        // One page per call, paged by 1С itself ($skip/$top) with the exact
+        // total alongside ($inlinecount) — never the whole virtual table (#192).
         const offset = args.skip ?? 0
         const limit = clampTop(args.top, limits)
-        const page = allRows.slice(offset, offset + limit)
-        const { rows, truncated } = shapeRows(page, args.compact, limits)
+        const page = await runRegisterTable(
+          client.register(args.register),
+          cleanRegisterArgs(args),
+          { ...readOptions(args), top: limit, ...(offset > 0 ? { skip: offset } : {}), count: true },
+          client.serverTimezone,
+        )
+        const total = page.count
+        const fetched = page.value.length
+        const { rows, truncated } = shapeRows(page.value, args.compact, limits)
         const note = truncationNote(
           truncated,
           rows.length,
-          page.length,
+          fetched,
           limits,
           'narrow with select/condition/filter, set compact:true, or page with skip',
         )
-        const capNote = totalCapped
-          ? ` ⚠ register result capped at ${cap} rows — narrow with condition/filter/period (or group coarser with select on an aggregating table) for the full set.`
-          : ''
         return {
-          summary: `${rows.length} row(s) of ${total}${totalCapped ? '+' : ''} total from ${args.register}.${args.table}.${note}${capNote}`,
+          summary: `${rows.length} row(s)${total !== undefined ? ` of ${total} total` : ''} from ${args.register}.${args.table}.${note}`,
           data: {
             connection: args.connection,
             register: args.register,
             table: args.table,
-            total,
-            ...(totalCapped ? { totalCapped: true } : {}),
+            ...(total !== undefined ? { total } : {}),
             pagination: {
               skip: offset,
               top: limit,
               returned: rows.length,
               truncated,
-              // Rows past the cap cannot be paged to — the cap is reported by
-              // `totalCapped` and the note — so paging stops at the last fetched row.
-              hasMore: truncated || offset + page.length < total,
+              // More rows exist if we dropped some for size, or — by the total
+              // when 1С reported one, else by a full page — the server has more.
+              hasMore: truncated || (total !== undefined ? offset + fetched < total : fetched === limit),
             },
             rows,
           },
@@ -603,14 +602,23 @@ function cleanRegisterArgs(args: RegisterQueryArgs): RegisterQueryArgs {
 }
 
 /**
- * The `$select` / `$filter` system options of a register call, passed through
- * as given — the client's `ReadFiOptions` owns the rule that blank values send
- * nothing.
+ * The `$select` / `$filter` / `$orderby` system options of a register call,
+ * passed through as given — the client's `ReadFiOptions` owns the rule that
+ * blank values send nothing.
  */
-function readOptions(args: { select?: string[] | undefined; filter?: string | undefined }): ReadFiOptions {
+function readOptions(args: {
+  select?: string[] | undefined
+  filter?: string | undefined
+  orderBy?: { field: string; dir?: 'asc' | 'desc' | undefined }[] | undefined
+}): ReadFiOptions {
   return {
     ...(args.select !== undefined ? { select: args.select } : {}),
     ...(args.filter !== undefined ? { filter: args.filter } : {}),
+    ...(args.orderBy !== undefined
+      ? {
+          orderBy: args.orderBy.map((o) => (o.dir !== undefined ? { field: o.field, dir: o.dir } : { field: o.field })),
+        }
+      : {}),
   }
 }
 
@@ -618,9 +626,9 @@ function readOptions(args: { select?: string[] | undefined; filter?: string | un
 function runRegisterTable(
   reg: RegisterHelper<unknown>,
   args: RegisterQueryArgs,
-  opts: ReadFiOptions,
+  opts: ReadFiCountOptions,
   tz: string,
-): Promise<Record<string, unknown>[]> {
+): Promise<ReadFiPage<Record<string, unknown>>> {
   switch (args.table) {
     case 'balance':
       return reg.balance(balanceArgs(args, tz), opts)

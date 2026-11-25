@@ -334,6 +334,90 @@ describe('RegisterHelper ReadFiOptions ($select / $filter)', () => {
   })
 })
 
+describe('RegisterHelper ReadFiOptions ($skip / $orderby / count) — server-side paging (#192)', () => {
+  /** Capture the URL of one virtual-table call, answering with `body`. */
+  function capture(pattern: RegExp, body: Record<string, unknown> = { 'odata.metadata': '#X', value: [] }) {
+    let url = ''
+    server.use(
+      http.get(pattern, ({ request }) => {
+        url = request.url
+        return HttpResponse.json(body)
+      }),
+    )
+    return { url: () => url }
+  }
+  const client = () => new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+
+  it('appends $orderby, $top, $skip and $inlinecount after the FI parameters', async () => {
+    const seen = capture(/\/AccountingRegister_X\/Turnovers\(\).*/, {
+      'odata.metadata': '#X',
+      'odata.count': '234859',
+      value: [{ СуммаTurnoverDr: 5, Period: '2026-01-01T00:00:00' }],
+    })
+    const page = await client()
+      .register('AccountingRegister_X')
+      .turnovers(
+        { Period: { from: new Date(2026, 0, 1) } },
+        {
+          orderBy: [{ field: ' СуммаTurnoverDr ', dir: 'desc' }, { field: 'Account_Key' }],
+          top: 50,
+          skip: 100,
+          count: true,
+        },
+      )
+    const url = seen.url()
+    expect(url).toContain(`%24orderby=${encodeURIComponent('СуммаTurnoverDr desc,Account_Key asc')}`)
+    expect(decodeURIComponent(url)).toMatch(
+      /Turnovers\(\)\?StartPeriod=.*\$orderby=.*&\$top=50&\$skip=100&\$inlinecount=allpages$/,
+    )
+    expect(page.count).toBe(234859)
+    expect(page.value).toHaveLength(1)
+    // Rows are parsed as on the rows-only path: a naive date-time becomes a Date.
+    expect(page.value[0]?.Period).toBeInstanceOf(Date)
+  })
+
+  it('resolves to the bare rows without count, and sends no $inlinecount', async () => {
+    const seen = capture(/\/AccumulationRegister_X\/Balance\(\).*/, {
+      'odata.metadata': '#X',
+      'odata.count': '7',
+      value: [{ A: 1 }],
+    })
+    const rows = await client().register('AccumulationRegister_X').balance({}, { top: 1, skip: 0 })
+    expect(rows).toEqual([{ A: 1 }])
+    expect(decodeURIComponent(seen.url())).toContain('Balance()?$top=1&$skip=0')
+    expect(seen.url()).not.toContain('inlinecount')
+  })
+
+  it('leaves count out of the page when 1С reports none', async () => {
+    capture(/\/AccountingRegister_X\/ExtDimensions\(\).*/, { 'odata.metadata': '#X', value: [{ A: 1 }] })
+    const page = await client().register('AccountingRegister_X').extDimensions({ count: true })
+    expect(page).toEqual({ value: [{ A: 1 }] })
+  })
+
+  it('sends no $orderby for an empty list', async () => {
+    const seen = capture(/\/AccumulationRegister_X\/Balance\(\).*/)
+    await client().register('AccumulationRegister_X').balance({}, { orderBy: [] })
+    expect(seen.url()).not.toContain('orderby')
+  })
+
+  it.each([
+    ['a negative skip', { skip: -1 }],
+    ['a fractional skip', { skip: 1.5 }],
+    ['an orderBy that is not an array', { orderBy: 'A desc' }],
+    ['an orderBy entry without a field', { orderBy: [{ dir: 'asc' }] }],
+    ['an orderBy entry with a blank field', { orderBy: [{ field: '  ' }] }],
+    ['an orderBy entry with an unknown dir', { orderBy: [{ field: 'A', dir: 'down' }] }],
+    ['a null orderBy entry', { orderBy: [null] }],
+    ['a non-boolean count', { count: 'yes' }],
+  ])('rejects %s from an untyped caller before issuing the request', async (_name, bad) => {
+    await expect(
+      client()
+        .register('AccumulationRegister_X')
+        .balance({}, bad as unknown as { skip?: number }),
+    ).rejects.toThrow(InvalidArgumentError)
+  })
+})
+
 describe('RegisterHelper forwards AccountingRegister filters on shared FIs', () => {
   it('turnovers() forwards AccountCondition (not silently dropped on an AccountingRegister)', async () => {
     let url: string | null = null

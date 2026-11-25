@@ -49,7 +49,9 @@ export type { ChainedFieldExpr, FieldExpr, FieldExprMap, FilterExpression } from
 export {
   type BalanceArgs,
   type DrCrTurnoversArgs,
+  type ReadFiCountOptions,
   type ReadFiOptions,
+  type ReadFiPage,
   type RecordsWithExtDimensionsArgs,
   RegisterHelper,
   type SliceArgs,

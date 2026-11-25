@@ -195,7 +195,7 @@ Narrow before broad: `ConcurrencyError` / `BusinessError` / `PermissionError` ex
 
 ## Registers
 
-`client.register(set)` is a typed facade over 1С register virtual tables — balances, turnovers, and slices. Turnover-style tables take a `{ from, to }` period **range** (mapped to `StartPeriod` / `EndPeriod`); `balance()` and slices take a single `Period` point. Every method accepts an optional trailing `ReadFiOptions` (`top` / `select` / `filter` + per-call `signal` / `timeout` / `retry`) and returns the rows directly (`Promise<R[]>`):
+`client.register(set)` is a typed facade over 1С register virtual tables — balances, turnovers, and slices. Turnover-style tables take a `{ from, to }` period **range** (mapped to `StartPeriod` / `EndPeriod`); `balance()` and slices take a single `Period` point. Every method accepts an optional trailing `ReadFiOptions` (`top` / `skip` / `orderBy` / `select` / `filter` + per-call `signal` / `timeout` / `retry`) and returns the rows directly (`Promise<R[]>`):
 
 ```ts
 // AccumulationRegister — stock balance at a date, turnovers over a range
@@ -230,6 +230,18 @@ const byAccount = await client.register('AccountingRegister_Хозрасчетн
   },
   { select: ['Account_Key', 'СуммаTurnoverDr', 'СуммаTurnoverCr'], filter: 'СуммаTurnoverDr gt 100000' },
 )
+```
+
+A big table is paged by 1С itself: `skip` + `top` read one page, and `count: true` adds the total row count (`$inlinecount`) — the method then resolves to `{ value, count }` instead of the bare rows. `orderBy` sorts on the server, so with `top` it gives a top-N. 1С computes the whole virtual table on every call, so each page of a big table costs that time (a deep `skip` more than the first page), and the count adds about as much again — but only the page travels:
+
+```ts
+// Page 3 of 50 rows, largest debit turnover first, with the total
+const { value, count } = await client
+  .register('AccountingRegister_Хозрасчетный')
+  .turnovers(
+    { Period: { from: new Date('2026-01-01T00:00:00+03:00') } },
+    { orderBy: [{ field: 'СуммаTurnoverDr', dir: 'desc' }], skip: 100, top: 50, count: true },
+  )
 ```
 
 Also available: `balanceAndTurnovers`, `sliceFirst`, `extDimensions`, `recordsWithExtDimensions`, plus `recordsets()` / `records()` for the raw record sets — see [`packages/client/src/register.ts`](./packages/client/src/register.ts).
