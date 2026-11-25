@@ -1,7 +1,7 @@
 import { BasicAuth, HTTPError, NetworkError, type RequestEvent, TimeoutError } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { request, requestStream } from '../../src/http/transport.js'
+import { type HookTrace, request, requestStream } from '../../src/http/transport.js'
 import { createMswServer } from '../fixtures/msw-server.js'
 
 const server = createMswServer()
@@ -363,6 +363,8 @@ describe('transport — timeout around beforeRequest (#190)', () => {
     const pending = request(target, { timeout: 60_000, hooks })
     expect(ran).toBe(true)
     await expect(pending).resolves.toMatchObject({ status: 200 })
+  })
+})
 
 describe('requestStream — a throwing afterResponse releases the response (#189)', () => {
   it('cancels the unread body and rethrows the hook’s error as is', async () => {
@@ -415,5 +417,107 @@ describe('transport — a caller’s abort beats a later timeout (#189)', () => 
     expect(err).toBe(reason)
     expect(err).not.toBeInstanceOf(TimeoutError)
     expect(onError).not.toHaveBeenCalled()
+  })
+})
+
+describe('transport — the per-call hook trace retry reads (#189)', () => {
+  const at = (path: string) => ({ method: 'GET' as const, url: `${base}/${path}`, headers: {} })
+  const failing = () =>
+    new HttpResponse('{"odata.error":{"code":"0","message":{"value":"busy"}}}', {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    })
+
+  it('records a hook’s own exception, not onError rethrowing what it was handed', async () => {
+    server.use(
+      http.get(`${base}/Ok`, () => HttpResponse.json({ value: [] })),
+      http.get(`${base}/Busy`, failing),
+    )
+    const afterTrace: HookTrace = { threw: false }
+    await request(at('Ok'), { hooks: { afterResponse: () => Promise.reject(new Error('x')) } }, afterTrace).catch(
+      () => {},
+    )
+    expect(afterTrace.threw).toBe(true)
+
+    const rethrowTrace: HookTrace = { threw: false }
+    const rethrown = await request(
+      at('Busy'),
+      {
+        hooks: {
+          onError: (_req, e) => {
+            throw e
+          },
+        },
+      },
+      rethrowTrace,
+    ).catch((e: unknown) => e)
+    expect(rethrown).toBeInstanceOf(HTTPError)
+    expect(rethrowTrace.threw).toBe(false)
+
+    const otherTrace: HookTrace = { threw: false }
+    await request(
+      at('Busy'),
+      {
+        hooks: {
+          onError: () => {
+            throw new Error('re-login')
+          },
+        },
+      },
+      otherTrace,
+    ).catch(() => {})
+    expect(otherTrace.threw).toBe(true)
+  })
+
+  it('keeps two concurrent calls apart when their hooks throw the same error object', async () => {
+    server.use(
+      http.get(`${base}/Ok`, () => HttpResponse.json({ value: [] })),
+      http.get(`${base}/Busy`, failing),
+    )
+    let release = (): void => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    let handed: unknown
+    let held = (): void => {}
+    const holding = new Promise<void>((r) => {
+      held = r
+    })
+    // B: onError holds the error it was handed, then rethrows it — the library's error.
+    const bTrace: HookTrace = { threw: false }
+    const b = request(
+      at('Busy'),
+      {
+        hooks: {
+          onError: async (_req, e) => {
+            handed = e
+            held()
+            await gate
+            throw e
+          },
+        },
+      },
+      bTrace,
+    ).catch((e: unknown) => e)
+    await holding
+    // A: its afterResponse throws that same object — A's hook's own exception.
+    const aTrace: HookTrace = { threw: false }
+    const a = request(
+      at('Ok'),
+      {
+        hooks: {
+          afterResponse: async () => {
+            release()
+            await b
+            throw handed
+          },
+        },
+      },
+      aTrace,
+    ).catch((e: unknown) => e)
+    expect(await a).toBe(handed)
+    expect(await b).toBe(handed)
+    expect(aTrace.threw).toBe(true)
+    expect(bTrace.threw).toBe(false)
   })
 })

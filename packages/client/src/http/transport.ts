@@ -70,6 +70,7 @@ interface PreparedRequest {
 async function prepareRequest(
   config: RequestConfig,
   callOpts: TransportOptions & RequestOptions,
+  trace: HookTrace | undefined,
 ): Promise<PreparedRequest> {
   const start = Date.now()
 
@@ -100,14 +101,16 @@ async function prepareRequest(
   // Read inside runHook, so even a throwing `hooks` getter counts as the hook's.
   try {
     const result = await settleWithin(
-      runHook(() => callOpts.hooks?.beforeRequest?.(reqEvent)),
+      runHook(() => callOpts.hooks?.beforeRequest?.(reqEvent), trace),
       combined,
     )
     if (result) reqEvent = result
   } catch (e) {
-    // The deadline passed while the hook ran: a timeout, as on the wire.
-    if (timeoutSignal?.signal.aborted && e instanceof Error && e.name === 'AbortError') {
-      await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
+    // The request signal fired while the hook ran — the deadline or the
+    // caller's abort: classified as on the wire (a TimeoutError with onError,
+    // or the caller's own reason).
+    if (combined?.aborted) {
+      await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, combined, trace)
     }
     // The callers' `finally` that clears the timer is not reached from here.
     if (timeoutId) clearTimeout(timeoutId)
@@ -240,35 +243,28 @@ function networkErrorMessage(e: unknown): string {
   }
 }
 
-/** Errors a request hook threw — kept apart so retry never repeats a request for them. */
-const hookErrors = new WeakSet<object>()
-
 /**
- * Whether `e` was thrown by a request hook rather than by the library. The
- * one exception is `onError` rethrowing the very error it was handed: that
- * stays the library's error, retried as its type and status say.
+ * One call's record of whether a hook's own exception ended it. Retry hands
+ * a fresh one to every attempt and never repeats an attempt a hook ended —
+ * per call, so no other request's hooks can touch it.
  *
- * @internal — read by `http/retry.ts`.
+ * @internal — written by the transport, read by `http/retry.ts`.
  */
-export function isHookError(e: unknown): boolean {
-  return typeof e === 'object' && e !== null && hookErrors.has(e)
+export interface HookTrace {
+  threw: boolean
 }
 
 /**
- * Call a hook (synchronously, as the caller wrote it — `this` intact) and mark
- * what it throws as the hook's own; `handed` — the error given to `onError` —
- * stays unmarked when rethrown.
+ * Call a hook (synchronously, as the caller wrote it — `this` intact) and
+ * record in `trace` that what it throws is the hook's own. The one exception:
+ * `onError` rethrowing `handed`, the very error it was given, leaves that the
+ * library's error, retried as its type and status say.
  */
-async function runHook<T>(call: () => T | PromiseLike<T>, handed?: unknown): Promise<T> {
+async function runHook<T>(call: () => T | PromiseLike<T>, trace: HookTrace | undefined, handed?: unknown): Promise<T> {
   try {
     return await call()
   } catch (e) {
-    if (typeof e === 'object' && e !== null) {
-      // Rethrowing the error handed to onError gives it back to the library —
-      // even if another request's hook threw the same object earlier.
-      if (e === handed) hookErrors.delete(e)
-      else hookErrors.add(e)
-    }
+    if (trace !== undefined && (handed === undefined || e !== handed)) trace.threw = true
     throw e
   }
 }
@@ -286,6 +282,7 @@ async function translateAndFireError(
   timeoutSignal: AbortController | undefined,
   timeoutMs: number | undefined,
   requestSignal: AbortSignal | null | undefined,
+  trace: HookTrace | undefined,
 ): Promise<never> {
   const request: RequestContext = { method: reqEvent.method, url: reqEvent.url }
   // The request signal carries the reason of whichever source aborted it
@@ -298,7 +295,7 @@ async function translateAndFireError(
       cause: e,
       request,
     })
-    await runHook(() => hooks?.onError?.(reqEvent, err), err)
+    await runHook(() => hooks?.onError?.(reqEvent, err), trace, err)
     throw err
   }
   // A caller's abort is no network failure and nothing to retry: the caller
@@ -307,7 +304,7 @@ async function translateAndFireError(
   if (e instanceof Error && e.name === 'AbortError') throw e
   // Anything else failed on the wire: a network-level error
   const err = new NetworkError(networkErrorMessage(e), { cause: e, request })
-  await runHook(() => hooks?.onError?.(reqEvent, err), err)
+  await runHook(() => hooks?.onError?.(reqEvent, err), trace, err)
   throw err
 }
 
@@ -334,8 +331,9 @@ async function translateAndFireError(
 export async function request(
   config: RequestConfig,
   callOpts: TransportOptions & RequestOptions,
+  trace?: HookTrace,
 ): Promise<RawResponse> {
-  const prepared = await prepareRequest(config, callOpts)
+  const prepared = await prepareRequest(config, callOpts, trace)
   const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs } = prepared
 
   try {
@@ -353,7 +351,7 @@ export async function request(
       body = await response.text()
     } catch (e) {
       if (timeoutId) clearTimeout(timeoutId)
-      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, fetchInit.signal)
+      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, fetchInit.signal, trace)
     }
     const headers: Record<string, string> = {}
     response.headers.forEach((v, k) => {
@@ -370,14 +368,14 @@ export async function request(
     }
 
     const { hooks } = callOpts
-    await runHook(() => hooks?.afterResponse?.(reqEvent, resEvent))
+    await runHook(() => hooks?.afterResponse?.(reqEvent, resEvent), trace)
 
     if (response.status >= 400) {
       const err = await mapResponseToError(response.status, response.statusText, headers, body, {
         method: reqEvent.method,
         url: reqEvent.url,
       })
-      await runHook(() => hooks?.onError?.(reqEvent, err), err)
+      await runHook(() => hooks?.onError?.(reqEvent, err), trace, err)
       throw err
     }
 
@@ -421,8 +419,9 @@ export async function request(
 export async function requestStream(
   config: RequestConfig,
   callOpts: TransportOptions & RequestOptions,
+  trace?: HookTrace,
 ): Promise<StreamResponse> {
-  const prepared = await prepareRequest(config, callOpts)
+  const prepared = await prepareRequest(config, callOpts, trace)
   const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs } = prepared
 
   try {
@@ -432,7 +431,7 @@ export async function requestStream(
       response = await globalThis.fetch(reqEvent.url, fetchInit)
     } catch (e) {
       if (timeoutId) clearTimeout(timeoutId)
-      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, fetchInit.signal)
+      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, fetchInit.signal, trace)
     }
 
     const headers: Record<string, string> = {}
@@ -450,7 +449,7 @@ export async function requestStream(
 
     const { hooks } = callOpts
     try {
-      await runHook(() => hooks?.afterResponse?.(reqEvent, resEvent))
+      await runHook(() => hooks?.afterResponse?.(reqEvent, resEvent), trace)
     } catch (e) {
       // The caller never gets this response: release its connection.
       response.body?.cancel().catch(() => {})
@@ -466,13 +465,21 @@ export async function requestStream(
         body = await response.text()
       } catch (e) {
         if (timeoutId) clearTimeout(timeoutId)
-        return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, fetchInit.signal)
+        return await translateAndFireError(
+          e,
+          reqEvent,
+          callOpts.hooks,
+          timeoutSignal,
+          timeoutMs,
+          fetchInit.signal,
+          trace,
+        )
       }
       const err = await mapResponseToError(response.status, response.statusText, headers, body, {
         method: reqEvent.method,
         url: reqEvent.url,
       })
-      await runHook(() => hooks?.onError?.(reqEvent, err), err)
+      await runHook(() => hooks?.onError?.(reqEvent, err), trace, err)
       throw err
     }
 

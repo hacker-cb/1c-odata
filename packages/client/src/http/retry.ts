@@ -1,6 +1,6 @@
 import type { RequestOptions, RetryPolicy } from '../client/options.js'
 import { BusinessError, HTTPError, NetworkError, TimeoutError } from '../errors.js'
-import { isHookError, type RawResponse, type RequestConfig, request, type TransportOptions } from './transport.js'
+import { type HookTrace, type RawResponse, type RequestConfig, request, type TransportOptions } from './transport.js'
 
 interface RetryWrapperOpts extends TransportOptions, RequestOptions {}
 
@@ -20,13 +20,14 @@ export async function requestWithRetry(config: RequestConfig, callOpts: RetryWra
   let delayMs = policy.initialDelayMs
 
   for (let attempt = 0; attempt <= policy.maxRetries; attempt++) {
+    const trace: HookTrace = { threw: false }
     try {
-      return await request(config, callOpts)
+      return await request(config, callOpts, trace)
     } catch (e) {
       lastErr = e
-      // Categorically non-retryable — a hook's own exception whatever its type
-      // (a nested client call inside a hook can throw a NetworkError):
-      if (isHookError(e)) throw e
+      // Categorically non-retryable — an attempt a hook's own exception ended,
+      // whatever its type (a nested client call inside a hook can throw a NetworkError):
+      if (trace.threw) throw e
       // Nor once the caller has aborted, whatever reason it aborted with.
       if (config.signal?.aborted || callOpts.signal?.aborted) throw e
       if (e instanceof BusinessError) throw e
