@@ -3,7 +3,7 @@
 import { assertExpectedVersion } from '../concurrency.js'
 import { buildFunctionUrl } from '../functions.js'
 import { parseOptsFor, parseV3Single } from '../parser.js'
-import { buildV3KeyUrl, type EntityKey, encodeSegment } from '../url-builder.js'
+import { buildV3KeyUrl, dateTime, type EntityKey, encodeSegment } from '../url-builder.js'
 import { type ReadStreamResult, readStream, type WriteStreamInput, writeStream } from '../value-storage.js'
 import type { MutationOptions, RequestOptions } from './options.js'
 import type { ODataV3Client } from './v3-client.js'
@@ -72,7 +72,14 @@ export class V3EntityHandle<T> {
    */
   private keyNow(): EntityKey {
     const key = this.key
-    return typeof key === 'object' && key !== null && !Array.isArray(key) ? { ...key } : key
+    if (typeof key !== 'object' || key === null || Array.isArray(key)) return key
+    // A Date value is itself mutable: copy it too, or a setTime() in between would still split the two requests.
+    return Object.fromEntries(
+      Object.entries(key).map(([k, v]) => {
+        const instant = dateTime(v)
+        return [k, instant === undefined ? v : new Date(instant)]
+      }),
+    )
   }
 
   /**
@@ -93,7 +100,7 @@ export class V3EntityHandle<T> {
 
   async get(opts: RequestOptions = {}): Promise<T> {
     const key = this.keyNow()
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone)
     const raw = await this.client.transportGet(url, opts)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
@@ -105,7 +112,7 @@ export class V3EntityHandle<T> {
     if (opts.expectVersion !== undefined) {
       await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone)
     const raw = await this.client.transportPatch(url, body, opts, this.entitySet, this.extraHeaders)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
@@ -117,7 +124,7 @@ export class V3EntityHandle<T> {
     if (opts.expectVersion !== undefined) {
       await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone)
     const raw = await this.client.transportPut(url, body, opts, this.entitySet, this.extraHeaders)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
@@ -128,7 +135,7 @@ export class V3EntityHandle<T> {
     if (opts.expectVersion !== undefined) {
       await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone)
     await this.client.transportDelete(url, opts, this.entitySet, this.extraHeaders)
   }
 

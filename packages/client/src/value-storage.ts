@@ -16,8 +16,8 @@ export interface ReadStreamResult {
  * (`buildV3KeyUrl` always appends `?$format=...`, which would be wrong here
  * AND would also corrupt the `/<prop>/$value` suffix order.)
  */
-function buildValueUrl(base: string, entitySet: string, key: EntityKey, prop: string): string {
-  const keyExpr = formatKey(key)
+function buildValueUrl(base: string, entitySet: string, key: EntityKey, prop: string, serverTimezone: string): string {
+  const keyExpr = formatKey(key, serverTimezone)
   return `${base}/${encodeSegment(entitySet)}(${keyExpr})/${encodeName(prop, 'ValueStorage property')}/$value`
 }
 
@@ -43,7 +43,7 @@ export async function readStream(
   prop: string,
   opts: RequestOptions = {},
 ): Promise<ReadStreamResult> {
-  const url = buildValueUrl(client.baseUrl, entitySet, key, prop)
+  const url = buildValueUrl(client.baseUrl, entitySet, key, prop, client.serverTimezone)
   const resp = await client.transportStream(url, opts)
   return {
     contentType: resp.headers.get('content-type'),
@@ -76,7 +76,7 @@ export async function writeStream(
   input: WriteStreamInput,
   opts: RequestOptions = {},
 ): Promise<void> {
-  const url = buildV3KeyUrl(client.baseUrl, entitySet, key)
+  const url = buildV3KeyUrl(client.baseUrl, entitySet, key, client.serverTimezone)
   const body: Record<string, string> = {
     [`${prop}_Type`]: input.contentType,
     [`${prop}_Base64Data`]: input.base64Data,

@@ -219,4 +219,26 @@ describe('V3EntityHandle — composite key per call', () => {
     await c.entity('InformationRegister_X', key).delete({ expectVersion: 'v1' })
     expect(deleted[0]).toContain("(Period='A')")
   })
+
+  it('keeps a Date key value fixed within one call, even if the caller mutates it (#194)', async () => {
+    const period = new Date('2024-12-31T21:00:00Z') // 2025-01-01 00:00 Moscow
+    const urls: string[] = []
+    server.use(
+      http.get(/InformationRegister_X\(.*\)/, ({ request }) => {
+        urls.push(decodeURIComponent(request.url))
+        period.setTime(Date.parse('2025-01-31T21:00:00Z')) // reused Date moves while the check is in flight
+        return HttpResponse.json({ DataVersion: 'v1' })
+      }),
+      http.delete(/InformationRegister_X\(.*\)/, ({ request }) => {
+        urls.push(decodeURIComponent(request.url))
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    await c.entity('InformationRegister_X', { Period: period }).delete({ expectVersion: 'v1' })
+    expect(urls.map((u) => u.match(/Period=datetime'([^']+)'/)?.[1])).toEqual([
+      '2025-01-01T00:00:00',
+      '2025-01-01T00:00:00',
+    ])
+  })
 })
