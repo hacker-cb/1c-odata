@@ -33,7 +33,9 @@ export interface ClientOptions {
    * bound `afterResponse` on a buffered call — the response is read by then
    * and stands however long the hook takes — but does on a streamed read
    * (`readStream`), where the body is still unread: a hook outlasting it fails
-   * the call with a `TimeoutError` and the body is cancelled.
+   * the call with a `TimeoutError` and the body is cancelled. Reading a
+   * streamed body once `readStream` has returned is not bounded by it — bound
+   * that with your own `AbortSignal`.
    */
   timeout?: number
 

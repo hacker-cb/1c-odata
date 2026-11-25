@@ -666,6 +666,27 @@ describe('requestStream — timeout around afterResponse (#204)', () => {
     }
   })
 
+  it('a throwing hooks getter still releases the body', async () => {
+    const { cancel, restore } = streamed()
+    try {
+      const getterErr = new Error('hooks getter')
+      let reads = 0
+      const opts = {
+        timeout: 60_000,
+        get hooks() {
+          reads++
+          if (reads > 1) throw getterErr
+          return {}
+        },
+      }
+      const err = await requestStream(target, opts).catch((e: unknown) => e)
+      expect(err).toBe(getterErr)
+      expect(cancel).toHaveBeenCalledOnce()
+    } finally {
+      restore()
+    }
+  })
+
   it('a hook that settles in time leaves the call as it was', async () => {
     const { restore } = streamed()
     try {
@@ -687,7 +708,7 @@ describe('request — afterResponse is not bounded by the timeout (#204)', () =>
     const onError = vi.fn()
     const res = await request(
       { method: 'POST', url: `${base}/Document_X`, headers: { Authorization: auth.header }, body: '{}' },
-      { timeout: 30, hooks: { afterResponse: () => new Promise<void>((r) => setTimeout(r, 80)), onError } },
+      { timeout: 300, hooks: { afterResponse: () => new Promise<void>((r) => setTimeout(r, 600)), onError } },
     )
     expect(res.status).toBe(201)
     expect(res.body).toContain('"Ref_Key"')

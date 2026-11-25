@@ -508,8 +508,10 @@ export async function requestStream(
       durationMs,
     }
 
-    const { hooks } = callOpts
+    let hooks: RequestHooks | undefined
     try {
+      // Read inside the try: a throwing `hooks` getter still releases the body.
+      hooks = callOpts.hooks
       await runStreamAfterResponse(hooks, reqEvent, resEvent, fetchInit.signal, trace)
     } catch (e) {
       // The caller never gets this response: release its connection.
