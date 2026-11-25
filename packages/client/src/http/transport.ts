@@ -239,8 +239,10 @@ function networkErrorMessage(e: unknown): string {
 }
 
 /**
- * Translate caught exceptions into the typed error hierarchy and fire the
- * `onError` hook. Shared between text and stream paths.
+ * Translate an exception from the wire — the fetch, or reading the body —
+ * into the typed error hierarchy and fire the `onError` hook. Shared between
+ * text and stream paths. Never handed a hook's own exception: those reach the
+ * caller unchanged.
  */
 async function translateAndFireError(
   e: unknown,
@@ -265,7 +267,7 @@ async function translateAndFireError(
     throw e
   }
   if (e instanceof ODataError) throw e
-  // Anything else is treated as network-level
+  // Anything else failed on the wire: a network-level error
   const err = new NetworkError(networkErrorMessage(e), { cause: e, request })
   if (hooks?.onError) await hooks.onError(reqEvent, err)
   throw err
@@ -288,6 +290,8 @@ async function translateAndFireError(
  *   `errorFormat: 'none'` and the status preserved.
  * @throws {DOMException} `AbortError` (`error.name === 'AbortError'`) is
  *   rethrown unchanged when the user-issued `AbortSignal` fires.
+ * @throws whatever a hook throws, unchanged — not wrapped, not passed to
+ *   `onError`, and so never retried.
  */
 export async function request(
   config: RequestConfig,
@@ -297,13 +301,22 @@ export async function request(
   const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs } = prepared
 
   try {
-    // Use globalThis.fetch so MSW can intercept in tests.
-    // Node 22+ globalThis.fetch is undici-based; transport-level options
-    // (TLS/proxy) are configured process-wide via env vars / CLI flags,
-    // not per-request.
-    const response = await globalThis.fetch(reqEvent.url, fetchInit)
-
-    const body = await response.text()
+    // Only the wire — the fetch and reading the body — can fail as a network
+    // error. Hooks and error mapping run outside this `try`: what they throw
+    // reaches the caller unchanged, never a retryable NetworkError.
+    let response: Response
+    let body: string
+    try {
+      // Use globalThis.fetch so MSW can intercept in tests.
+      // Node 22+ globalThis.fetch is undici-based; transport-level options
+      // (TLS/proxy) are configured process-wide via env vars / CLI flags,
+      // not per-request.
+      response = await globalThis.fetch(reqEvent.url, fetchInit)
+      body = await response.text()
+    } catch (e) {
+      if (timeoutId) clearTimeout(timeoutId)
+      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
+    }
     const headers: Record<string, string> = {}
     response.headers.forEach((v, k) => {
       headers[k.toLowerCase()] = v
@@ -330,10 +343,6 @@ export async function request(
     }
 
     return { status: response.status, statusText: response.statusText, headers, body, durationMs }
-  } catch (e) {
-    if (timeoutId) clearTimeout(timeoutId)
-    await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
-    throw e // unreachable — translateAndFireError always throws
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
   }
@@ -367,6 +376,8 @@ export async function request(
  *   body yields an `HTTPError` with `errorFormat: 'none'` (status preserved).
  * @throws {DOMException} `AbortError` (`error.name === 'AbortError'`) is
  *   rethrown unchanged when the user-issued `AbortSignal` fires.
+ * @throws whatever a hook throws, unchanged — not wrapped, not passed to
+ *   `onError`.
  */
 export async function requestStream(
   config: RequestConfig,
@@ -376,7 +387,14 @@ export async function requestStream(
   const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs } = prepared
 
   try {
-    const response = await globalThis.fetch(reqEvent.url, fetchInit)
+    // As in `request()`: only the fetch and reading an error body are the wire.
+    let response: Response
+    try {
+      response = await globalThis.fetch(reqEvent.url, fetchInit)
+    } catch (e) {
+      if (timeoutId) clearTimeout(timeoutId)
+      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
+    }
 
     const headers: Record<string, string> = {}
     response.headers.forEach((v, k) => {
@@ -397,7 +415,13 @@ export async function requestStream(
     // the caller never gets a chance to read it. For success, the body is
     // left untouched and returned to the caller.
     if (response.status >= 400) {
-      const body = await response.text()
+      let body: string
+      try {
+        body = await response.text()
+      } catch (e) {
+        if (timeoutId) clearTimeout(timeoutId)
+        return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
+      }
       const err = await mapResponseToError(response.status, response.statusText, headers, body, {
         method: reqEvent.method,
         url: reqEvent.url,
@@ -407,10 +431,6 @@ export async function requestStream(
     }
 
     return { response, durationMs }
-  } catch (e) {
-    if (timeoutId) clearTimeout(timeoutId)
-    await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
-    throw e // unreachable
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
   }

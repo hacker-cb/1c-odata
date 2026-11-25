@@ -42,17 +42,22 @@ export async function mapResponseToError(
   let format: 'json' | 'xml'
 
   if (mediaType.includes('json')) {
-    let obj: { 'odata.error'?: { code?: unknown; message?: unknown } }
+    let obj: unknown
     try {
       obj = JSON.parse(body)
     } catch (e) {
       return new ParseError(`Invalid JSON in error body (status ${status})`, { cause: e, request })
     }
-    const err = obj['odata.error']
+    // `null`, a number, a string, an array: valid JSON, but no envelope.
+    const err =
+      typeof obj === 'object' && obj !== null && !Array.isArray(obj)
+        ? (obj as { 'odata.error'?: unknown })['odata.error']
+        : undefined
     if (!err) return new ParseError(`Response missing odata.error wrapper (status ${status})`, { request })
     // Tolerate envelope-shape drift: a present-but-odd `odata.error` still yields
     // a usable HTTPError instead of a misleading "Invalid JSON" ParseError.
-    parsed = { code: String(err.code ?? ''), message: extractODataMessage(err.message) }
+    const { code, message } = typeof err === 'object' ? (err as { code?: unknown; message?: unknown }) : {}
+    parsed = { code: scalarText(code), message: extractODataMessage(message) }
     format = 'json'
   } else if (mediaType.includes('xml')) {
     // Only a real `<m:error>` envelope counts as XML. An XHTML/proxy error page
@@ -186,6 +191,11 @@ function longestPathSegment(url: string): number {
     for (const seg of decoded.split('/')) if (seg.length > longest) longest = seg.length
   }
   return longest
+}
+
+/** A JSON scalar as text; `''` for anything else (absent, `null`, an object or array). Never throws. */
+function scalarText(v: unknown): string {
+  return typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? String(v) : ''
 }
 
 /**

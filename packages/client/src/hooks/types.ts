@@ -27,6 +27,10 @@ export interface ResponseEvent {
 
 /**
  * Lifecycle hooks for logging, metrics, header injection. See spec §4.10.
+ *
+ * An exception a hook throws reaches the caller as is: it is not wrapped in a
+ * library error, not passed to `onError`, and never retried — a hook that
+ * throws on a 401 to trigger a re-login gets its own error back.
  * @public
  */
 export interface RequestHooks {
