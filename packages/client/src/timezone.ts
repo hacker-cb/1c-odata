@@ -46,7 +46,7 @@ const MAX_YEAR = 9999
 const YEAR_RANGE = '0001–9999'
 
 const formatters = new Map<string, Intl.DateTimeFormat>()
-/** Formatters kept at most — one per zone spelling seen; a caller cycling through more starts the cache over. */
+/** Formatters kept at most — one per zone spelling seen; past it the oldest goes. */
 const MAX_FORMATTERS = 64
 
 /**
@@ -57,10 +57,13 @@ const MAX_FORMATTERS = 64
 function formatterFor(zone: string): Intl.DateTimeFormat {
   // No zone is not the host's zone: `Intl` would silently take the process's.
   if (typeof zone !== 'string' || zone === '') {
-    throw new InvalidArgumentError(`An IANA timezone is required, got ${JSON.stringify(zone) ?? String(zone)}`, {
-      argument: 'zone',
-      received: zone,
-    })
+    throw new InvalidArgumentError(
+      `An IANA timezone is required, got ${zone === '' ? 'an empty string' : typeof zone}`,
+      {
+        argument: 'zone',
+        received: zone,
+      },
+    )
   }
   let fmt = formatters.get(zone)
   if (fmt === undefined) {
@@ -82,7 +85,8 @@ function formatterFor(zone: string): Intl.DateTimeFormat {
         received: zone,
       })
     }
-    if (formatters.size >= MAX_FORMATTERS) formatters.clear()
+    // Map keeps insertion order: drop the oldest zone.
+    if (formatters.size >= MAX_FORMATTERS) formatters.delete(formatters.keys().next().value as string)
     formatters.set(zone, fmt)
   }
   return fmt
@@ -167,10 +171,19 @@ export function parseInZone(naive: string, zone: string, opts?: ParseInZoneOptio
   // together. An offset that maps the wall-clock back onto itself is a real
   // reading of it: two such are a time passed twice (the earlier wins), none a
   // time the zone skips.
-  const before = offsetAt(wall - DAY_MS, zone)
-  const after = offsetAt(wall + DAY_MS, zone)
-  const offsets = new Set([before, after, offsetAt(wall - before, zone), offsetAt(wall - after, zone)])
-  const readings = [...offsets].map((offset) => wall - offset).filter((t) => wall - t === offsetAt(t, zone))
+  const seen = new Map<number, number>()
+  const at = (t: number): number => {
+    let offset = seen.get(t)
+    if (offset === undefined) {
+      offset = offsetAt(t, zone)
+      seen.set(t, offset)
+    }
+    return offset
+  }
+  const before = at(wall - DAY_MS)
+  const after = at(wall + DAY_MS)
+  const offsets = new Set([before, after, at(wall - before), at(wall - after)])
+  const readings = [...offsets].map((offset) => wall - offset).filter((t) => wall - t === at(t))
   let instant: number
   if (readings.length > 0) instant = Math.min(...readings)
   else if (opts?.disambiguation === 'reject') {

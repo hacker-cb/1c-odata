@@ -118,6 +118,9 @@ describe('parseInZone — years, calendar and daylight saving (#193)', () => {
       'An IANA timezone is required',
     )
     expect(() => formatInZone(new Date(0), '')).toThrow('An IANA timezone is required')
+    const cyclic: Record<string, unknown> = {}
+    cyclic.self = cyclic
+    expect(() => parseInZone('2025-01-10T15:30:00', cyclic as unknown as string)).toThrow(InvalidArgumentError)
   })
 
   it('takes null options as the defaults', () => {

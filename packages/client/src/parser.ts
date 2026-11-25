@@ -158,9 +158,13 @@ function mapValue(
 ): unknown {
   const propType = schema?.properties[fieldName]?.type
   if (typeof v === 'string') return convertStringValue(v, fieldName, propType, shape, opts)
-  // A schema-typed date-time is a string or null on the wire; anything else would reach a `Date`-typed field as-is.
-  if (propType === 'Edm.DateTime' && v !== null) {
-    throw new ParseError(`Edm.DateTime field ${fieldName}: expected a date-time string or null, got ${typeof v}`)
+  // A schema-typed date-time is a string or null on the wire; anything else would reach a `Date`-typed field
+  // as-is. `dateMode: 'string'` passes values through untouched, this one included.
+  if (propType === 'Edm.DateTime' && v !== null && shape?.dateMode !== 'string') {
+    const shown = JSON.stringify(v)?.slice(0, 64) ?? String(v)
+    throw new ParseError(
+      `Edm.DateTime field ${fieldName}: expected a date-time string or null, got ${typeof v} ${shown}`,
+    )
   }
   // Nested entities (tabular parts, ComplexTypes) are parsed with THEIR OWN
   // schema, resolved from the field's declared type — not the parent's. Without

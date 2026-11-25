@@ -116,6 +116,24 @@ describe('register_query periods in the connection serverTimezone (#182)', () =>
     expect(iso((calls[0]?.args.Period as { from: Date } | undefined)?.from)).toBe('1985-12-31T18:30:00.000Z')
   })
 
+  it('ends a bare periodTo whose 23:59:59 a switch skips at its last real second (#193)', async () => {
+    const { run, calls } = setup('America/Nuuk')
+    await run({ table: 'turnovers', periodTo: '2024-03-30' })
+    // 23:00 -02:00 became 00:00 -01:00: the day ends at 22:59:59 -02:00.
+    expect(iso((calls[0]?.args.Period as { to: Date } | undefined)?.to)).toBe('2024-03-31T00:59:59.000Z')
+  })
+
+  it.each([
+    ['periodFrom', 'start'],
+    ['periodTo', 'end'],
+  ])('refuses a bare %s on a day the zone skips whole (#193)', async (arg) => {
+    const { run, calls } = setup('Pacific/Apia')
+    const res = await run({ table: 'turnovers', [arg]: '2011-12-30' })
+    expect(res.isError).toBe(true)
+    expect((res.content[0] as { text: string }).text).toContain('Invalid ISO date: "2011-12-30"')
+    expect(calls).toHaveLength(0)
+  })
+
   it('reads a naive year below 1000 as server time (#193)', async () => {
     const { run, calls } = setup('Europe/Moscow')
     await run({ table: 'balance', period: '0999-05-01T00:00:00' })
@@ -141,6 +159,7 @@ describe('register_query periods in the connection serverTimezone (#182)', () =>
     ],
     ['an offset Date cannot represent', 'Europe/Moscow', '2026-01-01T00:00:00+24:00', 'an impossible offset'],
     ['the naive year 0000, outside 1С dates', 'UTC', '0000-06-01T00:00:00', 'a year outside 0001–9999'],
+    ['the bare year 0000, outside 1С dates', 'UTC', '0000-06-01', 'Invalid ISO date: "0000-06-01"'],
     [
       'an offset period that is the year 0000 on the server',
       'America/New_York',

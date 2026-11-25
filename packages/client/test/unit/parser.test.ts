@@ -391,8 +391,16 @@ describe('V3 parser — date-times parseInZone used to drop or shift (#193)', ()
 
   it('fails a schema-typed Edm.DateTime that is not a string or null', () => {
     expect(() => typed([{ Date: 20260315 }])).toThrow(
-      'Edm.DateTime field Date: expected a date-time string or null, got number',
+      'Edm.DateTime field Date: expected a date-time string or null, got number 20260315',
     )
+    // dateMode: 'string' passes every value through untouched.
+    const r = parseV3Collection<{ Date: unknown }>(JSON.stringify({ value: [{ Date: 20260315 }] }), {
+      serverTimezone: TZ,
+      typeHint: 'Catalog_X',
+      metadataIndex: index,
+      shape: { dateMode: 'string' },
+    })
+    expect(r.value[0]?.Date).toBe(20260315)
   })
 
   it('reads a time a daylight-saving switch skips moved forward by the gap', () => {

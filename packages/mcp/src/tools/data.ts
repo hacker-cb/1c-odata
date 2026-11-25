@@ -410,9 +410,11 @@ function toDate(
     if (!Number.isNaN(date.getTime()) && !isServerDate(date, serverTimezone)) date = undefined
   } else {
     date = strictInZone(`${local}${frac}`, serverTimezone)
-    // A bare day whose midnight a DST switch skips starts at the switch (e.g. America/Sao_Paulo, 2018-11-04: 01:00).
-    if (date === undefined && time === undefined && bareDateAs === 'start') {
-      date = switchedDayStart(`${y}-${mo}-${d}`, serverTimezone)
+    // A bare day whose midnight a DST switch skips starts at the switch (e.g. America/Sao_Paulo, 2018-11-04:
+    // 01:00); one whose last second it skips ends a second before the next day starts (America/Nuuk, 2024-03-30).
+    if (date === undefined && time === undefined) {
+      date =
+        bareDateAs === 'start' ? switchedDayStart(`${y}-${mo}-${d}`, serverTimezone) : switchedDayEnd(m, serverTimezone)
     }
   }
   if (date === undefined || Number.isNaN(date.getTime())) {
@@ -448,7 +450,13 @@ function strictInZone(naive: string, zone: string): Date | undefined {
  */
 function switchedDayStart(day: string, zone: string): Date | undefined {
   // 'compatible' moves midnight forward by the gap: on that day (or past it), never before the switch.
-  let hi = parseInZone(`${day}T00:00:00`, zone).getTime()
+  let hi: number
+  try {
+    hi = parseInZone(`${day}T00:00:00`, zone).getTime()
+  } catch (err) {
+    if (err instanceof InvalidArgumentError && err.argument === 'naive') return undefined // a year outside 0001–9999
+    throw err
+  }
   if (formatInZone(new Date(hi), zone).slice(0, 10) !== day) return undefined
   // A day earlier is on the previous day; narrow to the first second whose wall-clock is on `day`.
   let lo = hi - 86_400_000
@@ -458,6 +466,23 @@ function switchedDayStart(day: string, zone: string): Date | undefined {
     else lo = mid
   }
   return new Date(hi)
+}
+
+/**
+ * The last second of a server day whose 23:59:59 a daylight-saving switch
+ * skips: a second before the next day starts. `undefined` where the next day
+ * has no start either (a year past 9999, a whole day skipped).
+ */
+function switchedDayEnd(m: RegExpExecArray, zone: string): Date | undefined {
+  const [, y, mo, d] = m
+  const next = new Date(0)
+  next.setUTCFullYear(Number(y), Number(mo) - 1, Number(d) + 1)
+  const day = `${String(next.getUTCFullYear()).padStart(4, '0')}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`
+  const start = strictInZone(`${day}T00:00:00`, zone) ?? switchedDayStart(day, zone)
+  if (start === undefined) return undefined
+  const end = new Date(start.getTime() - 1000)
+  // A day the zone skips whole has no last second: this one would be the day before's.
+  return formatInZone(end, zone).slice(0, 10) === `${y}-${mo}-${d}` ? end : undefined
 }
 
 /** Whether `date` reads as a 1С date (years 0001–9999) in the server's zone. */
