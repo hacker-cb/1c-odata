@@ -63,12 +63,36 @@ export function encodeName(name: string, argument: string): string {
  * @internal
  */
 export function encodeSegment(name: string, argument = 'entitySet'): string {
-  // Any empty or dot part — `..`, `X/..`, `X//Y` — would collapse once a server or
-  // proxy splits on the encoded `/`, so a set path made of names only passes.
-  if (typeof name !== 'string' || name.split('/').some((part) => part === '' || part === '.' || part === '..')) {
+  // Any empty or dot part — `..`, `X/..`, `X//Y`, `X\\..` — would collapse once a
+  // server or proxy splits on the encoded separator, so it is rejected.
+  if (typeof name !== 'string' || pathParts(name).some((part) => part === '' || part === '.' || part === '..')) {
     throw new InvalidArgumentError(`${argument} must be a name, not ${String(name)}`, { argument, received: name })
   }
   return encodeComponent(name, argument)
+}
+
+/**
+ * The parts of a set path between its `/` or `\\` separators, skipping those
+ * inside parentheses and quoted OData literals — a `Condition='… https://…'`
+ * argument of a virtual table is one part, not several.
+ */
+function pathParts(path: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let quoted = false
+  let start = 0
+  for (let i = 0; i < path.length; i++) {
+    const ch = path[i]
+    if (ch === "'") quoted = !quoted
+    else if (!quoted && ch === '(') depth++
+    else if (!quoted && ch === ')') depth = Math.max(0, depth - 1)
+    else if (!quoted && depth === 0 && (ch === '/' || ch === '\\')) {
+      parts.push(path.slice(start, i))
+      start = i + 1
+    }
+  }
+  parts.push(path.slice(start))
+  return parts
 }
 
 /**

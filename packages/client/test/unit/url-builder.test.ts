@@ -148,9 +148,17 @@ describe('V3 URL builder — entity keys cannot rewrite the path', () => {
     expect(buildV3KeyUrl(base, 'Document_X_Товары', key)).toContain("(LineNumber='1')")
   })
 
-  it.each(['X/..', 'X//Y', './X'])('rejects the set path %j, whose parts would collapse', (set) => {
-    expect(() => buildV3CollectionUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).toThrow(InvalidArgumentError)
+  it('keeps a virtual-table path whose quoted argument holds slashes', () => {
+    const set = "Register_X/SliceLast(Condition='Сайт eq ''https://example.org/a//b''')"
+    expect(() => buildV3CollectionUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).not.toThrow()
   })
+
+  it.each(['X/..', 'X//Y', './X', 'X\\..', 'Register_X/Balance()/../..'])(
+    'rejects the set path %j, whose parts would collapse',
+    (set) => {
+      expect(() => buildV3CollectionUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).toThrow(InvalidArgumentError)
+    },
+  )
 
   it('keeps a GUID key and a composite key of 1С names', () => {
     expect(buildV3KeyUrl(base, 'Catalog_X', G)).toBe(

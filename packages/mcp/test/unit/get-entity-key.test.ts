@@ -25,6 +25,14 @@ describe('get_entity key schema', () => {
     ).toBe(true)
   })
 
+  it('accepts an upper-case GUID, and its JSON-Schema pattern does too (no `i` flag to lose)', () => {
+    const key = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
+    expect(keySchema().safeParse({ connection: 'c', entitySet: 'Catalog_X', key }).success).toBe(true)
+    const pattern = (z.toJSONSchema(keySchema()) as unknown as { properties: { key: { pattern: string } } }).properties
+      .key.pattern
+    expect(new RegExp(pattern).test(key)).toBe(true)
+  })
+
   it.each(['abc', "x')/../../hs/svc?a=('", ''])('rejects %j before any connection is opened', (key) => {
     expect(keySchema().safeParse({ connection: 'c', entitySet: 'Catalog_X', key }).success).toBe(false)
   })

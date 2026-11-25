@@ -19,7 +19,8 @@ import { capLongStrings, type FitResult, fitRows, stripNoise, toJsonSafe } from 
 import { toolResult } from './_result.js'
 
 /** A Ref_Key GUID — checked in the schema so a malformed key fails before any connection is opened. */
-const GUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// Both cases spelled out: the JSON Schema an MCP client receives keeps `.source`, not the `i` flag.
+const GUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
 /** Register virtual tables, keyed by RegisterHelper method name. */
 const REGISTER_TABLES = [

@@ -184,8 +184,8 @@ describe('V3EntityHandle.withHeader', () => {
   })
 })
 
-describe('V3EntityHandle — composite key snapshot', () => {
-  it('keeps the key it was created with when the caller mutates the object afterwards', async () => {
+describe('V3EntityHandle — composite key per call', () => {
+  it('follows the key object across calls on a reused handle', async () => {
     const urls: string[] = []
     server.use(
       http.delete(/InformationRegister_X\(.*\)/, ({ request }) => {
@@ -196,8 +196,27 @@ describe('V3EntityHandle — composite key snapshot', () => {
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     const key = { Period: 'A' }
     const handle = c.entity('InformationRegister_X', key)
+    await handle.delete()
     key.Period = 'B'
     await handle.delete()
-    expect(urls[0]).toContain("(Period='A')")
+    expect(urls.map((u) => u.match(/Period='(\w)'/)?.[1])).toEqual(['A', 'B'])
+  })
+
+  it('aims the expectVersion check and the mutation at the same row within one call', async () => {
+    const key = { Period: 'A' }
+    const deleted: string[] = []
+    server.use(
+      http.get(/InformationRegister_X\(.*\)/, () => {
+        key.Period = 'B' // the caller changes its object while the check is in flight
+        return HttpResponse.json({ DataVersion: 'v1' })
+      }),
+      http.delete(/InformationRegister_X\(.*\)/, ({ request }) => {
+        deleted.push(decodeURIComponent(request.url))
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    await c.entity('InformationRegister_X', key).delete({ expectVersion: 'v1' })
+    expect(deleted[0]).toContain("(Period='A')")
   })
 })
