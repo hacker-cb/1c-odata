@@ -271,6 +271,37 @@ describe('mapResponseToError', () => {
     expect(err.request).toEqual(req)
   })
 
+  it('maps a JSON body that is no object — null, a number, a string, an array — to ParseError (#189)', async () => {
+    for (const body of ['null', '42', '"oops"', '[]']) {
+      const err = await mapResponseToError(
+        500,
+        'Internal Server Error',
+        { 'content-type': 'application/json' },
+        body,
+        req,
+      )
+      expect(err).toBeInstanceOf(ParseError)
+      expect(err.request).toEqual(req)
+    }
+  })
+
+  it('never throws on an odata.error code that is no scalar (#189)', async () => {
+    const json = '{"odata.error":{"code":{"toString":null},"message":"x"}}'
+    const err = await mapResponseToError(400, 'Bad Request', { 'content-type': 'application/json' }, json, req)
+    expect(err).toBeInstanceOf(HTTPError)
+    expect((err as HTTPError).code).toBe('')
+  })
+
+  it('keeps a code sent as an array and a bare-string odata.error as the message (#189)', async () => {
+    const array = '{"odata.error":{"code":[-1],"message":"x"}}'
+    const ct = { 'content-type': 'application/json' }
+    expect(await mapResponseToError(500, 'Internal Server Error', ct, array, req)).toBeInstanceOf(BusinessError)
+    const bare = await mapResponseToError(500, 'Internal Server Error', ct, '{"odata.error":"Database is locked"}', req)
+    expect((bare as HTTPError).odata?.message).toBe('Database is locked')
+    const empty = await mapResponseToError(401, 'Unauthorized', ct, '{"odata.error":""}', req)
+    expect(empty).toBeInstanceOf(PermissionError)
+  })
+
   it('tolerates odata.error shape drift (bare string message) without a misleading ParseError', async () => {
     const json = '{"odata.error":{"code":"7","message":"plain string message"}}'
     const err = await mapResponseToError(400, 'Bad Request', { 'content-type': 'application/json' }, json, req)

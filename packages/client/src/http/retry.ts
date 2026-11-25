@@ -1,44 +1,52 @@
 import type { RequestOptions, RetryPolicy } from '../client/options.js'
 import { BusinessError, HTTPError, NetworkError, TimeoutError } from '../errors.js'
-import { type RawResponse, type RequestConfig, request, type TransportOptions } from './transport.js'
+import { type AttemptTrace, type RawResponse, type RequestConfig, request, type TransportOptions } from './transport.js'
 
 interface RetryWrapperOpts extends TransportOptions, RequestOptions {}
 
 /**
- * Wrap `request` with optional retry. Skips retry for AbortError, TimeoutError,
- * BusinessError, and any non-retryable status / method.
+ * Wrap `request` with optional retry. Skips retry for a hook's own exception,
+ * a caller's abort, TimeoutError, BusinessError, and any non-retryable status,
+ * or method — the method that was sent, after `beforeRequest`.
  */
 export async function requestWithRetry(config: RequestConfig, callOpts: RetryWrapperOpts): Promise<RawResponse> {
   const policy = resolvePolicy(callOpts.retry)
   if (!policy) return request(config, callOpts)
-  // Cast: HEAD is never in retryableMethods (not in the union type), so it safely skips retry.
-  if (!policy.retryableMethods.includes(config.method as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE')) {
-    return request(config, callOpts)
-  }
 
-  let lastErr: unknown
   let delayMs = policy.initialDelayMs
-
-  for (let attempt = 0; attempt <= policy.maxRetries; attempt++) {
+  for (let attempt = 0; ; attempt++) {
+    const trace: AttemptTrace = { threw: false }
     try {
-      return await request(config, callOpts)
+      return await request(config, callOpts, trace)
     } catch (e) {
-      lastErr = e
-      // Categorically non-retryable:
-      if (e instanceof BusinessError) throw e
-      if (e instanceof TimeoutError) throw e
-      if (e instanceof Error && e.name === 'AbortError') throw e
-      // Status-based: only retryable 5xx/network
-      const isRetryableStatus = e instanceof HTTPError && policy.retryableStatuses.includes(e.status)
-      const isNetworkError = e instanceof NetworkError
-      if (!isRetryableStatus && !isNetworkError) throw e
-      if (attempt === policy.maxRetries) throw e
-
+      if (attempt >= policy.maxRetries || !mayRetry(e, trace, policy, config, callOpts)) throw e
       await sleep(applyJitter(delayMs, policy.jitter))
       delayMs = Math.min(delayMs * policy.backoffMultiplier, policy.maxDelayMs)
     }
   }
-  throw lastErr
+}
+
+/** Whether the attempt `trace` records, failed with `e`, may be repeated under `policy`. */
+function mayRetry(
+  e: unknown,
+  trace: AttemptTrace,
+  policy: RetryPolicy,
+  config: RequestConfig,
+  callOpts: RetryWrapperOpts,
+): boolean {
+  // The method that was sent — `beforeRequest` may have replaced the one asked for.
+  // Cast: HEAD is never in retryableMethods (not in the union type), so it never retries.
+  const method = trace.method ?? config.method
+  if (!policy.retryableMethods.includes(method as RetryPolicy['retryableMethods'][number])) return false
+  // An attempt a hook's own exception ended, whatever its type (a nested
+  // client call inside a hook can throw a NetworkError).
+  if (trace.threw) return false
+  // A caller's abort, whatever reason it aborted with.
+  if (config.signal?.aborted || callOpts.signal?.aborted) return false
+  if (e instanceof BusinessError || e instanceof TimeoutError) return false
+  if (e instanceof Error && e.name === 'AbortError') return false
+  // Status-based: only retryable 5xx/network
+  return (e instanceof HTTPError && policy.retryableStatuses.includes(e.status)) || e instanceof NetworkError
 }
 
 function resolvePolicy(r: RetryPolicy | false | undefined): RetryPolicy | undefined {
