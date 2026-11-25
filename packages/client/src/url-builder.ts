@@ -2,7 +2,7 @@
 import { InvalidArgumentError } from './errors.js'
 import { formatNumberLiteral } from './format-number.js'
 import type { QueryBuilder } from './query/builder.js'
-import { formatInZone } from './timezone.js'
+import { dateTime, formatInZone, isDate } from './timezone.js'
 
 /**
  * An entity key: a `Ref_Key` GUID string, or a composite key — an object of
@@ -292,31 +292,6 @@ export function formatScalarLiteral(v: unknown, serverTimezone: string, argument
   if (typeof v === 'bigint') return String(v)
   if (isDate(v)) return `datetime'${formatInZone(v, serverTimezone)}'`
   return undefined
-}
-
-/**
- * Whether `v` is a `Date` — any realm's (`node:vm`), where `instanceof Date`
- * answers `false`. Read by `Date.prototype.getTime`, as {@link dateTime} reads it.
- *
- * @internal
- */
-export function isDate(v: unknown): v is Date {
-  return dateTime(v) !== undefined
-}
-
-/**
- * The time value of a `Date` — any realm's (`node:vm`), read by
- * `Date.prototype.getTime` itself, so a subclass overriding `getTime` cannot
- * move it — or `undefined` for anything that is not a `Date`.
- *
- * @internal
- */
-export function dateTime(v: unknown): number | undefined {
-  try {
-    return Date.prototype.getTime.call(v)
-  } catch {
-    return undefined
-  }
 }
 
 function formatKeyString(v: string): string {

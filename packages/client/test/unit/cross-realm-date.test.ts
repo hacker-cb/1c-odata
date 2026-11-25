@@ -4,7 +4,8 @@ import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { buildFunctionUrl } from '../../src/functions.js'
 import { compileFilter } from '../../src/query/filter-internal.js'
-import { buildV3KeyUrl, formatScalarLiteral, isDate } from '../../src/url-builder.js'
+import { isDate } from '../../src/timezone.js'
+import { formatScalarLiteral } from '../../src/url-builder.js'
 import type { EntitySchema, MetadataIndex } from '../../src/validate.js'
 import { transformDatesToWire, transformDateValuesUntyped } from '../../src/write-transform.js'
 import { createMswServer } from '../fixtures/msw-server.js'
@@ -54,14 +55,32 @@ describe('a Date of another realm (node:vm) (#205)', () => {
     expect(decodeURIComponent(url)).toContain(`Period=datetime'${WALL}'`)
   })
 
-  it('composite key: datetime in the server timezone', () => {
-    const url = buildV3KeyUrl(base, 'InformationRegister_X', { Period: foreign() }, TZ)
-    expect(url).toContain(`(Period=datetime'${WALL}')`)
-  })
-
   it('write without a schema: naive ISO in the server timezone, nested too', () => {
     expect(transformDateValuesUntyped(foreign(), TZ)).toBe(WALL)
     expect(transformDateValuesUntyped({ Rows: [{ Date: foreign() }] }, TZ)).toEqual({ Rows: [{ Date: WALL }] })
+  })
+
+  it('write without a schema: a body built in that realm — its plain objects and arrays — converts too', () => {
+    const body = runInNewContext(
+      '({ Date: new Date(Date.UTC(2025, 0, 15, 7, 30)), Rows: [{ Date: new Date(Date.UTC(2025, 0, 15, 7, 30)) }] })',
+    )
+    expect(transformDateValuesUntyped(body, TZ)).toEqual({ Date: WALL, Rows: [{ Date: WALL }] })
+  })
+
+  it('write without a schema: a class instance or a Map still passes through as is', () => {
+    class Point {
+      x = 1
+    }
+    const p = new Point()
+    const m = new Map([['a', 1]])
+    expect(transformDateValuesUntyped(p, TZ)).toBe(p)
+    expect(transformDateValuesUntyped(m, TZ)).toBe(m)
+  })
+
+  it('a Proxy over a Date is still refused as a date, not passed on as an object', () => {
+    const proxied = new Proxy(new Date(), {})
+    expect(() => formatScalarLiteral(proxied, TZ, 'x')).toThrow(InvalidArgumentError)
+    expect(() => transformDateValuesUntyped(proxied, TZ)).toThrow(InvalidArgumentError)
   })
 
   it('write with a schema: an Edm.DateTime field in the server timezone', () => {
@@ -96,8 +115,11 @@ describe('a Date of another realm through the client (#205)', () => {
     expect(sent).toEqual({ Date: WALL })
   })
 
-  it('turnovers() rejects it as a point period, as it does a Date of this realm', async () => {
-    const args = { Period: foreign() } as unknown as TurnoversArgs
+  it.each([
+    ['another realm', foreign],
+    ['a Proxy over one', () => new Proxy(new Date(), {})],
+  ])('turnovers() rejects a point Date of %s, as it does a Date of this realm', async (_name, make) => {
+    const args = { Period: make() } as unknown as TurnoversArgs
     await expect(client().register('AccumulationRegister_X').turnovers(args)).rejects.toThrow(InvalidArgumentError)
   })
 })

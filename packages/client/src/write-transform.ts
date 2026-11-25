@@ -1,7 +1,6 @@
 import type { DateMode } from './connection.js'
-import { formatInZone } from './timezone.js'
+import { formatInZone, isDate } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
-import { isDate } from './url-builder.js'
 import type { EntitySchema, MetadataIndex } from './validate.js'
 
 /** Transform a single Edm.DateTime field value into wire form. */
@@ -27,11 +26,13 @@ function transformDateTime(v: unknown, tz: string): unknown {
 export function transformDateValuesUntyped(v: unknown, tz: string): unknown {
   if (isDate(v)) return formatInZone(v, tz)
   if (Array.isArray(v)) return v.map((item) => transformDateValuesUntyped(item, tz))
-  // Recurse into plain objects only — exotic objects (Map, Buffer, class
-  // instances) keep the old passthrough behavior and serialize as before.
+  // Recurse into plain objects only — of any realm (`node:vm`), so their dates
+  // convert too: a prototype that is a realm's `Object.prototype` (it has none
+  // of its own), or none. Exotic objects (Map, Buffer, class instances) keep
+  // the old passthrough behavior and serialize as before.
   if (typeof v === 'object' && v !== null) {
     const proto = Object.getPrototypeOf(v)
-    if (proto !== Object.prototype && proto !== null) return v
+    if (proto !== null && Object.getPrototypeOf(proto) !== null) return v
     const out: Record<string, unknown> = {}
     for (const [name, value] of Object.entries(v)) {
       if (value === undefined) continue

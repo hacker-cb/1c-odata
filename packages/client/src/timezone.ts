@@ -224,13 +224,7 @@ function parseFractionMs(frac: string | undefined): number {
  * @public
  */
 export function formatInZone(date: Date, zone: string): string {
-  // Date.prototype.getTime reads any realm's Date (a `node:vm` one included) and throws for anything else.
-  let instant: number
-  try {
-    instant = Date.prototype.getTime.call(date)
-  } catch {
-    instant = Number.NaN
-  }
+  const instant = dateTime(date) ?? Number.NaN
   if (Number.isNaN(instant)) {
     throw new InvalidArgumentError('formatInZone needs a valid Date', { argument: 'date', received: date })
   }
@@ -251,4 +245,33 @@ export function formatInZone(date: Date, zone: string): string {
   // wall-clock carries the instant's own.
   const ms = wall.getUTCMilliseconds()
   return ms === 0 ? base : `${base}.${String(ms).padStart(3, '0')}`
+}
+
+/**
+ * The time value of a `Date` — any realm's (`node:vm`), read by
+ * `Date.prototype.getTime` itself, so a subclass overriding `getTime` cannot
+ * move it — or `undefined` for anything that is not a `Date`.
+ *
+ * @internal
+ */
+export function dateTime(v: unknown): number | undefined {
+  // Only an object can be a Date: no exception thrown and caught per primitive.
+  if (typeof v !== 'object' || v === null) return undefined
+  try {
+    return Date.prototype.getTime.call(v)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whether `v` is to be written as a date: a `Date` of any realm (`node:vm`),
+ * where `instanceof Date` answers `false` for another realm's — or anything
+ * `instanceof Date` (a `Proxy` over a `Date`), which `formatInZone` then
+ * refuses with an `InvalidArgumentError` rather than let it pass as an object.
+ *
+ * @internal
+ */
+export function isDate(v: unknown): v is Date {
+  return v instanceof Date || dateTime(v) !== undefined
 }
