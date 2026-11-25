@@ -521,3 +521,41 @@ describe('transport — the per-call hook trace retry reads (#189)', () => {
     expect(bTrace.threw).toBe(false)
   })
 })
+
+describe('transport — beforeRequest under a request signal, merged (#189 over #190)', () => {
+  it('a caller abort during the hook leaves no timer behind', async () => {
+    vi.useFakeTimers()
+    try {
+      const ctrl = new AbortController()
+      const reason = new Error('caller gave up')
+      const pending = request(
+        { method: 'GET', url: `${base}/X`, headers: {}, signal: ctrl.signal },
+        { timeout: 60_000, hooks: { beforeRequest: () => new Promise<void>(() => {}) } },
+      ).catch((e: unknown) => e)
+      await vi.advanceTimersByTimeAsync(10)
+      ctrl.abort(reason)
+      expect(await pending).toBe(reason)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a hook that failed first keeps its own error even if the caller aborts right after', async () => {
+    const ctrl = new AbortController()
+    const hookErr = new Error('token refresh failed')
+    const err = await request(
+      { method: 'GET', url: `${base}/X`, headers: {}, signal: ctrl.signal },
+      {
+        timeout: 60_000,
+        hooks: {
+          beforeRequest: () => {
+            queueMicrotask(() => ctrl.abort(new Error('late abort')))
+            throw hookErr
+          },
+        },
+      },
+    ).catch((e: unknown) => e)
+    expect(err).toBe(hookErr)
+  })
+})

@@ -106,21 +106,25 @@ async function prepareRequest(
     )
     if (result) reqEvent = result
   } catch (e) {
-    // The request signal fired while the hook ran — the deadline or the
-    // caller's abort: classified as on the wire (a TimeoutError with onError,
-    // or the caller's own reason).
-    if (combined?.aborted) {
-      await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, combined, trace)
-    }
     // The callers' `finally` that clears the timer is not reached from here.
     if (timeoutId) clearTimeout(timeoutId)
+    // The wait ended with the request signal — the deadline or the caller's
+    // abort — rather than with the hook: classified as on the wire (a
+    // TimeoutError with onError, or the caller's own reason).
+    if (combined?.aborted && e === combined.reason) {
+      await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, combined, trace)
+    }
+    // The hook's own failure: the call ends here, and so does what the hook
+    // left running under req.signal.
     timeoutSignal?.abort()
     throw e
   }
-  if (trace) trace.method = reqEvent.method
+  // Read once: the method the trace records is the method sent.
+  const method = reqEvent.method
+  if (trace) trace.method = method
 
   const fetchInit: RequestInit = {
-    method: reqEvent.method,
+    method,
     headers: reqEvent.headers,
     ...(combined !== undefined ? { signal: combined } : {}),
     ...(reqEvent.body !== undefined ? { body: reqEvent.body } : {}),
