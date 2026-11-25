@@ -1,6 +1,6 @@
 // packages/client/src/query/filter-internal.ts
 import { formatNumberLiteral } from '../format-number.js'
-import { formatInZone } from '../timezone.js'
+import { formatScalarLiteral } from '../url-builder.js'
 
 declare const filterExpressionBrand: unique symbol
 declare const fieldExprBrand: unique symbol
@@ -61,14 +61,9 @@ function makeFilter(expr: string): FilterExpression {
 
 function formatLiteral(v: unknown, ctx: CompileContext, argument: string): string {
   if (v === null) return 'null'
-  if (typeof v === 'string') return `'${v.replace(/'/g, "''")}'`
-  if (typeof v === 'boolean') return v ? 'true' : 'false'
-  if (typeof v === 'number') return formatNumberLiteral(v, argument)
-  if (typeof v === 'bigint') return String(v)
-  if (v instanceof Date) return `datetime'${formatInZone(v, ctx.serverTimezone)}'`
-  if (typeof v === 'object' && v !== null && '_expr' in (v as object)) {
-    return (v as { _expr: string })._expr
-  }
+  const literal = formatScalarLiteral(v, ctx.serverTimezone, argument)
+  if (literal !== undefined) return literal
+  if (typeof v === 'object' && '_expr' in v) return (v as { _expr: string })._expr
   return `'${String(v).replace(/'/g, "''")}'`
 }
 

@@ -6,7 +6,7 @@ import { InvalidArgumentError, ParseError } from './errors.js'
 import { buildFunctionUrl } from './functions.js'
 import { parseOptsFor, parseV3Collection } from './parser.js'
 import { assertNonNegativeInt } from './query/builder.js'
-import { formatOrderBy, qp } from './url-builder.js'
+import { formatOrderBy, isDate, qp } from './url-builder.js'
 
 /**
  * Args for `balance()` — single point in time. Both AccumulationRegister and
@@ -318,7 +318,7 @@ function orderByParam(orderBy: unknown): string {
  * an unintended all-periods query.
  */
 function periodRange(period: { from?: Date; to?: Date } | undefined): Record<string, unknown> {
-  if (period instanceof Date) {
+  if (isDate(period)) {
     throw new InvalidArgumentError(
       'Period must be a { from?, to? } range, not a point Date — these register turnover/record virtual tables have no single-point form in 1С; use { from } or { from, to }',
       { argument: 'Period', received: period },

@@ -1,8 +1,6 @@
 // packages/client/src/functions.ts
 import { InvalidArgumentError } from './errors.js'
-import { formatNumberLiteral } from './format-number.js'
-import { formatInZone } from './timezone.js'
-import { encodeComponent, encodeName, GUID_RE } from './url-builder.js'
+import { encodeComponent, encodeName, formatScalarLiteral, GUID_RE } from './url-builder.js'
 
 /**
  * Empty placeholder type — used as the default `TFunctions` for `ODataV3Client`
@@ -58,13 +56,8 @@ export function serializeArgs(args: Record<string, unknown>, serverTimezone: str
 
 function formatValue(v: unknown, serverTimezone: string, argument: string): string {
   if (v === null) return 'null'
-  if (typeof v === 'string') return `'${v.replace(/'/g, "''")}'`
-  if (typeof v === 'boolean') return v ? 'true' : 'false'
-  if (typeof v === 'number') return formatNumberLiteral(v, argument)
-  if (typeof v === 'bigint') return String(v)
-  if (v instanceof Date) {
-    return `datetime'${formatInZone(v, serverTimezone)}'`
-  }
+  const literal = formatScalarLiteral(v, serverTimezone, argument)
+  if (literal !== undefined) return literal
   // `@odata.bind` shape (spec §2.5) — emit the URI as a single-quoted string literal.
   // Without this branch the object would fall through to `String(v)` and produce a
   // bare `[object Object]` in the URL (silent server-side 400).

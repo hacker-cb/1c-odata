@@ -1,18 +1,19 @@
 import type { DateMode } from './connection.js'
 import { formatInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
+import { isDate } from './url-builder.js'
 import type { EntitySchema, MetadataIndex } from './validate.js'
 
 /** Transform a single Edm.DateTime field value into wire form. */
 function transformDateTime(v: unknown, tz: string): unknown {
   if (v === null) return ONEC_EMPTY_DATE
-  if (v instanceof Date) return formatInZone(v, tz)
+  if (isDate(v)) return formatInZone(v, tz)
   return v // string passthrough
 }
 
 /**
  * Value-based write fallback for fields/bodies with no schema: convert every
- * `Date` instance to naive ISO in the server timezone, recursing into plain
+ * `Date` — any realm's (`node:vm`) — to naive ISO in the server timezone, recursing into plain
  * objects and arrays. Mirror of the read-side regex heuristic (parser.ts) —
  * a `Date` in a write payload can only mean an `Edm.DateTime` field, the
  * sole Date-shaped type in 1С EDMX.
@@ -24,7 +25,7 @@ function transformDateTime(v: unknown, tz: string): unknown {
  * @internal
  */
 export function transformDateValuesUntyped(v: unknown, tz: string): unknown {
-  if (v instanceof Date) return formatInZone(v, tz)
+  if (isDate(v)) return formatInZone(v, tz)
   if (Array.isArray(v)) return v.map((item) => transformDateValuesUntyped(item, tz))
   // Recurse into plain objects only — exotic objects (Map, Buffer, class
   // instances) keep the old passthrough behavior and serialize as before.

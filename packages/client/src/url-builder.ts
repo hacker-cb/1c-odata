@@ -237,46 +237,71 @@ export function formatKey(key: EntityKey, serverTimezone: string): string {
 
 /** One composite-key value as its OData literal, by JS type. */
 function formatKeyValue(field: string, v: unknown, serverTimezone: string): string {
+  // Not the shared quoted literal: a GUID string keys as `guid'…'`, and the rest is URL-encoded here.
   if (typeof v === 'string') return formatKeyString(v)
   // Digits, `.` and `-` only — URL-safe by construction.
-  if (typeof v === 'number') {
-    if (!Number.isFinite(v)) {
-      throw new InvalidArgumentError(`Composite-key field ${field} must be a finite number, got ${String(v)}`, {
-        argument: 'key',
-        received: v,
-      })
-    }
-    return formatNumberLiteral(v, 'key')
+  if (typeof v === 'number' && !Number.isFinite(v)) {
+    throw new InvalidArgumentError(`Composite-key field ${field} must be a finite number, got ${String(v)}`, {
+      argument: 'key',
+      received: v,
+    })
   }
-  if (typeof v === 'bigint') return String(v)
-  if (typeof v === 'boolean') return v ? 'true' : 'false'
-  const instant = dateTime(v)
-  if (instant !== undefined) {
-    if (Number.isNaN(instant)) {
-      throw new InvalidArgumentError(`Composite-key field ${field} is an invalid Date`, {
-        argument: 'key',
-        received: v,
-      })
-    }
-    // Digits, `-`, `:`, `.` and `T` — `:` is a legal path character, written raw as 1С writes it in its own links.
-    let wall: string
-    try {
-      wall = formatInZone(new Date(instant), serverTimezone)
-    } catch (err) {
-      // A year outside 1С's 0001–9999 in the zone: name the key field, as every other key error does.
-      if (!(err instanceof InvalidArgumentError) || err.argument !== 'date') throw err
-      throw new InvalidArgumentError(`Composite-key field ${field}: ${err.message}`, {
-        argument: 'key',
-        received: v,
-        cause: err,
-      })
-    }
-    return `datetime'${wall}'`
+  if (Number.isNaN(dateTime(v))) {
+    throw new InvalidArgumentError(`Composite-key field ${field} is an invalid Date`, {
+      argument: 'key',
+      received: v,
+    })
   }
+  let literal: string | undefined
+  try {
+    // A `Date`: digits, `-`, `:`, `.` and `T` — `:` is a legal path character, written raw as 1С writes it in its own links.
+    literal = formatScalarLiteral(v, serverTimezone, 'key')
+  } catch (err) {
+    // A year outside 1С's 0001–9999 in the zone: name the key field, as every other key error does.
+    if (!(err instanceof InvalidArgumentError) || err.argument !== 'date') throw err
+    throw new InvalidArgumentError(`Composite-key field ${field}: ${err.message}`, {
+      argument: 'key',
+      received: v,
+      cause: err,
+    })
+  }
+  if (literal !== undefined) return literal
   throw new InvalidArgumentError(`Composite-key field ${field} must be a string, number, bigint, boolean or Date`, {
     argument: 'key',
     received: v,
   })
+}
+
+/**
+ * The OData literal of a scalar, by its JS type — the one rule the filter DSL,
+ * function-import arguments and composite keys share: a string quoted with `'`
+ * doubled, a `boolean` as `true` / `false`, a `number` as a plain decimal
+ * (`argument` names it in the error for a non-finite one), a `bigint` bare, a
+ * `Date` — any realm's (`node:vm`) — as `datetime'…'` in `serverTimezone`.
+ * `undefined` for anything else (`null`, an object), which each caller writes
+ * by its own rule. Not URL-encoded.
+ *
+ * @throws InvalidArgumentError — a non-finite number; an invalid `Date`, or one
+ *   whose year in the zone falls outside 1С's 0001–9999 (`argument: 'date'`).
+ * @internal
+ */
+export function formatScalarLiteral(v: unknown, serverTimezone: string, argument: string): string | undefined {
+  if (typeof v === 'string') return `'${v.replace(/'/g, "''")}'`
+  if (typeof v === 'boolean') return v ? 'true' : 'false'
+  if (typeof v === 'number') return formatNumberLiteral(v, argument)
+  if (typeof v === 'bigint') return String(v)
+  if (isDate(v)) return `datetime'${formatInZone(v, serverTimezone)}'`
+  return undefined
+}
+
+/**
+ * Whether `v` is a `Date` — any realm's (`node:vm`), where `instanceof Date`
+ * answers `false`. Read by `Date.prototype.getTime`, as {@link dateTime} reads it.
+ *
+ * @internal
+ */
+export function isDate(v: unknown): v is Date {
+  return dateTime(v) !== undefined
 }
 
 /**
