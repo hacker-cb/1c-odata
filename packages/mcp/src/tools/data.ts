@@ -102,30 +102,37 @@ interface QueryPage<T> {
 
 /**
  * The page `query` returns from the `rows` 1С sent for `limit` at `offset`,
- * never more than `limit` rows. A publication may ignore `$top` (rows past
- * `limit`) or `$skip`: where the rows match the whole `total`, 1С sent the
- * whole set and the page starts at `offset` here. Without a total a page past
- * `limit` is cut, but whether 1С honoured `$skip` is unknown, so it offers no
- * paging on — the note points to `count`.
+ * never more than `limit` rows, and never rows dropped on a guess. A page past
+ * `limit` (a publication ignoring `$top`) is cut back to `limit` from its
+ * start. Where `skip` is set and 1С sent exactly as many rows as it counted,
+ * the page is ambiguous — 1С either ignored `$skip` (these are the set's first
+ * rows) or counted fewer rows than it has (a `$select` rolling a register
+ * virtual table up) — and so is a page past `limit` without a count: such a
+ * page offers no paging on, and the note says why.
  */
 function queryPage<T>(rows: T[], limit: number, offset: number, total: number | undefined): QueryPage<T> {
-  const skipIgnored = offset > 0 && total !== undefined && total > 0 && rows.length === total
+  const ambiguous = offset > 0 && total !== undefined && total > 0 && rows.length === total
   const topIgnored = rows.length > limit
-  if (!skipIgnored && !topIgnored) {
+  if (!ambiguous && !topIgnored) {
     return { value: rows, more: moreAfter(offset, rows.length, limit, total), pageable: true, note: '' }
   }
-  const from = skipIgnored ? offset : 0
-  const value = rows.slice(from, from + limit)
-  const sent = ` ⚠ 1С returned ${rows.length} rows for top ${limit}${offset > 0 ? ` at skip ${offset}` : ''}`
-  if (total === undefined) {
-    const note = `${sent} — it ignored $top here; the page was cut to ${limit}, taking them as starting at skip. Whether 1С honoured $skip is unknown: page with count:true.`
+  const value = rows.slice(0, limit)
+  const cut = topIgnored ? `; the page was cut to ${limit} of them` : ''
+  if (ambiguous) {
+    const note = ` ⚠ 1С returned ${rows.length} rows at skip ${offset} — exactly as many as it counted: it either ignored $skip (these are the set's first rows) or counts fewer rows than it has (a $select rolling a register virtual table up)${cut}, taken as starting at skip. Paging on stops here: narrow with filter, or use register_query for a register.`
     return { value, more: false, pageable: false, note }
   }
-  const ignored = skipIgnored
-    ? `${topIgnored ? '$top and $skip' : '$skip'} here (it sent the whole set); the page starts at skip ${offset}`
-    : `$top here; the page was cut to ${limit} of them, taking them as starting at skip`
+  const sent = ` ⚠ 1С returned ${rows.length} rows for top ${limit} — it ignored $top here${cut}, taken as starting at skip.`
+  if (total === undefined) {
+    return {
+      value,
+      more: false,
+      pageable: false,
+      note: `${sent} Whether 1С honoured $skip is unknown: page with count:true.`,
+    }
+  }
   // Every row from where 1С started is in hand: what is left of them says whether more remain.
-  return { value, more: from + value.length < rows.length, pageable: true, note: `${sent} — it ignored ${ignored}.` }
+  return { value, more: value.length < rows.length, pageable: true, note: sent }
 }
 
 /**
