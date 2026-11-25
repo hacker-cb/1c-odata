@@ -2,7 +2,7 @@
 import { InvalidArgumentError } from './errors.js'
 import { formatNumberLiteral } from './format-number.js'
 import { formatInZone } from './timezone.js'
-import { GUID_RE, NAME_RE } from './url-builder.js'
+import { encodeComponent, GUID_RE, NAME_RE } from './url-builder.js'
 
 /**
  * Empty placeholder type — used as the default `TFunctions` for `ODataV3Client`
@@ -51,7 +51,7 @@ export function serializeArgs(args: Record<string, unknown>, serverTimezone: str
   const parts: string[] = []
   for (const [k, v] of Object.entries(args)) {
     if (v === undefined) continue
-    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(formatValue(v, serverTimezone, k))}`)
+    parts.push(`${encodeComponent(k, k)}=${encodeComponent(formatValue(v, serverTimezone, k), k)}`)
   }
   return parts.join('&')
 }

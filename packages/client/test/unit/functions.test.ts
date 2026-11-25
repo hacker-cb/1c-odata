@@ -110,6 +110,12 @@ describe('buildFunctionUrl', () => {
     expect(() => buildFunctionUrl(base, set, 'Balance', {}, {}, 'Europe/Moscow')).toThrow(InvalidArgumentError)
   })
 
+  it('answers a lone surrogate in an argument with InvalidArgumentError, not a raw URIError', () => {
+    expect(() => buildFunctionUrl(base, 'Catalog_X', 'Fn', {}, { Name: 'a\ud800' }, 'Europe/Moscow')).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
   it('rejects a function name that is not a plain name', () => {
     expect(() => buildFunctionUrl(base, 'Catalog_X', 'Post/../Delete', {}, {}, 'Europe/Moscow')).toThrow(
       InvalidArgumentError,

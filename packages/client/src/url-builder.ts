@@ -15,6 +15,24 @@ export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 export const NAME_RE = /^[\p{L}\p{N}_]+$/u
 
 /**
+ * `encodeURIComponent`, answering a string it cannot encode (a lone UTF-16
+ * surrogate, which makes it throw a raw `URIError`) with the library's own
+ * `InvalidArgumentError` naming the argument.
+ *
+ * @internal
+ */
+export function encodeComponent(value: string, argument: string): string {
+  try {
+    return encodeURIComponent(value)
+  } catch {
+    throw new InvalidArgumentError(`${argument} cannot be URL-encoded (it contains a lone UTF-16 surrogate)`, {
+      argument,
+      received: value,
+    })
+  }
+}
+
+/**
  * Encode a caller-supplied path (an entity set, or a set path such as
  * `Register_X/Balance(…)`) as ONE segment. A dot segment or an empty name has
  * no encoded form a URL parser keeps as a name — `<base>/..` collapses into the
@@ -27,12 +45,7 @@ export function encodeSegment(name: string, argument = 'entitySet'): string {
   if (typeof name !== 'string' || name === '' || name === '.' || name === '..') {
     throw new InvalidArgumentError(`${argument} must be a name, not ${String(name)}`, { argument, received: name })
   }
-  try {
-    return encodeURIComponent(name)
-  } catch {
-    // A lone UTF-16 surrogate: encodeURIComponent throws a raw URIError.
-    throw new InvalidArgumentError(`${argument} must be a name, not ${String(name)}`, { argument, received: name })
-  }
+  return encodeComponent(name, argument)
 }
 
 /**
@@ -75,7 +88,7 @@ export function buildV3CountUrl(base: string, q: QueryBuilder<unknown>): string 
  * @internal
  */
 export function qp(key: string, value: string): string {
-  return `${encodeURIComponent(key)}=${encodeURIComponent(value)}`
+  return `${encodeURIComponent(key)}=${encodeComponent(value, key)}`
 }
 
 function buildQueryParams(q: QueryBuilder<unknown>, opts: { onlyFilter?: boolean } = {}): string[] {
@@ -166,5 +179,5 @@ function formatKeyValue(v: string): string {
   // the quoted OData string literal because OData tokenizes literals by
   // grammar, not by paren-counting. The outer apostrophes stay raw as the
   // OData literal delimiter.
-  return `'${encodeURIComponent(v.replace(/'/g, "''"))}'`
+  return `'${encodeComponent(v.replace(/'/g, "''"), 'key')}'`
 }

@@ -146,4 +146,10 @@ describe('V3 URL builder — entity keys cannot rewrite the path', () => {
       `(Recorder=guid'${G}',Валюта='a%2Fb''c')`,
     )
   })
+
+  it('answers a lone surrogate in a key value or a query option with InvalidArgumentError', () => {
+    expect(() => buildV3KeyUrl(base, 'InformationRegister_X', { Code: 'a\ud800' })).toThrow(InvalidArgumentError)
+    const q = new QueryBuilder('Catalog_X', 'Europe/Moscow').select('A\ud800' as never)
+    expect(() => buildV3CollectionUrl(base, q)).toThrow(InvalidArgumentError)
+  })
 })
