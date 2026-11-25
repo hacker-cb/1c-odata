@@ -59,8 +59,9 @@ interface PreparedRequest {
  * dispatch paths. Runs the `beforeRequest` hook, combines signals, and
  * starts the timeout.
  *
- * The timeout covers the hook too: it starts first and the hook sees it in
- * `req.signal`. The wait for the hook ends with that signal — a timeout while
+ * A request whose signal has already aborted ends before the hook is called,
+ * with the abort's reason. The timeout covers the hook too: it starts first
+ * and the hook sees it in `req.signal`. The wait for the hook ends with that signal — a timeout while
  * it runs fails the call with a `TimeoutError` (`onError` fired), a caller's
  * abort with the abort's reason, even where the hook ignores the signal. A
  * hook that throws fails the call with its own error, unchanged; the call ends
@@ -100,6 +101,10 @@ async function prepareRequest(
   // beforeRequest hook may mutate headers, body, etc.
   // Read inside runHook, so even a throwing `hooks` getter counts as the hook's.
   try {
+    // Already aborted (a caller's abort before the call, or during a retry's
+    // pause): end here, before the hook is called — the same path as an abort
+    // while it runs.
+    if (combined?.aborted) throw combined.reason
     const result = await settleWithin(
       runHook(() => callOpts.hooks?.beforeRequest?.(reqEvent), trace),
       combined,
@@ -137,8 +142,11 @@ async function prepareRequest(
  * Await `value`, rejecting with `signal`'s abort reason the moment it aborts —
  * whether or not the work behind `value` honours the signal. Work outrun by
  * the signal is left to settle on its own (the race keeps its rejection handled).
+ * Shared with the retry pause (`http/retry.ts`).
+ *
+ * @internal
  */
-async function settleWithin<T>(value: T | PromiseLike<T>, signal: AbortSignal | undefined): Promise<T> {
+export async function settleWithin<T>(value: T | PromiseLike<T>, signal: AbortSignal | undefined): Promise<T> {
   if (!signal) return value
   let onAbort = (): void => {}
   const aborted = new Promise<never>((_, reject) => {

@@ -277,7 +277,7 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
         headers: this.baseHeaders(),
         ...(callOpts.signal !== undefined ? { signal: callOpts.signal } : {}),
       },
-      { ...this.transportOpts(), ...callOpts },
+      this.callTransportOpts(callOpts),
     )
   }
 
@@ -328,7 +328,7 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
         ...(transformed !== undefined ? { body: serialized } : {}),
         ...(callOpts.signal !== undefined ? { signal: callOpts.signal } : {}),
       },
-      { ...this.transportOpts(), ...callOpts },
+      this.callTransportOpts(callOpts),
     )
   }
 
@@ -391,7 +391,7 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
         headers: this.baseHeaders(),
         ...(callOpts.signal !== undefined ? { signal: callOpts.signal } : {}),
       },
-      { ...this.transportOpts(), ...callOpts },
+      this.callTransportOpts(callOpts),
     )
     return new Response(raw.body, {
       status: raw.status,
@@ -424,7 +424,7 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
         headers: this.baseHeaders(),
         ...(callOpts.signal !== undefined ? { signal: callOpts.signal } : {}),
       },
-      { ...this.transportOpts(), ...callOpts },
+      this.callTransportOpts(callOpts),
     )
     return result.response
   }
@@ -434,6 +434,17 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
       ...V3_BASE_HEADERS,
       Authorization: this.opts.auth.header,
     }
+  }
+
+  /**
+   * The transport options of one call: the client's defaults, overridden by
+   * the call's own — except the signal. The call's `signal` travels with the
+   * request itself and the client's stays here, so the transport combines both
+   * (`AbortSignal.any`): either one aborts the call.
+   */
+  private callTransportOpts(callOpts: RequestOptions) {
+    const { signal: _callSignal, ...overrides } = callOpts
+    return { ...this.transportOpts(), ...overrides }
   }
 
   protected transportOpts() {
