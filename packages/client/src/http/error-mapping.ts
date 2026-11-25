@@ -53,8 +53,9 @@ export async function mapResponseToError(
     format = 'json'
   } else if (ct.includes('xml')) {
     // Only a real `<m:error>` envelope counts as XML. An XHTML/proxy error page
-    // served with an `xml` content-type but no `<code>`/`<message>` is treated
-    // as no-envelope (same as HTML) rather than a fabricated category error.
+    // served with an `xml` content-type — even one with a `<code>` element in
+    // its markup — is treated as no-envelope (same as HTML) rather than a
+    // fabricated category error.
     const xmlBody = parseXmlError(body)
     if (!xmlBody) return noEnvelopeError(status, statusText, ct, body, request)
     parsed = xmlBody
@@ -197,19 +198,46 @@ function extractODataMessage(m: unknown): string {
   return 'Unknown OData error'
 }
 
+/** The namespace an OData V3 error envelope's elements live in. */
+const ODATA_METADATA_NS = 'http://schemas.microsoft.com/ado/2007/08/dataservices/metadata'
+
 /**
- * Parse the narrow OData/$batch `<error><code/><message/></error>` envelope.
- * Returns `null` when neither `<code>` nor `<message>` is present — i.e. the
- * body is not an OData XML error (e.g. an XHTML/proxy error page), so the caller
- * routes it through the no-envelope path instead of fabricating a code.
+ * The root element's opening tag, past an optional BOM, XML declaration,
+ * comments, processing instructions and doctype: its prefix (absent for an
+ * unprefixed root) and its attributes.
+ */
+const XML_ROOT =
+  /^\uFEFF?\s*(?:(?:<\?[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>)\s*)*<(?:([A-Za-z_][\w.-]*):)?error(\s[^>]*)?>/
+
+/** `s` with every regular-expression metacharacter escaped. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Parse the OData error envelope: a root `error` element in the OData
+ * metadata namespace, with `code` and `message` children under the same
+ * prefix. 1С sends it prefixed —
+ * `<m:error xmlns:m="…/dataservices/metadata"><m:code>9</m:code><m:message>…</m:message></m:error>`
+ * — and the unprefixed form with a default namespace is the same envelope.
+ * Returns `null` for anything else (an XHTML/proxy error page, whatever
+ * `<code>` or `<message>` its markup holds), so the caller routes it through
+ * the no-envelope path instead of fabricating a code.
  */
 function parseXmlError(xml: string): ODataErrorBody | null {
-  const codeMatch = xml.match(/<code>(.*?)<\/code>/)
-  const messageMatch = xml.match(/<message[^>]*>(.*?)<\/message>/s)
-  if (!codeMatch && !messageMatch) return null
+  const root = XML_ROOT.exec(xml)
+  if (!root) return null
+  const prefix = root[1]
+  const attrs = root[2] ?? ''
+  const nsAttr = prefix === undefined ? 'xmlns' : `xmlns:${prefix}`
+  const ns = new RegExp(`(?:^|\\s)${escapeRegExp(nsAttr)}\\s*=\\s*(["'])(.*?)\\1`).exec(attrs)?.[2]
+  if (ns !== ODATA_METADATA_NS) return null
+  const tag = prefix === undefined ? '' : `${escapeRegExp(prefix)}:`
+  const child = (name: string): string | undefined =>
+    new RegExp(`<${tag}${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}${name}>`).exec(xml)?.[1]
   return {
-    code: codeMatch?.[1] ?? '0',
-    message: messageMatch?.[1] ?? 'Unknown XML error',
+    code: child('code')?.trim() ?? '0',
+    message: child('message') ?? 'Unknown XML error',
   }
 }
 
