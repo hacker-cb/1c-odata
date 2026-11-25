@@ -388,3 +388,32 @@ describe('requestStream — a throwing afterResponse releases the response (#189
     }
   })
 })
+
+describe('transport — a caller’s abort beats a later timeout (#189)', () => {
+  it('a caller abort before the timer fires stays the caller’s abort', async () => {
+    server.use(
+      http.get(`${base}/Slow`, async () => {
+        await new Promise((r) => setTimeout(r, 300))
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const ctrl = new AbortController()
+    const reason = new Error('caller gave up')
+    const onError = vi.fn()
+    // The caller aborts at 20 ms; the timer would fire at 40 ms — both before fetch settles here.
+    setTimeout(() => ctrl.abort(reason), 20)
+    const err = await request(
+      { method: 'GET', url: `${base}/Slow`, headers: {}, signal: ctrl.signal },
+      {
+        timeout: 40,
+        hooks: {
+          beforeRequest: () => new Promise<void>((r) => setTimeout(r, 60)),
+          onError,
+        },
+      },
+    ).catch((e: unknown) => e)
+    expect(err).toBe(reason)
+    expect(err).not.toBeInstanceOf(TimeoutError)
+    expect(onError).not.toHaveBeenCalled()
+  })
+})

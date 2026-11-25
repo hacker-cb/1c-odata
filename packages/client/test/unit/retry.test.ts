@@ -251,6 +251,27 @@ describe('requestWithRetry — hook errors are never retried, whatever their typ
     expect(err).toBeInstanceOf(HTTPError)
     expect(n).toBe(3)
   })
+
+  it('a caller’s abort with its own reason is rethrown unchanged, not a retried NetworkError', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, async () => {
+        n++
+        await new Promise((r) => setTimeout(r, 200))
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const ctrl = new AbortController()
+    const reason = new Error('operation cancelled')
+    setTimeout(() => ctrl.abort(reason), 20)
+    const onError = vi.fn()
+    const err = await requestWithRetry({ ...get, signal: ctrl.signal }, { retry: policy, hooks: { onError } }).catch(
+      (e: unknown) => e,
+    )
+    expect(err).toBe(reason)
+    expect(onError).not.toHaveBeenCalled()
+    expect(n).toBe(1)
+  })
 })
 
 describe('requestWithRetry — what stops a retry, re-read (#189)', () => {
@@ -303,6 +324,24 @@ describe('requestWithRetry — what stops a retry, re-read (#189)', () => {
     expect(reads).toBe(1)
     expect(n).toBe(1)
   })
+
+  it('an abort whose reason is a NetworkError is not retried', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, async () => {
+        n++
+        await new Promise((r) => setTimeout(r, 200))
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const ctrl = new AbortController()
+    const reason = new NetworkError('batch cancelled: upstream down')
+    setTimeout(() => ctrl.abort(reason), 20)
+    const err = await requestWithRetry({ ...get, signal: ctrl.signal }, { retry: policy }).catch((e: unknown) => e)
+    expect(err).toBe(reason)
+    expect(n).toBe(1)
+  })
+
   it('onError rethrowing the error it was handed is retried even if another request’s hook threw that object meanwhile', async () => {
     let n = 0
     server.use(

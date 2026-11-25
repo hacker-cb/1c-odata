@@ -285,10 +285,14 @@ async function translateAndFireError(
   hooks: RequestHooks | undefined,
   timeoutSignal: AbortController | undefined,
   timeoutMs: number | undefined,
+  requestSignal: AbortSignal | null | undefined,
 ): Promise<never> {
   const request: RequestContext = { method: reqEvent.method, url: reqEvent.url }
+  // The request signal carries the reason of whichever source aborted it
+  // first: a timeout only where the timer was first.
+  const timedOut = timeoutSignal?.signal.aborted === true && requestSignal?.reason === timeoutSignal.signal.reason
   // timeoutMs is paired with timeoutSignal in prepareRequest: set whenever the signal can fire.
-  if (e instanceof Error && e.name === 'AbortError' && timeoutSignal?.signal.aborted && timeoutMs !== undefined) {
+  if (timedOut && timeoutMs !== undefined) {
     const err = new TimeoutError(`Request timed out after ${timeoutMs}ms`, {
       timeoutMs,
       cause: e,
@@ -297,7 +301,9 @@ async function translateAndFireError(
     await runHook(() => hooks?.onError?.(reqEvent, err), err)
     throw err
   }
-  // Pass through user-issued abort: rethrow original
+  // A caller's abort is no network failure and nothing to retry: the caller
+  // gets back its own reason — an AbortError, or whatever it aborted with.
+  if (requestSignal?.aborted) throw requestSignal.reason
   if (e instanceof Error && e.name === 'AbortError') throw e
   // Anything else failed on the wire: a network-level error
   const err = new NetworkError(networkErrorMessage(e), { cause: e, request })
@@ -347,7 +353,7 @@ export async function request(
       body = await response.text()
     } catch (e) {
       if (timeoutId) clearTimeout(timeoutId)
-      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
+      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, fetchInit.signal)
     }
     const headers: Record<string, string> = {}
     response.headers.forEach((v, k) => {
@@ -426,7 +432,7 @@ export async function requestStream(
       response = await globalThis.fetch(reqEvent.url, fetchInit)
     } catch (e) {
       if (timeoutId) clearTimeout(timeoutId)
-      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
+      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, fetchInit.signal)
     }
 
     const headers: Record<string, string> = {}
@@ -460,7 +466,7 @@ export async function requestStream(
         body = await response.text()
       } catch (e) {
         if (timeoutId) clearTimeout(timeoutId)
-        return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
+        return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, fetchInit.signal)
       }
       const err = await mapResponseToError(response.status, response.statusText, headers, body, {
         method: reqEvent.method,

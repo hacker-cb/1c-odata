@@ -27,6 +27,8 @@ export async function requestWithRetry(config: RequestConfig, callOpts: RetryWra
       // Categorically non-retryable — a hook's own exception whatever its type
       // (a nested client call inside a hook can throw a NetworkError):
       if (isHookError(e)) throw e
+      // Nor once the caller has aborted, whatever reason it aborted with.
+      if (config.signal?.aborted || callOpts.signal?.aborted) throw e
       if (e instanceof BusinessError) throw e
       if (e instanceof TimeoutError) throw e
       if (e instanceof Error && e.name === 'AbortError') throw e

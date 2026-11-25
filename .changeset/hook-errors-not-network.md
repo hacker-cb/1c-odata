@@ -8,4 +8,6 @@ Migration: if you caught your own hook's failure as `NetworkError` (`err instanc
 
 A JSON error body of `null` — from a proxy, say — is now a `ParseError` ("missing odata.error wrapper") like any other non-object body, instead of escaping as a `TypeError` that became a retried `NetworkError`. An `odata.error.code` whose conversion to text throws no longer escapes the same way, and a bare-string `odata.error` — an empty one included — is kept as the message of an `HTTPError` rather than lost or taken for a missing wrapper.
 
+A caller's abort is now rethrown as the reason it was given — `controller.abort(new Error('…'))` comes back as that error, as a plain `abort()` already came back as its `AbortError` — and is never retried, whatever the reason's type; before, a custom reason became a `NetworkError` that retry repeated. A caller's abort that lands before the timeout fires is the caller's abort, not a `TimeoutError`.
+
 In `requestStream()`, an `afterResponse` hook that throws now cancels the unread response body, releasing its connection, instead of leaving it to the garbage collector.
