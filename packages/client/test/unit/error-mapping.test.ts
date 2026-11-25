@@ -110,7 +110,7 @@ describe('mapResponseToError', () => {
     })
 
     it('recognises the envelope past an XML declaration and a comment', async () => {
-      const body = `<?xml version="1.0" encoding="utf-8"?>\n<!-- 1С -->\n${onec('6', 'Сегмент пути Nope не найден!')}`
+      const body = `<?xml version="1.0" encoding="utf-8"?>\n<!-- 1С -->\n${onec('6', 'Сегмент пути Nope не найден!')}\n<!-- end -->\n`
       const err = await mapResponseToError(400, 'Bad request', xmlCt, body, req)
       expect((err as HTTPError).errorFormat).toBe('xml')
       expect((err as HTTPError).code).toBe('6')
@@ -212,7 +212,8 @@ describe('mapResponseToError', () => {
     it('requires a well-formed, closed envelope', async () => {
       const mismatched = `<m:error xmlns:m="${NS}"><m:code>-1</m:message></m:error>`
       const truncated = `<m:error xmlns:m="${NS}"><m:code>-1</m:code>`
-      for (const body of [mismatched, truncated]) {
+      const secondRoot = `<m:error xmlns:m="${NS}"><m:code>-1</m:code></m:error><html>proxy</html>`
+      for (const body of [mismatched, truncated, secondRoot]) {
         const err = await fmt(500, body)
         expect(err).not.toBeInstanceOf(BusinessError)
         expect(err.errorFormat).toBe('none')

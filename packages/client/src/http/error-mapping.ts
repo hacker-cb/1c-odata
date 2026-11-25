@@ -294,9 +294,24 @@ function parseXmlError(xml: string): ODataErrorBody | null {
     }
     open.push(tag.name)
   }
-  // A truncated or unclosed envelope is not one.
-  if (!closed || (found.code === undefined && found.message === undefined)) return null
+  // A truncated or unclosed envelope is not one, nor one with more after it
+  // than whitespace, comments and processing instructions (a second root).
+  if (!closed || !onlyMiscFrom(xml, i) || (found.code === undefined && found.message === undefined)) return null
   return { code: found.code?.trim() ?? '0', message: found.message ?? 'Unknown XML error' }
+}
+
+/** Whether everything from `i` on is whitespace, comments and processing instructions — what may follow a root. */
+function onlyMiscFrom(xml: string, i: number): boolean {
+  let j = i
+  for (;;) {
+    j = skipXmlSpace(xml, j)
+    if (j >= xml.length) return true
+    const close = xml.startsWith('<!--', j) ? '-->' : xml.startsWith('<?', j) ? '?>' : undefined
+    if (close === undefined) return false
+    const e = xml.indexOf(close, j + 2)
+    if (e < 0) return false
+    j = e + close.length
+  }
 }
 
 /**
