@@ -134,11 +134,14 @@ export interface ReadFiOptions extends RequestOptions {
   orderBy?: { field: string; dir?: 'asc' | 'desc' | undefined }[]
   /**
    * `$select` — the fields to return. On the aggregating tables (`Balance`,
-   * `Turnovers`, `BalanceAndTurnovers`, `DrCrTurnovers`) this also sets the
-   * **grouping**: 1С sums the resources over the selected dimensions, so
-   * selecting fewer dimensions returns fewer, coarser rows (a server-side
-   * roll-up). E.g. `['Account_Key', 'СуммаTurnoverDr', 'СуммаTurnoverCr']`
-   * collapses `Turnovers` to one row per account. On the per-record and slice
+   * `Turnovers`, `BalanceAndTurnovers`, `DrCrTurnovers`) 1С **may** also roll
+   * the rows up over the selected dimensions, summing the resources — whether
+   * it does depends on the 1С configuration. On БП 3.0 `AccountingRegister`
+   * `Turnovers`, e.g., `['Account_Key', 'СуммаTurnoverDr', 'СуммаTurnoverCr']`
+   * returns one row per account; on УТ 11.5 `AccumulationRegister_ТоварыНаСкладах`
+   * `Balance` the rows come back un-rolled, one per full set of dimensions, and
+   * are to be summed by the caller — while `/$count` still counts them rolled
+   * up, so a {@link ReadFiPage} `count` can fall short of the rows. On the per-record and slice
    * tables (`RecordsWithExtDimensions`, `SliceFirst` / `SliceLast`,
    * `ExtDimensions`) it only picks the fields — nothing is summed. Blank
    * entries are ignored; an empty list sends no `$select`.
@@ -166,13 +169,14 @@ export interface ReadFiOptions extends RequestOptions {
  * the bare row array.
  *
  * The count is a second request, `…/Func()/$count` with the same table
- * parameters, `$filter` and `$select` (the grouping), sent alongside the page — not `$inlinecount`, which
+ * parameters, `$filter` and `$select`, sent alongside the page — not `$inlinecount`, which
  * the 1С documentation says makes `$skip` / `$top` ignored. On a big table 1С
  * spends about as long counting as computing the page, in parallel. The two
  * requests see the data a moment apart, so on data changing meanwhile the
  * count and the page can briefly disagree. Some 1С publications count a
- * `$select` as grouped while returning its rows ungrouped, so the count can
- * fall short of the rows the pages hold. If either request fails, the call
+ * `$select` as rolled up while returning its rows un-rolled (see
+ * {@link ReadFiOptions.select}), so the count can fall short of the rows the
+ * pages hold. If either request fails, the call
  * fails.
  */
 export interface ReadFiCountOptions extends Omit<ReadFiOptions, 'count'> {
@@ -210,7 +214,7 @@ function readFiQueryParams(opts: ReadFiOptions | ReadFiCountOptions): { page: st
     if (fields.length > 0) params.push(qp('$select', fields.join(',')))
   }
   // The count takes what shapes the rows — `$filter`, and `$select`, which on
-  // the aggregating tables is the grouping — and nothing that pages them.
+  // the aggregating tables may roll them up — and nothing that pages them.
   const count = [...params]
   if (opts.orderBy !== undefined) {
     const orderBy = orderByParam(opts.orderBy)
@@ -339,8 +343,8 @@ function expandRangeArgs(args: Record<string, unknown>): Record<string, unknown>
  *
  * Every virtual-table method takes an optional trailing {@link ReadFiOptions}
  * (`$top` / `$skip` / `$orderby` / `$select` / `$filter` + per-call `signal` /
- * `timeout` / `retry`) — `select` doubles as the server-side grouping, `top`
- * bounds the large collections big registers return, and `top` + `skip` page
+ * `timeout` / `retry`) — `select` may also roll the rows up server-side (by
+ * 1С configuration; see {@link ReadFiOptions.select}), `top` bounds the large collections big registers return, and `top` + `skip` page
  * through them. With `count: true` a method resolves to a {@link ReadFiPage}
  * `{ value, count }` instead of the bare rows.
  *

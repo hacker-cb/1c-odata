@@ -218,10 +218,10 @@ const drcr = await client
   .drCrTurnovers({ Period: { from: new Date('2025-01-01'), to: new Date('2025-03-31') } })
 ```
 
-On the aggregating tables (`balance`, `turnovers`, `balanceAndTurnovers`, `drCrTurnovers`) `select` is also the **grouping**: 1С sums the resources over the selected dimensions only, so selecting fewer of them rolls the result up server-side; on slices and `recordsWithExtDimensions` it only picks fields. `filter` is a raw OData `$filter` on the resulting rows — unlike `Condition` / `AccountCondition`, which restrict the records the table is computed from:
+On the aggregating tables (`balance`, `turnovers`, `balanceAndTurnovers`, `drCrTurnovers`) `select` **may** also roll the result up server-side — 1С summing the resources over the selected dimensions only — but whether it does depends on the 1С configuration: on БП 3.0 `AccountingRegister_Хозрасчетный` turnovers the example below returns one row per account (45 rows instead of 178 in one test base), while on УТ 11.5 `AccumulationRegister_ТоварыНаСкладах` balance the rows come back un-rolled, one per full set of dimensions, for the caller to sum — and the count (`count: true`) still counts them rolled up, so it can fall short of the rows. On slices and `recordsWithExtDimensions` `select` only picks fields. `filter` is a raw OData `$filter` on the resulting rows — unlike `Condition` / `AccountCondition`, which restrict the records the table is computed from:
 
 ```ts
-// One row per account instead of one per account × ext-dimension × balanced account
+// Where 1С rolls up (БП 3.0): one row per account instead of one per account × ext-dimension × balanced account
 const byAccount = await client.register('AccountingRegister_Хозрасчетный').turnovers(
   {
     // January 2026 in server time (Europe/Moscow): spell the offset so the bounds don't depend on the host's zone
