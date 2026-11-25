@@ -19,7 +19,8 @@ import {
  * When the body is NOT a recognizable OData envelope (HTML/XHTML/proxy error
  * page, wrong path, over-long URL) → HTTPError with `errorFormat: 'none'`, the
  * real status preserved, no category subclass, and a truncated `rawBody`
- * snippet. A body that CLAIMS JSON but fails to parse / lacks the `odata.error`
+ * snippet; IIS's own `400 Invalid URL` page gets a message naming its
+ * per-segment length limit. A body that CLAIMS JSON but fails to parse / lacks the `odata.error`
  * wrapper → ParseError (a genuine parse failure, distinct from "no envelope").
  *
  * @internal — wired into `http/transport.ts`; not part of the public surface.
@@ -85,13 +86,17 @@ function noEnvelopeError(
   request: RequestContext,
 ): HTTPError {
   const rawBody = truncateRaw(body, 512)
-  const preview = truncateRaw(body, 160)
-  const message =
-    `HTTP ${status} ${statusText}: server returned no OData error envelope ` +
-    `(content-type "${ct || 'none'}"). Check the request URL — a wrong ` +
-    `entity-set path, a missing base, or an over-long URL (1С rejects requests ` +
-    `past its URL-length limit) typically produces this instead of a JSON ` +
-    `odata.error envelope.${preview ? ` Body starts: ${preview}` : ''}`
+  const message = iisInvalidUrlMessage(status, statusText, ct, body, request.url) ?? genericMessage()
+  function genericMessage(): string {
+    const preview = truncateRaw(body, 160)
+    return (
+      `HTTP ${status} ${statusText}: server returned no OData error envelope ` +
+      `(content-type "${ct || 'none'}"). Check the request URL — a wrong ` +
+      `entity-set path, a missing base, or an over-long URL (1С rejects requests ` +
+      `past its URL-length limit) typically produces this instead of a JSON ` +
+      `odata.error envelope.${preview ? ` Body starts: ${preview}` : ''}`
+    )
+  }
   return new HTTPError(message, {
     status,
     statusText,
@@ -99,6 +104,84 @@ function noEnvelopeError(
     request,
     ...(rawBody ? { rawBody } : {}),
   })
+}
+
+/**
+ * IIS (http.sys) caps each URL path segment at 260 characters by default
+ * (`UrlSegmentMaxLength`; a server may configure another value), counted on
+ * the DECODED path — an encoded `%2F` splits segments too (measured on a 1С
+ * base behind IIS).
+ */
+const IIS_URL_SEGMENT_MAX = 260
+
+/** http.sys's own error page for a URL it refuses — its title line and its body sentence. */
+const IIS_INVALID_URL_PAGE = /Bad Request - Invalid URL|The request URL is invalid/i
+
+/**
+ * The message for http.sys's own `400 Bad Request — Invalid URL` HTML page, or
+ * `null` when the response is not that page. The usual trigger against 1С is a
+ * register virtual table called with its parameters in the path —
+ * `…/Turnovers(StartPeriod=…,AccountCondition='…')` puts them all in ONE
+ * segment, so a condition of about two GUIDs already passes the default cap —
+ * while `client.register(…)` (MCP: `register_query`) sends them in the query
+ * string, which has no such limit.
+ */
+function iisInvalidUrlMessage(
+  status: number,
+  statusText: string,
+  ct: string,
+  body: string,
+  url: string,
+): string | null {
+  if (status !== 400 || !ct.toLowerCase().includes('html') || !IIS_INVALID_URL_PAGE.test(body)) return null
+  const head = `HTTP ${status} ${statusText}: IIS rejected the request URL as invalid ("Invalid URL")`
+  const longest = longestPathSegment(url)
+  if (longest > IIS_URL_SEGMENT_MAX) {
+    return (
+      `${head} — a path segment is ${longest} characters, over IIS's default ${IIS_URL_SEGMENT_MAX}-character ` +
+      'limit per segment (http.sys UrlSegmentMaxLength). Register virtual-table parameters written in the ' +
+      "path — …/Turnovers(StartPeriod=…,AccountCondition='…') — all sit in one segment: call the table through " +
+      'client.register(…) (in the MCP server: register_query), which passes them in the query string with no ' +
+      'such limit, or split the condition into calls over disjoint subsets (e.g. one account each).'
+    )
+  }
+  return (
+    `${head} — check the path for characters or lengths the web server refuses ` +
+    `(IIS caps each path segment at ${IIS_URL_SEGMENT_MAX} characters by default).`
+  )
+}
+
+/**
+ * Length of the longest segment of a URL's path, measured as IIS does: on the
+ * decoded text, an encoded `/` splitting too. In a segment whose escapes do not
+ * all decode, each run of escapes is decoded on its own. 0 when the URL does not parse.
+ */
+function longestPathSegment(url: string): number {
+  let path: string
+  try {
+    path = new URL(url).pathname
+  } catch {
+    return 0
+  }
+  let longest = 0
+  for (const raw of path.split('/')) {
+    let decoded: string
+    try {
+      decoded = decodeURIComponent(raw)
+    } catch {
+      // Decode each run of escapes on its own, so one bad escape leaves the rest
+      // (multi-byte letters, an encoded `/`) read as IIS reads them.
+      decoded = raw.replace(/(?:%[0-9A-Fa-f]{2})+/g, (run) => {
+        try {
+          return decodeURIComponent(run)
+        } catch {
+          return '_'
+        }
+      })
+    }
+    for (const seg of decoded.split('/')) if (seg.length > longest) longest = seg.length
+  }
+  return longest
 }
 
 /**
