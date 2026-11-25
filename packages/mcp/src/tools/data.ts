@@ -90,20 +90,44 @@ async function pageAndCount(
   }
 }
 
+/** A `query` page as returned: its rows, whether 1С has more past them, and a summary note. */
+interface QueryPage<T> {
+  value: T[]
+  /** Whether rows remain past this page — the byte budget aside. */
+  more: boolean
+  note: string
+}
+
 /**
- * A page 1С sent past `limit` — a publication that ignores `$top` — kept to
- * `limit` rows. Where the rows match the whole `total`, `$skip` was ignored
- * too and the page starts at `offset` here; otherwise at the first row sent.
+ * The page `query` returns from the `rows` 1С sent for `limit` at `offset`.
+ * A short page ends the paging whatever the `total` says (a register virtual
+ * table may count rows a `$select` rolls up); a full one goes on while the
+ * total, where known, says rows remain. Rows past `limit` — a publication
+ * ignoring `$top` — are cut back to `limit` only where the `total` places
+ * them: matching the whole of it, `$skip` was ignored too and the page starts
+ * at `offset` here. Without a total they are passed on as sent, and the note
+ * says so: cutting them would hand the first rows back on every page where
+ * `$skip` was ignored as well.
  */
-function keepToTop<T>(
-  rows: T[],
-  limit: number,
-  offset: number,
-  total: number | undefined,
-): { value: T[]; ignoredTop: boolean; from: number } {
-  if (rows.length <= limit) return { value: rows, ignoredTop: false, from: 0 }
+function queryPage<T>(rows: T[], limit: number, offset: number, total: number | undefined): QueryPage<T> {
+  if (rows.length <= limit) {
+    const more = rows.length === limit && (total === undefined || offset + rows.length < total)
+    return { value: rows, more, note: '' }
+  }
+  const ignored = ` ⚠ 1С returned ${rows.length} rows for top ${limit} — it ignored $top here;`
+  if (total === undefined) {
+    return { value: rows, more: false, note: `${ignored} all of them are passed on (count:true has them cut to top).` }
+  }
   const from = offset > 0 && rows.length === total ? offset : 0
-  return { value: rows.slice(from, from + limit), ignoredTop: true, from }
+  const value = rows.slice(from, from + limit)
+  const start =
+    from > 0 ? `taking them as the whole set and starting at skip ${offset}` : 'taking them as starting at skip'
+  // Every row from where 1С started is in hand: what is left of them says whether more remain.
+  return {
+    value,
+    more: from + value.length < rows.length,
+    note: `${ignored} the page was cut to ${limit} of them, ${start}.`,
+  }
 }
 
 /**
@@ -129,13 +153,6 @@ function hasMoreRows(truncated: boolean, offset: number, fetched: number, limit:
 function truncationNote(truncated: boolean, shown: number, fetched: number, limits: Limits, narrow: string): string {
   if (!truncated) return ''
   return ` ⚠ Output truncated to ${shown} of ${fetched} fetched rows (~${limits.maxBytes}-byte budget); ${narrow}.`
-}
-
-/** The summary's note on a page 1С sent past `top`, cut back by {@link keepToTop}. */
-function ignoredTopNote(sent: number, limit: number, from: number, offset: number): string {
-  const start =
-    from > 0 ? `taking them as the whole set and starting at skip ${offset}` : 'taking them as starting at skip'
-  return ` ⚠ 1С returned ${sent} rows for top ${limit} — it ignored $top here; the page was cut to ${limit} of them, ${start}.`
 }
 
 /** Entity-set paths that are really register virtual tables / flat record sets — nudge toward register_query. */
@@ -206,9 +223,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
 
         const page = await pageAndCount(q, count === true)
         const total = page.count
-        // A publication that ignores $top hands back more than the page: keep
-        // it to `limit` rows and say so rather than pass them all on.
-        const { value, ignoredTop, from } = keepToTop(page.value, limit, offset, total)
+        const { value, more, note: topNote } = queryPage(page.value, limit, offset, total)
         const fetched = value.length
         const { rows, truncated } = shapeRows(value, compact, limits)
         const note = truncationNote(
@@ -218,7 +233,6 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           limits,
           'narrow with select, set compact:true, or page with skip',
         )
-        const topNote = ignoredTop ? ignoredTopNote(page.value.length, limit, from, offset) : ''
         return {
           summary: `${rows.length} row(s)${total !== undefined ? ` of ${total} total` : ''} from ${entitySet}.${note}${topNote}${registerHint(entitySet)}`,
           data: {
@@ -231,11 +245,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
               fetched,
               returned: rows.length,
               truncated,
-              // With $top ignored every row from where 1С started is in hand, so
-              // what is left of them says whether more remain.
-              hasMore: ignoredTop
-                ? truncated || from + fetched < page.value.length
-                : hasMoreRows(truncated, offset, fetched, limit, total),
+              hasMore: truncated || more,
             },
             value: rows,
           },

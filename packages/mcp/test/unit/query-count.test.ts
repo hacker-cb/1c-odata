@@ -17,21 +17,28 @@ interface Calls {
   builder: string[]
   get: (AbortSignal | undefined)[]
   count: (AbortSignal | undefined)[]
+  /** Whether each page request was aborted while still in flight. */
+  abortedInFlight: boolean[]
 }
 
 /**
  * The query tool over an entity set of `rowCount` rows that 1С pages as asked
  * (`$skip` / `$top`, each ignorable). Every builder method called is recorded;
- * `failCount` makes `/$count` fail after the page has started.
+ * `failCount` makes `/$count` fail while the page is loading; `count` is what
+ * `/$count` answers (the row count by default).
  */
-function setup(rowCount: number, limits: Limits, { ignoreTop = false, ignoreSkip = false, failCount = false } = {}) {
+function setup(
+  rowCount: number,
+  limits: Limits,
+  { ignoreTop = false, ignoreSkip = false, failCount = false, count = rowCount } = {},
+) {
   let handler: Handler | undefined
   const server = {
     registerTool: (name: string, _config: unknown, h: Handler) => {
       if (name === 'query') handler = h
     },
   } as unknown as McpServer
-  const calls: Calls = { builder: [], get: [], count: [] }
+  const calls: Calls = { builder: [], get: [], count: [], abortedInFlight: [] }
   const state: { top?: number; skip?: number } = {}
   const chain =
     (name: string, set?: (n: number) => void) =>
@@ -55,6 +62,7 @@ function setup(rowCount: number, limits: Limits, { ignoreTop = false, ignoreSkip
       calls.get.push(opts.signal)
       // The page answers after /$count has had its chance to fail.
       await new Promise((r) => setTimeout(r, 10))
+      calls.abortedInFlight.push(opts.signal?.aborted === true)
       const skip = ignoreSkip ? 0 : (state.skip ?? 0)
       const top = ignoreTop ? rowCount : (state.top ?? rowCount)
       const value = Array.from({ length: Math.max(0, Math.min(top, rowCount - skip)) }, (_, i) => ({ n: skip + i }))
@@ -63,7 +71,7 @@ function setup(rowCount: number, limits: Limits, { ignoreTop = false, ignoreSkip
     count: async (opts: { signal?: AbortSignal } = {}) => {
       calls.count.push(opts.signal)
       if (failCount) throw new Error('count failed')
-      return rowCount
+      return count
     },
   }
   const client = { serverTimezone: 'Europe/Moscow', query: () => builder }
@@ -109,7 +117,9 @@ describe('query with count: a parallel /$count, never $inlinecount (#206)', () =
     const { run, calls } = setup(10, limits, { failCount: true })
     const { res } = await run({ count: true })
     expect(res.isError).toBe(true)
-    expect(calls.get[0]?.aborted).toBe(true)
+    // Asked in parallel: /$count failed while the page was still loading, and aborted it.
+    await new Promise((r) => setTimeout(r, 30))
+    expect(calls.abortedInFlight).toEqual([true])
   })
 
   it('cuts a page 1С sent past top (honouring skip) back to top, and says so', async () => {
@@ -128,11 +138,20 @@ describe('query with count: a parallel /$count, never $inlinecount (#206)', () =
     expect(JSON.stringify(summary)).toContain('starting at skip 8')
   })
 
-  it('cuts a page past top without count too', async () => {
-    const { run } = setup(10, limits, { ignoreTop: true })
-    const { data } = await run({})
-    expect(data.value).toHaveLength(4)
-    expect(data.pagination.hasMore).toBe(true)
+  it('without count passes rows sent past top on as sent, ending the paging, and says so', async () => {
+    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true })
+    const { data, summary } = await run({ skip: 4 })
+    // Cutting them would hand rows 0..3 back as every page, with hasMore set.
+    expect(data.value).toHaveLength(10)
+    expect(data.pagination.hasMore).toBe(false)
+    expect(JSON.stringify(summary)).toContain('all of them are passed on')
+  })
+
+  it('a short page ends the paging even where the count says more (rows a $select rolls up)', async () => {
+    const { run } = setup(2, limits, { count: 178 })
+    const { data } = await run({ count: true })
+    expect(data.count).toBe(178)
+    expect(data.pagination.hasMore).toBe(false)
   })
 
   it('says nothing about $top when 1С kept to it', async () => {
