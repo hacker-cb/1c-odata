@@ -77,6 +77,13 @@ describe('a Date of another realm (node:vm) (#205)', () => {
     expect(transformDateValuesUntyped(m, TZ)).toBe(m)
   })
 
+  it('write without a schema: an object with its own toJSON passes as is; an own __proto__ field stays a field', () => {
+    const custom = Object.defineProperty({ A: 1 }, 'toJSON', { value: () => ({ A: 2 }), enumerable: false })
+    expect(transformDateValuesUntyped(custom, TZ)).toBe(custom)
+    const parsed = JSON.parse('{"__proto__": {"x": 1}, "Date": null}') as Record<string, unknown>
+    expect(JSON.stringify(transformDateValuesUntyped(parsed, TZ))).toBe('{"__proto__":{"x":1},"Date":null}')
+  })
+
   it('a Proxy over a Date is still refused as a date, not passed on as an object', () => {
     const proxied = new Proxy(new Date(), {})
     expect(() => formatScalarLiteral(proxied, TZ, 'x')).toThrow(InvalidArgumentError)

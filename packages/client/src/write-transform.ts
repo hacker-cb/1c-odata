@@ -28,17 +28,19 @@ export function transformDateValuesUntyped(v: unknown, tz: string): unknown {
   if (Array.isArray(v)) return v.map((item) => transformDateValuesUntyped(item, tz))
   // Recurse into plain objects only — of any realm (`node:vm`), so their dates
   // convert too: a prototype that is a realm's `Object.prototype` (it has none
-  // of its own), or none. Exotic objects (Map, Buffer, class instances) keep
-  // the old passthrough behavior and serialize as before.
+  // of its own), or none. Exotic objects (Map, Buffer, class instances) and an
+  // object serializing itself (`toJSON`) keep the old passthrough behavior and
+  // serialize as before.
   if (typeof v === 'object' && v !== null) {
     const proto = Object.getPrototypeOf(v)
     if (proto !== null && Object.getPrototypeOf(proto) !== null) return v
-    const out: Record<string, unknown> = {}
-    for (const [name, value] of Object.entries(v)) {
-      if (value === undefined) continue
-      out[name] = transformDateValuesUntyped(value, tz)
-    }
-    return out
+    if (typeof (v as { toJSON?: unknown }).toJSON === 'function') return v
+    // fromEntries defines each key as its own — an own `__proto__` field included.
+    return Object.fromEntries(
+      Object.entries(v)
+        .filter(([, value]) => value !== undefined)
+        .map(([name, value]) => [name, transformDateValuesUntyped(value, tz)]),
+    )
   }
   return v
 }
