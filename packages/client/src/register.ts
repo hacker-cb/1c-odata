@@ -6,6 +6,7 @@ import { InvalidArgumentError } from './errors.js'
 import { buildFunctionUrl } from './functions.js'
 import { parseOptsFor, parseV3Collection } from './parser.js'
 import { assertNonNegativeInt } from './query/builder.js'
+import { qp } from './url-builder.js'
 
 /**
  * Args for `balance()` — single point in time. Both AccumulationRegister and
@@ -112,6 +113,61 @@ export interface ReadFiOptions extends RequestOptions {
    * {@link RecordsWithExtDimensionsArgs.Top}), which is a virtual-table parameter.
    */
   top?: number
+  /**
+   * `$select` — the fields to return. On the aggregating tables (`Balance`,
+   * `Turnovers`, `BalanceAndTurnovers`, `DrCrTurnovers`) this also sets the
+   * **grouping**: 1С sums the resources over the selected dimensions, so
+   * selecting fewer dimensions returns fewer, coarser rows (a server-side
+   * roll-up). E.g. `['Account_Key', 'СуммаTurnoverDr', 'СуммаTurnoverCr']`
+   * collapses `Turnovers` to one row per account. On the per-record and slice
+   * tables (`RecordsWithExtDimensions`, `SliceFirst` / `SliceLast`,
+   * `ExtDimensions`) it only picks the fields — nothing is summed. Blank
+   * entries are ignored; an empty list sends no `$select`.
+   */
+  select?: string[]
+  /**
+   * `$filter` — a raw OData filter expression applied to the virtual table's
+   * result rows, e.g. `"СуммаTurnoverDr gt 100000"`. Distinct from the FI's own
+   * `Condition` (and `AccountCondition`, …) parameters, which restrict the
+   * records the table is computed from. A blank string sends no `$filter`.
+   */
+  filter?: string
+}
+
+/**
+ * The system query options of a virtual-table call, encoded by the collection
+ * URL builder's own `qp`. `$top` keeps its historical bare `$top=N` form. An
+ * untyped (JS) caller passing a non-string `filter` or a `select` that is not
+ * an array of strings (a sparse array's holes included) fails with
+ * `InvalidArgumentError` before any request.
+ */
+function readFiQueryParams(opts: ReadFiOptions): string[] {
+  const params: string[] = []
+  if (opts.filter !== undefined) {
+    if (typeof opts.filter !== 'string') {
+      throw new InvalidArgumentError('ReadFiOptions.filter must be a string (a raw OData $filter expression)', {
+        argument: 'ReadFiOptions.filter',
+        received: opts.filter,
+      })
+    }
+    const filter = opts.filter.trim()
+    if (filter !== '') params.push(qp('$filter', filter))
+  }
+  if (opts.select !== undefined) {
+    if (!Array.isArray(opts.select) || !Array.from(opts.select).every((f) => typeof f === 'string')) {
+      throw new InvalidArgumentError('ReadFiOptions.select must be an array of field-name strings', {
+        argument: 'ReadFiOptions.select',
+        received: opts.select,
+      })
+    }
+    const fields = opts.select.map((f) => f.trim()).filter((f) => f !== '')
+    if (fields.length > 0) params.push(qp('$select', fields.join(',')))
+  }
+  if (opts.top !== undefined) {
+    assertNonNegativeInt(opts.top, 'ReadFiOptions.top')
+    params.push(`$top=${opts.top}`)
+  }
+  return params
 }
 
 /**
@@ -164,7 +220,8 @@ function expandRangeArgs(args: Record<string, unknown>): Record<string, unknown>
  *     (also `balance()` / `turnovers()` / `balanceAndTurnovers()`)
  *
  * Every virtual-table method takes an optional trailing {@link ReadFiOptions}
- * (`$top` + per-call `signal` / `timeout` / `retry`) — useful for the large
+ * (`$top` / `$select` / `$filter` + per-call `signal` / `timeout` / `retry`) —
+ * `select` doubles as the server-side grouping, and `top` bounds the large
  * collections big registers return.
  *
  * See spec §4.7.
@@ -250,19 +307,17 @@ export class RegisterHelper<T> {
 
   /**
    * Shared dispatch for read-style virtual-table FIs. Builds the URL via
-   * `buildFunctionUrl` (no `ref` — set-bound), appends `$top` when requested,
-   * GETs through the transport (threading the per-call `RequestOptions`), and
-   * parses through `parseV3Collection` so `Edm.DateTime` values become `Date`
-   * instances and the `0001-01-01T00:00:00` empty-date sentinel becomes `null`
-   * (consistent with `client.functions.X.Y` dispatch).
+   * `buildFunctionUrl` (no `ref` — set-bound), appends `$filter` / `$select` /
+   * `$top` when requested, GETs through the transport (threading the per-call
+   * `RequestOptions`), and parses through `parseV3Collection` so `Edm.DateTime`
+   * values become `Date` instances and the `0001-01-01T00:00:00` empty-date
+   * sentinel becomes `null` (consistent with `client.functions.X.Y` dispatch).
    */
   private async callReadFi<R>(funcName: string, args: Record<string, unknown>, opts: ReadFiOptions): Promise<R[]> {
-    const { top, ...reqOpts } = opts
+    const { top, select, filter, ...reqOpts } = opts
     let url = buildFunctionUrl(this.client.baseUrl, this.entitySet, funcName, {}, args, this.client.serverTimezone)
-    if (top !== undefined) {
-      assertNonNegativeInt(top, 'ReadFiOptions.top')
-      url += `${url.includes('?') ? '&' : '?'}$top=${top}`
-    }
+    const params = readFiQueryParams(opts)
+    if (params.length > 0) url += `${url.includes('?') ? '&' : '?'}${params.join('&')}`
     const raw = await this.client.transportGet(url, reqOpts)
     // withTypeHint=false: virtual-table FI results have a different shape than the entity type itself.
     const parsed = parseV3Collection<R>(raw.body, parseOptsFor(this.client, this.entitySet, false))
