@@ -1,6 +1,7 @@
 import type { DateMode } from './connection.js'
-import { formatInZone, isDate } from './timezone.js'
+import { formatInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
+import { isDate } from './url-builder.js'
 import type { EntitySchema, MetadataIndex } from './validate.js'
 
 /** Transform a single Edm.DateTime field value into wire form. */

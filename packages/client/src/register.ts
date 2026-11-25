@@ -6,8 +6,7 @@ import { InvalidArgumentError, ParseError } from './errors.js'
 import { buildFunctionUrl } from './functions.js'
 import { parseOptsFor, parseV3Collection } from './parser.js'
 import { assertNonNegativeInt } from './query/builder.js'
-import { isDate } from './timezone.js'
-import { formatOrderBy, qp } from './url-builder.js'
+import { formatOrderBy, isDate, qp } from './url-builder.js'
 
 /**
  * Args for `balance()` — single point in time. Both AccumulationRegister and
