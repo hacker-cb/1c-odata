@@ -56,6 +56,7 @@ export {
   type TurnoversArgs,
 } from './register.js'
 export { clientOptionsFromConnection } from './runtime.js'
+export type { ParseInZoneOptions, ZoneDisambiguation } from './timezone.js'
 export { formatInZone, parseInZone } from './timezone.js'
 export type { Entity, Guid, UntypedEntity, ValueStorage } from './types/core.js'
 export { EMPTY_GUID, ONEC_EMPTY_DATE } from './types/core.js'

@@ -1,7 +1,7 @@
 // packages/client/src/parser.ts
 
 import { type DataShape, DEFAULT_SHAPE } from './connection.js'
-import { ParseError } from './errors.js'
+import { InvalidArgumentError, ParseError } from './errors.js'
 import { parseInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
 import type { EntitySchema, MetadataIndex } from './validate.js'
@@ -157,7 +157,15 @@ function mapValue(
   opts: ParseOptions,
 ): unknown {
   const propType = schema?.properties[fieldName]?.type
-  if (typeof v === 'string') return convertStringValue(v, propType, shape, opts)
+  if (typeof v === 'string') return convertStringValue(v, fieldName, propType, shape, opts)
+  // A schema-typed date-time is a string or null on the wire; anything else would reach a `Date`-typed field
+  // as-is. `dateMode: 'string'` passes values through untouched, this one included.
+  if (propType === 'Edm.DateTime' && v !== null && shape?.dateMode !== 'string') {
+    const shown = JSON.stringify(v)?.slice(0, 64) ?? String(v)
+    throw new ParseError(
+      `Edm.DateTime field ${fieldName}: expected a date-time string or null, got ${typeof v} ${shown}`,
+    )
+  }
   // Nested entities (tabular parts, ComplexTypes) are parsed with THEIR OWN
   // schema, resolved from the field's declared type — not the parent's. Without
   // this, a nested `Edm.Int64` / `Edm.DateTime` / ValueStorage field is looked
@@ -180,6 +188,7 @@ function mapValue(
 /** Convert a string wire value per its declared (or heuristically-detected) type. */
 function convertStringValue(
   v: string,
+  fieldName: string,
   propType: string | undefined,
   shape: DataShape | undefined,
   opts: ParseOptions,
@@ -201,10 +210,29 @@ function convertStringValue(
   // full design rationale.
   if (propType === 'Edm.DateTime' || (propType === undefined && DATETIME_FIELD.test(v))) {
     if (shape?.dateMode === 'string') return v
-    if (v.startsWith(ONEC_EMPTY_DATE)) return null
-    return parseInZone(v, opts.serverTimezone)
+    if (v === ONEC_EMPTY_DATE) return null
+    return parseDateTime(v, fieldName, propType !== undefined, opts.serverTimezone)
   }
   return v
+}
+
+/**
+ * A wire date-time → `Date` in the server's zone. A time a daylight-saving
+ * switch skips or passes twice still parses (`parseInZone`'s `'compatible'`
+ * rule): 1С stores wall-clock time without checking it. What does not name a
+ * real date-time (`2026-02-30T00:00:00`) is, for a field the schema declares
+ * `Edm.DateTime`, a `ParseError` naming the field and the value — the reply
+ * breaks its own schema; for a field matched by the schema-less heuristic it
+ * was never a date-time, and stays the string it came as.
+ */
+function parseDateTime(v: string, fieldName: string, typed: boolean, serverTimezone: string): Date | string {
+  try {
+    return parseInZone(v, serverTimezone)
+  } catch (err) {
+    if (!(err instanceof InvalidArgumentError) || err.argument !== 'naive') throw err
+    if (!typed) return v
+    throw new ParseError(`Edm.DateTime field ${fieldName}: ${err.message}`, { cause: err })
+  }
 }
 
 /**

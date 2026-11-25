@@ -109,6 +109,47 @@ describe('register_query periods in the connection serverTimezone (#182)', () =>
     expect(iso(calls[0]?.args.Period)).toBe('0050-06-01T00:00:00.000Z')
   })
 
+  it('starts a bare day whose midnight a 15-minute switch skips at the switch, not at 01:00 (#193)', async () => {
+    const { run, calls } = setup('Asia/Kathmandu')
+    await run({ table: 'turnovers', periodFrom: '1986-01-01' })
+    // +05:30 → +05:45 at local midnight: the day starts at 00:15 +05:45.
+    expect(iso((calls[0]?.args.Period as { from: Date } | undefined)?.from)).toBe('1985-12-31T18:30:00.000Z')
+  })
+
+  it('ends a bare periodTo whose 23:59:59 a switch skips at its last real second (#193)', async () => {
+    const { run, calls } = setup('America/Nuuk')
+    await run({ table: 'turnovers', periodTo: '2024-03-30' })
+    // 23:00 -02:00 became 00:00 -01:00: the day ends at 22:59:59 -02:00.
+    expect(iso((calls[0]?.args.Period as { to: Date } | undefined)?.to)).toBe('2024-03-31T00:59:59.000Z')
+  })
+
+  it.each([
+    ['periodFrom', 'start'],
+    ['periodTo', 'end'],
+  ])('refuses a bare %s on a day the zone skips whole (#193)', async (arg) => {
+    const { run, calls } = setup('Pacific/Apia')
+    const res = await run({ table: 'turnovers', [arg]: '2011-12-30' })
+    expect(res.isError).toBe(true)
+    expect((res.content[0] as { text: string }).text).toContain('Invalid ISO date: "2011-12-30"')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('reads a naive year below 1000 as server time (#193)', async () => {
+    const { run, calls } = setup('Europe/Moscow')
+    await run({ table: 'balance', period: '0999-05-01T00:00:00' })
+    // Moscow local mean time then: +02:30:17.
+    expect(iso(calls[0]?.args.Period)).toBe('0999-04-30T21:29:43.000Z')
+  })
+
+  it.each([
+    ['Europe/Berlin', '2025-10-26T02:30', '2025-10-26T00:30:00.000Z'],
+    ['America/Sao_Paulo', '2019-02-16T23:30', '2019-02-17T01:30:00.000Z'],
+  ])('reads a %s time the clocks pass twice as the earlier instant (#193)', async (zone, value, expected) => {
+    const { run, calls } = setup(zone)
+    await run({ table: 'balance', period: value })
+    expect(iso(calls[0]?.args.Period)).toBe(expected)
+  })
+
   it.each([
     [
       'a daylight-saving gap',
@@ -117,7 +158,14 @@ describe('register_query periods in the connection serverTimezone (#182)', () =>
       'daylight-saving switch skips in America/New_York',
     ],
     ['an offset Date cannot represent', 'Europe/Moscow', '2026-01-01T00:00:00+24:00', 'an impossible offset'],
-    ['a naive year parseInZone cannot place', 'UTC', '0050-06-01T00:00:00', 'a year before 1000'],
+    ['the naive year 0000, outside 1С dates', 'UTC', '0000-06-01T00:00:00', 'a year outside 0001–9999'],
+    ['the bare year 0000, outside 1С dates', 'UTC', '0000-06-01', 'Invalid ISO date: "0000-06-01"'],
+    [
+      'an offset period that is the year 0000 on the server',
+      'America/New_York',
+      '0001-01-01T00:00:00Z',
+      'a year outside 0001–9999 in America/New_York',
+    ],
   ])('rejects %s with a clear message', async (_name, zone, value, why) => {
     const { run, calls } = setup(zone)
     const res = await run({ table: 'balance', period: value })

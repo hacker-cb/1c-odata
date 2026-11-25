@@ -9,7 +9,7 @@ import type {
   UntypedEntity,
   V3QueryBuilder,
 } from '@1c-odata/client'
-import { formatInZone, parseInZone } from '@1c-odata/client'
+import { formatInZone, InvalidArgumentError, parseInZone } from '@1c-odata/client'
 import { raw } from '@1c-odata/client/filter'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -404,36 +404,95 @@ function toDate(
   const [hh, mi, ss] = time === undefined ? bareDay : [time, minute, second]
   const local = `${y}-${mo}-${d}T${hh}:${mi}:${ss}`
   let date: Date | undefined
-  if (zone !== undefined) date = new Date(`${local}${frac}${zone}`)
-  else {
-    date = naiveInZone(`${local}${frac}`, local, serverTimezone)
-    // A bare day whose midnight a DST switch skips (e.g. America/Sao_Paulo, 2018-11-04) starts at 01:00.
-    if (date === undefined && time === undefined && bareDateAs === 'start') {
-      date = naiveInZone(`${y}-${mo}-${d}T01:00:00`, `${y}-${mo}-${d}T01:00:00`, serverTimezone)
+  if (zone !== undefined) {
+    date = new Date(`${local}${frac}${zone}`)
+    // The instant must also be a 1С date on the server, as it is sent there in serverTimezone.
+    if (!Number.isNaN(date.getTime()) && !isServerDate(date, serverTimezone)) date = undefined
+  } else {
+    date = strictInZone(`${local}${frac}`, serverTimezone)
+    // A bare day whose midnight a DST switch skips starts at the switch (e.g. America/Sao_Paulo, 2018-11-04:
+    // 01:00); one whose last second it skips ends a second before the next day starts (America/Nuuk, 2024-03-30).
+    if (date === undefined && time === undefined) {
+      date =
+        bareDateAs === 'start' ? switchedDayStart(`${y}-${mo}-${d}`, serverTimezone) : switchedDayEnd(m, serverTimezone)
     }
   }
   if (date === undefined || Number.isNaN(date.getTime())) {
     throw new Error(
       `Invalid ISO date: "${iso}" (no such instant: a local time a daylight-saving switch skips in ${serverTimezone}, ` +
-        'an impossible offset, or a year before 1000)',
+        `an impossible offset, or a year outside 0001–9999 in ${serverTimezone})`,
     )
   }
   return date
 }
 
 /**
- * `parseInZone`, answering `undefined` where it cannot place the wall time —
- * it throws on years it cannot format back (below 1000) — and where the
- * instant it returns does not read back as `local`: a wall time the zone skips
- * (the spring-forward gap) has no instant, and parseInZone would shift it
- * silently, moving the period boundary.
+ * `parseInZone` refusing a wall time the zone skips (the spring-forward gap):
+ * that has no instant, and the client's `'compatible'` rule would move it
+ * forward, shifting the period boundary. `undefined` for it and for anything
+ * else `parseInZone` refuses (a year outside 0001–9999). A time the zone
+ * passes twice is the earlier instant.
  */
-function naiveInZone(naive: string, local: string, zone: string): Date | undefined {
+function strictInZone(naive: string, zone: string): Date | undefined {
   try {
-    const date = parseInZone(naive, zone)
-    return formatInZone(date, zone).slice(0, 19) === local ? date : undefined
-  } catch {
-    return undefined
+    return parseInZone(naive, zone, { disambiguation: 'reject' })
+  } catch (err) {
+    if (err instanceof InvalidArgumentError && err.argument === 'naive') return undefined
+    throw err
+  }
+}
+
+/**
+ * The first instant of a server day whose midnight a daylight-saving switch
+ * skips: the switch itself — 01:00 in America/Sao_Paulo on 2018-11-04, 00:15
+ * in Asia/Kathmandu on 1986-01-01. `undefined` where the zone skips the whole
+ * day (Pacific/Apia, 2011-12-30).
+ */
+function switchedDayStart(day: string, zone: string): Date | undefined {
+  // 'compatible' moves midnight forward by the gap: on that day (or past it), never before the switch.
+  let hi: number
+  try {
+    hi = parseInZone(`${day}T00:00:00`, zone).getTime()
+  } catch (err) {
+    if (err instanceof InvalidArgumentError && err.argument === 'naive') return undefined // a year outside 0001–9999
+    throw err
+  }
+  if (formatInZone(new Date(hi), zone).slice(0, 10) !== day) return undefined
+  // A day earlier is on the previous day; narrow to the first second whose wall-clock is on `day`.
+  let lo = hi - 86_400_000
+  while (hi - lo > 1000) {
+    const mid = lo + Math.floor((hi - lo) / 2000) * 1000
+    if (formatInZone(new Date(mid), zone).slice(0, 10) >= day) hi = mid
+    else lo = mid
+  }
+  return new Date(hi)
+}
+
+/**
+ * The last second of a server day whose 23:59:59 a daylight-saving switch
+ * skips: a second before the next day starts. `undefined` where the next day
+ * has no start either (a year past 9999, a whole day skipped).
+ */
+function switchedDayEnd(m: RegExpExecArray, zone: string): Date | undefined {
+  const [, y, mo, d] = m
+  const next = new Date(0)
+  next.setUTCFullYear(Number(y), Number(mo) - 1, Number(d) + 1)
+  const day = `${String(next.getUTCFullYear()).padStart(4, '0')}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`
+  const start = strictInZone(`${day}T00:00:00`, zone) ?? switchedDayStart(day, zone)
+  if (start === undefined) return undefined
+  const end = new Date(start.getTime() - 1000)
+  // A day the zone skips whole has no last second: this one would be the day before's.
+  return formatInZone(end, zone).slice(0, 10) === `${y}-${mo}-${d}` ? end : undefined
+}
+
+/** Whether `date` reads as a 1С date (years 0001–9999) in the server's zone. */
+function isServerDate(date: Date, zone: string): boolean {
+  try {
+    formatInZone(date, zone)
+    return true
+  } catch (err) {
+    if (err instanceof InvalidArgumentError && err.argument === 'date') return false
+    throw err
   }
 }
 

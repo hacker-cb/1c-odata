@@ -161,6 +161,8 @@ Everything URL-shaped works without a schema: query builder + filter DSL, CRUD, 
 | Clearing a date on write | `null` → sentinel automatically | pass `ONEC_EMPTY_DATE` explicitly (`null` stays `null`) |
 | `validateOnWrite` | ✅ | ❌ (throws at construction) |
 
+Daylight saving: 1С stores wall-clock time without checking it against the zone, so a time a switch skips reads moved forward by the gap and a time passed twice reads as the earlier instant (`Temporal`'s `'compatible'` rule); `parseInZone(naive, zone, { disambiguation: 'reject' })` refuses a skipped time instead. A string that names no real date-time (`2026-02-30T00:00:00`) is a `ParseError` in a field the schema types `Edm.DateTime`, and stays a string where only the schema-less heuristic matched it.
+
 Recipes: opt out of all date handling with `shape: { dateMode: 'string' }` and convert manually via `parseInZone` / `formatInZone`. With a runtime index (previous section) you can also introspect the base: `Object.keys(client.metadataIndex?.entitySetToType ?? {})` lists every entity set.
 
 ## Error handling
