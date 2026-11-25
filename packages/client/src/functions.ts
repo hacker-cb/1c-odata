@@ -2,8 +2,7 @@
 import { InvalidArgumentError } from './errors.js'
 import { formatNumberLiteral } from './format-number.js'
 import { formatInZone } from './timezone.js'
-
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+import { encodeComponent, encodeName, GUID_RE } from './url-builder.js'
 
 /**
  * Empty placeholder type — used as the default `TFunctions` for `ODataV3Client`
@@ -52,7 +51,7 @@ export function serializeArgs(args: Record<string, unknown>, serverTimezone: str
   const parts: string[] = []
   for (const [k, v] of Object.entries(args)) {
     if (v === undefined) continue
-    parts.push(`${encodeURIComponent(k)}=${encodeURIComponent(formatValue(v, serverTimezone, k))}`)
+    parts.push(`${encodeComponent(k, k)}=${encodeComponent(formatValue(v, serverTimezone, k), k)}`)
   }
   return parts.join('&')
 }
@@ -94,20 +93,23 @@ export function buildFunctionUrl(
   serverTimezone: string,
 ): string {
   const trimmedBase = base.replace(/\/$/, '')
+  // Each name is ONE path segment (see encodeName).
+  const set = encodeName(entitySet, 'FunctionImport entitySet')
+  const fn = encodeName(funcName, 'FunctionImport funcName')
   let head: string
   if (target.ref !== undefined) {
     // Reject non-GUID `ref` early — a stray apostrophe would terminate the
     // OData literal and silently mutate the URL. Mirrors `formatKey`'s GUID
     // shape check in `url-builder.ts`.
-    if (!GUID_RE.test(target.ref)) {
+    if (typeof target.ref !== 'string' || !GUID_RE.test(target.ref)) {
       throw new InvalidArgumentError('FunctionImport `ref` must be a GUID (8-4-4-4-12 hex form)', {
         argument: 'ref',
         received: target.ref,
       })
     }
-    head = `${trimmedBase}/${entitySet}(guid'${target.ref}')/${funcName}()`
+    head = `${trimmedBase}/${set}(guid'${target.ref}')/${fn}()`
   } else {
-    head = `${trimmedBase}/${entitySet}/${funcName}()`
+    head = `${trimmedBase}/${set}/${fn}()`
   }
   const qs = serializeArgs(args, serverTimezone)
   return qs.length > 0 ? `${head}?${qs}` : head

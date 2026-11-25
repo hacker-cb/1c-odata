@@ -1,4 +1,4 @@
-import { QueryBuilder } from '@1c-odata/client'
+import { InvalidArgumentError, QueryBuilder } from '@1c-odata/client'
 import { describe, expect, it } from 'vitest'
 import { buildV3CollectionUrl, buildV3CountUrl, buildV3KeyUrl } from '../../src/url-builder.js'
 
@@ -92,5 +92,86 @@ describe('V3 URL builder', () => {
     expect(url).toContain('/$count')
     expect(url).toContain('%24filter')
     expect(url).not.toContain('%24format') // /$count returns plain integer, no format needed
+  })
+})
+
+describe('V3 URL builder — entity set as one segment', () => {
+  const base = 'http://h/odata'
+  it.each(['', '.', '..'])('rejects the entity set %j, which would collapse into the path above the base', (set) => {
+    expect(() => buildV3CollectionUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).toThrow(InvalidArgumentError)
+    expect(() => buildV3CountUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).toThrow(InvalidArgumentError)
+    expect(() => buildV3KeyUrl(base, set, '11111111-2222-3333-4444-555555555555')).toThrow(InvalidArgumentError)
+  })
+
+  it('rejects a set name that cannot be encoded (a lone surrogate) as an InvalidArgumentError', () => {
+    expect(() => buildV3CollectionUrl(base, new QueryBuilder('Catalog_\ud800', 'Europe/Moscow'))).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
+  it('still encodes a set path with a slash into one segment', () => {
+    expect(buildV3CollectionUrl(base, new QueryBuilder('Register_X/Balance()', 'Europe/Moscow'))).toMatch(
+      /^http:\/\/h\/odata\/Register_X%2FBalance\(\)\?/,
+    )
+  })
+})
+
+describe('V3 URL builder — entity keys cannot rewrite the path', () => {
+  const base = 'http://h/odata'
+  const G = '11111111-2222-3333-4444-555555555555'
+
+  it.each([
+    ['a path-escaping string', "x')/../../hs/svc?a=('"],
+    ['a non-GUID string', 'abc'],
+    ['an empty string', ''],
+  ])('rejects %s as a key', (_name, key) => {
+    expect(() => buildV3KeyUrl(base, 'Catalog_X', key)).toThrow(InvalidArgumentError)
+  })
+
+  it.each([
+    ['a field with a slash', { 'Recorder/../x': G }],
+    ['a field with a quote', { "A')": G }],
+    ['an empty composite key', {}],
+  ])('rejects %s', (_name, key) => {
+    expect(() => buildV3KeyUrl(base, 'InformationRegister_X', key as Record<string, string>)).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
+  it('rejects an array as a composite key', () => {
+    const key = ['11111111-2222-3333-4444-555555555555'] as unknown as Record<string, string>
+    expect(() => buildV3KeyUrl(base, 'Catalog_X', key)).toThrow(InvalidArgumentError)
+  })
+
+  it('still quotes a numeric composite-key value from an untyped caller', () => {
+    const key = { LineNumber: 1 } as unknown as Record<string, string>
+    expect(buildV3KeyUrl(base, 'Document_X_Товары', key)).toContain("(LineNumber='1')")
+  })
+
+  it('keeps a virtual-table path whose quoted argument holds slashes', () => {
+    const set = "Register_X/SliceLast(Condition='Сайт eq ''https://example.org/a//b''')"
+    expect(() => buildV3CollectionUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).not.toThrow()
+  })
+
+  it.each(['X/..', 'X//Y', './X', 'X\\..', 'Register_X/Balance()/../..'])(
+    'rejects the set path %j, whose parts would collapse',
+    (set) => {
+      expect(() => buildV3CollectionUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).toThrow(InvalidArgumentError)
+    },
+  )
+
+  it('keeps a GUID key and a composite key of 1С names', () => {
+    expect(buildV3KeyUrl(base, 'Catalog_X', G)).toBe(
+      `${base}/Catalog_X(guid'${G}')?%24format=application%2Fjson%3Bodata%3Dnometadata`,
+    )
+    expect(buildV3KeyUrl(base, 'InformationRegister_X', { Recorder: G, Валюта: "a/b'c" })).toContain(
+      `(Recorder=guid'${G}',Валюта='a%2Fb''c')`,
+    )
+  })
+
+  it('answers a lone surrogate in a key value or a query option with InvalidArgumentError', () => {
+    expect(() => buildV3KeyUrl(base, 'InformationRegister_X', { Code: 'a\ud800' })).toThrow(InvalidArgumentError)
+    const q = new QueryBuilder('Catalog_X', 'Europe/Moscow').select('A\ud800' as never)
+    expect(() => buildV3CollectionUrl(base, q)).toThrow(InvalidArgumentError)
   })
 })

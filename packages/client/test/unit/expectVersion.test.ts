@@ -17,8 +17,8 @@ describe('V3EntityHandle expectVersion option', () => {
     server.use(
       // NOTE: regex matcher — MSW's path-to-regexp interprets `(` in string
       // templates as parameter syntax, so a string template never matches a
-      // URL containing parens (e.g. `Catalog_X(guid'g')`).
-      http.get(/Catalog_X\(guid'g'\)/, () =>
+      // URL containing parens (e.g. `Catalog_X(guid'00000000-0000-0000-0000-00000000000a')`).
+      http.get(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, () =>
         HttpResponse.json({
           'odata.metadata': `${baseUrl}/$metadata#Catalog_X/@Element`,
           Ref_Key: 'g',
@@ -26,7 +26,7 @@ describe('V3EntityHandle expectVersion option', () => {
           Code: 'OLD',
         }),
       ),
-      http.patch(/Catalog_X\(guid'g'\)/, async () => {
+      http.patch(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async () => {
         patchHit = true
         return HttpResponse.json({
           'odata.metadata': `${baseUrl}/$metadata#Catalog_X/@Element`,
@@ -38,7 +38,10 @@ describe('V3EntityHandle expectVersion option', () => {
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     const r = await c
-      .entity<{ Ref_Key: string; DataVersion: string; Code: string }>('Catalog_X', 'g')
+      .entity<{ Ref_Key: string; DataVersion: string; Code: string }>(
+        'Catalog_X',
+        '00000000-0000-0000-0000-00000000000a',
+      )
       .patch({ Code: 'NEW' }, { expectVersion: 'v1' })
     expect(patchHit).toBe(true)
     expect(r.Code).toBe('NEW')
@@ -48,7 +51,7 @@ describe('V3EntityHandle expectVersion option', () => {
   it('throws ConcurrencyError when DataVersion mismatches; PATCH never runs', async () => {
     let patchHit = false
     server.use(
-      http.get(/Catalog_X\(guid'g'\)/, () =>
+      http.get(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, () =>
         HttpResponse.json({
           'odata.metadata': `${baseUrl}/$metadata#Catalog_X/@Element`,
           Ref_Key: 'g',
@@ -56,14 +59,14 @@ describe('V3EntityHandle expectVersion option', () => {
           Code: 'OLD',
         }),
       ),
-      http.patch(/Catalog_X\(guid'g'\)/, async () => {
+      http.patch(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async () => {
         patchHit = true
         return HttpResponse.json({})
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     const err = await c
-      .entity('Catalog_X', 'g')
+      .entity('Catalog_X', '00000000-0000-0000-0000-00000000000a')
       .patch({ Code: 'NEW' }, { expectVersion: 'v1' })
       .then(
         () => null,
@@ -79,7 +82,7 @@ describe('V3EntityHandle expectVersion option', () => {
   it('PUT honors expectVersion: throws on mismatch, PUT never runs', async () => {
     let putHit = false
     server.use(
-      http.get(/Catalog_X\(guid'g'\)/, () =>
+      http.get(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, () =>
         HttpResponse.json({
           'odata.metadata': `${baseUrl}/$metadata#Catalog_X/@Element`,
           Ref_Key: 'g',
@@ -87,7 +90,7 @@ describe('V3EntityHandle expectVersion option', () => {
           Code: 'OLD',
         }),
       ),
-      http.put(/Catalog_X\(guid'g'\)/, async () => {
+      http.put(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async () => {
         putHit = true
         return HttpResponse.json({})
       }),
@@ -95,7 +98,10 @@ describe('V3EntityHandle expectVersion option', () => {
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     await expect(
       c
-        .entity<{ Ref_Key: string; DataVersion: string; Code: string }>('Catalog_X', 'g')
+        .entity<{ Ref_Key: string; DataVersion: string; Code: string }>(
+          'Catalog_X',
+          '00000000-0000-0000-0000-00000000000a',
+        )
         .put({ Ref_Key: 'g', DataVersion: 'vSERVER', Code: 'NEW' }, { expectVersion: 'vCLIENT' }),
     ).rejects.toBeInstanceOf(ConcurrencyError)
     expect(putHit).toBe(false)
@@ -104,36 +110,36 @@ describe('V3EntityHandle expectVersion option', () => {
   it('DELETE honors expectVersion: throws on mismatch, DELETE never runs', async () => {
     let deleteHit = false
     server.use(
-      http.get(/Catalog_X\(guid'g'\)/, () =>
+      http.get(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, () =>
         HttpResponse.json({
           'odata.metadata': `${baseUrl}/$metadata#Catalog_X/@Element`,
           Ref_Key: 'g',
           DataVersion: 'vSERVER',
         }),
       ),
-      http.delete(/Catalog_X\(guid'g'\)/, async () => {
+      http.delete(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async () => {
         deleteHit = true
         return new HttpResponse(null, { status: 204 })
       }),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    await expect(c.entity('Catalog_X', 'g').delete({ expectVersion: 'vCLIENT' })).rejects.toBeInstanceOf(
-      ConcurrencyError,
-    )
+    await expect(
+      c.entity('Catalog_X', '00000000-0000-0000-0000-00000000000a').delete({ expectVersion: 'vCLIENT' }),
+    ).rejects.toBeInstanceOf(ConcurrencyError)
     expect(deleteHit).toBe(false)
   })
 
   it('writeStream honors expectVersion: throws on mismatch, PATCH never runs', async () => {
     let patchHit = false
     server.use(
-      http.get(/Catalog_X\(guid'g'\)/, () =>
+      http.get(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, () =>
         HttpResponse.json({
           'odata.metadata': `${baseUrl}/$metadata#Catalog_X/@Element`,
           Ref_Key: 'g',
           DataVersion: 'vSERVER',
         }),
       ),
-      http.patch(/Catalog_X\(guid'g'\)/, async () => {
+      http.patch(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, async () => {
         patchHit = true
         return new HttpResponse(null, { status: 204 })
       }),
@@ -141,7 +147,7 @@ describe('V3EntityHandle expectVersion option', () => {
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
     await expect(
       c
-        .entity('Catalog_X', 'g')
+        .entity('Catalog_X', '00000000-0000-0000-0000-00000000000a')
         .writeStream(
           'ФайлХранилище',
           { contentType: 'image/png', base64Data: 'aGVsbG8=' },

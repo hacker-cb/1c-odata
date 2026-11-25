@@ -92,17 +92,62 @@ describe('serializeArgs — @odata.bind shape', () => {
 })
 
 describe('buildFunctionUrl', () => {
+  it.each([
+    ['a slash and parent segments', 'AccumulationRegister_X/../../other_base/odata/standard.odata/Catalog_Y'],
+    ['a query', 'AccumulationRegister_X?$top=1'],
+    ['a fragment', 'AccumulationRegister_X#'],
+    ['a pre-encoded slash', 'AccumulationRegister_X%2F..'],
+    ['an entity key predicate', "Document_X(guid'11111111-2222-3333-4444-555555555555')"],
+    ['a dot segment', '..'],
+    ['an empty name', ''],
+    ['a lone surrogate', 'AccumulationRegister_\ud800'],
+  ])('rejects an entity set with %s before building a URL', (_name, entitySet) => {
+    expect(() => buildFunctionUrl(base, entitySet, 'Balance', {}, {}, 'Europe/Moscow')).toThrow(InvalidArgumentError)
+  })
+
+  it('rejects a non-string entity set from an untyped caller with InvalidArgumentError', () => {
+    const set = 123n as unknown as string
+    expect(() => buildFunctionUrl(base, set, 'Balance', {}, {}, 'Europe/Moscow')).toThrow(InvalidArgumentError)
+  })
+
+  it('answers a lone surrogate in an argument with InvalidArgumentError, not a raw URIError', () => {
+    expect(() => buildFunctionUrl(base, 'Catalog_X', 'Fn', {}, { Name: 'a\ud800' }, 'Europe/Moscow')).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
+  it.each([
+    ['an array holding a GUID', ['11111111-2222-3333-4444-555555555555']],
+    ['a symbol', Symbol('x')],
+  ])('rejects a ref that is %s, not a GUID string', (_name, ref) => {
+    expect(() =>
+      buildFunctionUrl(base, 'Document_X', 'Post', { ref: ref as unknown as string }, {}, 'Europe/Moscow'),
+    ).toThrow(InvalidArgumentError)
+  })
+
+  it('rejects a function name that is not a plain name', () => {
+    expect(() => buildFunctionUrl(base, 'Catalog_X', 'Post/../Delete', {}, {}, 'Europe/Moscow')).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
+  it('encodes a Cyrillic entity set like the collection URLs do', () => {
+    expect(buildFunctionUrl(base, 'AccumulationRegister_ТоварыНаСкладах', 'Balance', {}, {}, 'Europe/Moscow')).toBe(
+      `${base}/${encodeURIComponent('AccumulationRegister_ТоварыНаСкладах')}/Balance()`,
+    )
+  })
+
   const base = 'http://example.test/odata'
   const REF = '11111111-2222-3333-4444-555555555555'
   it('instance-bound: <set>(<ref>)/<func>()?args', () => {
     expect(buildFunctionUrl(base, 'Document_РТУ', 'Post', { ref: REF }, {}, 'Europe/Moscow')).toBe(
-      `${base}/Document_РТУ(guid'${REF}')/Post()`,
+      `${base}/${encodeURIComponent('Document_РТУ')}(guid'${REF}')/Post()`,
     )
   })
   it('instance-bound with extra args: <set>(<ref>)/<func>()?args', () => {
     expect(
       buildFunctionUrl(base, 'Document_РТУ', 'Post', { ref: REF }, { PostingModeOperational: false }, 'Europe/Moscow'),
-    ).toBe(`${base}/Document_РТУ(guid'${REF}')/Post()?PostingModeOperational=false`)
+    ).toBe(`${base}/${encodeURIComponent('Document_РТУ')}(guid'${REF}')/Post()?PostingModeOperational=false`)
   })
   it('set-bound: <set>/<func>()?args (no ref) — Date formatted in server timezone', () => {
     // UTC 07:30:00 = Moscow wall-clock 10:30:00 (UTC+3, no DST in Jan).

@@ -41,7 +41,7 @@ describe('V3EntitySetHandle.create', () => {
       // NOTE: regex matcher — MSW's path-to-regexp interprets `(` in string
       // templates as parameter syntax, so a string template never matches a
       // URL containing parens (e.g. `Catalog_X(guid'...')`).
-      http.get(/Catalog_X\(guid'g'\)/, () =>
+      http.get(/Catalog_X\(guid'00000000-0000-0000-0000-00000000000a'\)/, () =>
         HttpResponse.json({
           'odata.metadata': `${baseUrl}/$metadata#Catalog_X/@Element`,
           Ref_Key: 'g',
@@ -50,7 +50,9 @@ describe('V3EntitySetHandle.create', () => {
       ),
     )
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
-    const r = await c.entity<{ Ref_Key: string; Code: string }>('Catalog_X', 'g').get()
+    const r = await c
+      .entity<{ Ref_Key: string; Code: string }>('Catalog_X', '00000000-0000-0000-0000-00000000000a')
+      .get()
     expect(r.Code).toBe('B')
   })
 })
@@ -68,5 +70,25 @@ describe('ODataV3Client constructor — serverTimezone validation', () => {
 
   it('accepts a valid IANA timezone', () => {
     expect(() => new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })).not.toThrow()
+  })
+})
+
+describe('V3EntitySetHandle.create — entity set as one path segment', () => {
+  it.each(['..', '.', ''])('rejects the entity set %j before posting', async (set) => {
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    await expect(c.entity(set).create({})).rejects.toThrow(InvalidArgumentError)
+  })
+
+  it('posts to the encoded set', async () => {
+    let url = ''
+    server.use(
+      http.post(/\/odata\/.*/, ({ request }) => {
+        url = request.url
+        return HttpResponse.json({ Ref_Key: 'r' }, { status: 201 })
+      }),
+    )
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+    await c.entity('Catalog_Валюты').create({})
+    expect(url).toBe(`${baseUrl}/${encodeURIComponent('Catalog_Валюты')}`)
   })
 })

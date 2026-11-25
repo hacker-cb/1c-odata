@@ -3,7 +3,7 @@
 import { assertExpectedVersion } from '../concurrency.js'
 import { buildFunctionUrl } from '../functions.js'
 import { parseOptsFor, parseV3Single } from '../parser.js'
-import { buildV3KeyUrl, type EntityKey } from '../url-builder.js'
+import { buildV3KeyUrl, type EntityKey, encodeSegment } from '../url-builder.js'
 import { type ReadStreamResult, readStream, type WriteStreamInput, writeStream } from '../value-storage.js'
 import type { MutationOptions, RequestOptions } from './options.js'
 import type { ODataV3Client } from './v3-client.js'
@@ -41,7 +41,7 @@ export class V3EntitySetHandle<T> {
   /** POST a new entity. Returns the full entity (including auto-`Ref_Key` + `DataVersion`). */
   async create(body: Partial<T>, opts: RequestOptions = {}): Promise<T> {
     this.client.validateBeforeWrite(this.entitySet, body)
-    const url = `${this.client.baseUrl}/${this.entitySet}`
+    const url = `${this.client.baseUrl}/${encodeSegment(this.entitySet)}`
     const raw = await this.client.transportPost(url, body, opts, this.entitySet, this.extraHeaders)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
@@ -65,6 +65,17 @@ export class V3EntityHandle<T> {
   ) {}
 
   /**
+   * The key as it stands at the start of ONE call. A composite key is the
+   * caller's object, read live so a reused handle follows it; within a call the
+   * `expectVersion` check and the mutation it guards use this one copy, so a
+   * change to the object in between cannot aim them at two rows.
+   */
+  private keyNow(): EntityKey {
+    const key = this.key
+    return typeof key === 'object' && key !== null && !Array.isArray(key) ? { ...key } : key
+  }
+
+  /**
    * Chainable: add a header to subsequent mutations on this handle. Headers
    * persist across mutations on the same handle.
    *
@@ -81,39 +92,43 @@ export class V3EntityHandle<T> {
   }
 
   async get(opts: RequestOptions = {}): Promise<T> {
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, this.key)
+    const key = this.keyNow()
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
     const raw = await this.client.transportGet(url, opts)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
 
   /** Partial update via PATCH. Returns the full updated entity. */
   async patch(body: Partial<T>, opts: MutationOptions = {}): Promise<T> {
+    const key = this.keyNow()
     this.client.validateBeforeWrite(this.entitySet, body)
     if (opts.expectVersion !== undefined) {
-      await assertExpectedVersion(this.client, this.entitySet, this.key, opts.expectVersion, opts)
+      await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, this.key)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
     const raw = await this.client.transportPatch(url, body, opts, this.entitySet, this.extraHeaders)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
 
   /** Full replacement via PUT. Returns the full updated entity. */
   async put(body: T, opts: MutationOptions = {}): Promise<T> {
+    const key = this.keyNow()
     this.client.validateBeforeWrite(this.entitySet, body)
     if (opts.expectVersion !== undefined) {
-      await assertExpectedVersion(this.client, this.entitySet, this.key, opts.expectVersion, opts)
+      await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, this.key)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
     const raw = await this.client.transportPut(url, body, opts, this.entitySet, this.extraHeaders)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
 
   /** Physical DELETE. Returns void on 204. */
   async delete(opts: MutationOptions = {}): Promise<void> {
+    const key = this.keyNow()
     if (opts.expectVersion !== undefined) {
-      await assertExpectedVersion(this.client, this.entitySet, this.key, opts.expectVersion, opts)
+      await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, this.key)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
     await this.client.transportDelete(url, opts, this.entitySet, this.extraHeaders)
   }
 
@@ -129,15 +144,17 @@ export class V3EntityHandle<T> {
 
   /** Read `ХранилищеЗначения` content via GET `<entity>/<prop>/$value`. */
   async readStream(prop: string, opts: RequestOptions = {}): Promise<ReadStreamResult> {
-    return readStream(this.client, this.entitySet, this.key, prop, opts)
+    const key = this.keyNow()
+    return readStream(this.client, this.entitySet, key, prop, opts)
   }
 
   /** Write `ХранилищеЗначения` content via PATCH (sets `<prop>_Type` and `<prop>_Base64Data`). */
   async writeStream(prop: string, input: WriteStreamInput, opts: MutationOptions = {}): Promise<void> {
+    const key = this.keyNow()
     if (opts.expectVersion !== undefined) {
-      await assertExpectedVersion(this.client, this.entitySet, this.key, opts.expectVersion, opts)
+      await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    return writeStream(this.client, this.entitySet, this.key, prop, input, opts)
+    return writeStream(this.client, this.entitySet, key, prop, input, opts)
   }
 }
 
