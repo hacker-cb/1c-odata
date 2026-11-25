@@ -289,6 +289,33 @@ async function runHook<T>(
 }
 
 /**
+ * Run `afterResponse` bounded by the request signal, as `beforeRequest` is:
+ * the wait for it ends with the signal — the deadline or a caller's abort —
+ * whether or not the hook honours `req.signal`, and a signal already aborted
+ * when the response arrives ends the call before the hook is called. Resolves
+ * to `undefined` once the hook settles; rejects with the hook's own error
+ * unchanged, or with the signal's reason — which `isAbort` tells apart.
+ */
+async function runAfterResponse(
+  hooks: RequestHooks | undefined,
+  reqEvent: RequestEvent,
+  resEvent: ResponseEvent,
+  signal: AbortSignal | null | undefined,
+  trace: AttemptTrace | undefined,
+): Promise<void> {
+  if (signal?.aborted) throw signal.reason
+  await settleWithin(
+    runHook(() => hooks?.afterResponse?.(reqEvent, resEvent), trace),
+    signal ?? undefined,
+  )
+}
+
+/** Whether `e` is the request signal's own abort — not a hook's error. */
+function isAbort(e: unknown, signal: AbortSignal | null | undefined): boolean {
+  return signal?.aborted === true && e === signal.reason
+}
+
+/**
  * Translate an exception from the wire — the fetch, or reading the body —
  * into the typed error hierarchy and fire the `onError` hook. Shared between
  * text and stream paths. Never handed a hook's own exception: those reach the
@@ -331,8 +358,9 @@ async function translateAndFireError(
  * Execute one HTTP request. Handles timeout, signal combine, hooks invocation,
  * and error mapping. NO retry — that's a layer above (`http/retry.ts`).
  *
- * @throws {TimeoutError} when `callOpts.timeout` elapses before the response
- *   is received.
+ * @throws {TimeoutError} when `callOpts.timeout` elapses before the call
+ *   ends — the hooks included: `beforeRequest` and `afterResponse` are bounded
+ *   by the request signal, whether or not they honour `req.signal`.
  * @throws {NetworkError} on transport-level failure (DNS, connection reset,
  *   TLS handshake, etc.). Wraps the underlying cause in `.cause`.
  * @throws {HTTPError} (and its subclasses `BusinessError`, `ConcurrencyError`,
@@ -387,7 +415,15 @@ export async function request(
     }
 
     const { hooks } = callOpts
-    await runHook(() => hooks?.afterResponse?.(reqEvent, resEvent), trace)
+    try {
+      await runAfterResponse(hooks, reqEvent, resEvent, fetchInit.signal, trace)
+    } catch (e) {
+      // The deadline or the caller's abort ended the wait: classified as on
+      // the wire. The hook's own error reaches the caller unchanged.
+      if (!isAbort(e, fetchInit.signal)) throw e
+      if (timeoutId) clearTimeout(timeoutId)
+      return await translateAndFireError(e, reqEvent, hooks, timeoutSignal, timeoutMs, fetchInit.signal, trace)
+    }
 
     if (response.status >= 400) {
       const err = await mapResponseToError(response.status, response.statusText, headers, body, {
@@ -411,7 +447,10 @@ export async function request(
  * Honours the same timeout, signal-combine, and `beforeRequest`/`onError`
  * hooks as `request()`. The `afterResponse` hook fires on receipt of the
  * response headers (with `body: undefined` in the `ResponseEvent`, since the
- * body has not been read).
+ * body has not been read), bounded by the request signal as in `request()`:
+ * a timeout while it runs is a `TimeoutError` (`onError` fired), a caller's
+ * abort its reason, and the unread body is cancelled either way. The timeout
+ * stops once this resolves: reading the body is not bounded by it.
  *
  * Used by V3 `readStream` (`ХранилищеЗначения` / binary content), where
  * buffering via `response.text()` would corrupt non-UTF-8 bytes (JPEG, PDF,
@@ -422,7 +461,8 @@ export async function request(
  * retry on a stream GET, wrap this call yourself (each attempt re-issues the
  * request from scratch).
  *
- * @throws {TimeoutError} when `callOpts.timeout` elapses before headers arrive.
+ * @throws {TimeoutError} when `callOpts.timeout` elapses before headers arrive
+ *   and `afterResponse` settles.
  * @throws {NetworkError} on transport-level failure (DNS, connection reset,
  *   TLS handshake, etc.).
  * @throws {HTTPError} (and subclasses) when the server returns HTTP ≥ 400.
@@ -468,11 +508,16 @@ export async function requestStream(
 
     const { hooks } = callOpts
     try {
-      await runHook(() => hooks?.afterResponse?.(reqEvent, resEvent), trace)
+      await runAfterResponse(hooks, reqEvent, resEvent, fetchInit.signal, trace)
     } catch (e) {
       // The caller never gets this response: release its connection.
       response.body?.cancel().catch(() => {})
-      throw e
+      // The deadline or the caller's abort ended the wait — a TimeoutError
+      // (onError fired) or the abort's reason, never a bare AbortError from a
+      // body the timer already cut. The hook's own error reaches the caller unchanged.
+      if (!isAbort(e, fetchInit.signal)) throw e
+      if (timeoutId) clearTimeout(timeoutId)
+      return await translateAndFireError(e, reqEvent, hooks, timeoutSignal, timeoutMs, fetchInit.signal, trace)
     }
 
     // For error responses we DO consume the body to map to a typed error —
