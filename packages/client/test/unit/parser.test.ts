@@ -1,5 +1,6 @@
 import { ONEC_EMPTY_DATE } from '@1c-odata/client'
 import { describe, expect, it } from 'vitest'
+import { ParseError } from '../../src/errors.js'
 import { parseV3Collection, parseV3Count, parseV3Single } from '../../src/parser.js'
 import { parseInZone } from '../../src/timezone.js'
 import type { MetadataIndex } from '../../src/validate.js'
@@ -348,5 +349,55 @@ describe('schema-aware parsing', () => {
       metadataIndex,
     })
     expect(r.value[0]?.Date).toBeNull()
+  })
+})
+
+describe('V3 parser — date-times parseInZone used to drop or shift (#193)', () => {
+  const index: MetadataIndex = {
+    schemaNamespace: 'StandardODATA',
+    schemas: {
+      Catalog_X: {
+        properties: {
+          Date: { type: 'Edm.DateTime', nullable: true },
+          Code: { type: 'Edm.String', nullable: true },
+        },
+      },
+    },
+    entitySetToType: { Catalog_X: 'Catalog_X' },
+  }
+  const typed = (value: Record<string, unknown>[], serverTimezone = TZ) =>
+    parseV3Collection<{ Date: Date | null; Code: unknown }>(JSON.stringify({ value }), {
+      serverTimezone,
+      typeHint: 'Catalog_X',
+      metadataIndex: index,
+    })
+
+  it('reads a year below 1000 (a typo such as 0202) instead of failing the whole collection', () => {
+    const r = typed([{ Date: '0202-03-15T00:00:00' }, { Date: '2025-03-15T00:00:00' }], 'UTC')
+    expect(r.value[0]?.Date?.toISOString()).toBe('0202-03-15T00:00:00.000Z')
+    expect(r.value[1]?.Date?.toISOString()).toBe('2025-03-15T00:00:00.000Z')
+  })
+
+  it('still reads the 1С empty date as null, before any zone conversion', () => {
+    expect(typed([{ Date: ONEC_EMPTY_DATE }]).value[0]?.Date).toBeNull()
+    expect(parseV3Single<{ D: unknown }>(JSON.stringify({ D: ONEC_EMPTY_DATE }), { serverTimezone: TZ }).D).toBeNull()
+  })
+
+  it('reads a time a daylight-saving switch skips moved forward by the gap', () => {
+    const r = typed([{ Date: '2018-11-04T00:30:00' }], 'America/Sao_Paulo')
+    // 00:30 does not exist that night; 01:30 -02:00 does.
+    expect(r.value[0]?.Date?.toISOString()).toBe('2018-11-04T03:30:00.000Z')
+  })
+
+  it('fails a schema-typed Edm.DateTime that names no real date with a ParseError naming the field', () => {
+    expect(() => typed([{ Date: '2026-02-30T00:00:00' }])).toThrow(ParseError)
+    expect(() => typed([{ Date: '2026-02-30T00:00:00' }])).toThrow(
+      /Edm\.DateTime field Date holds "2026-02-30T00:00:00"/,
+    )
+  })
+
+  it('leaves a schema-less string the date heuristic matched but which names no real date as it came', () => {
+    const r = parseV3Single<{ Note: unknown }>(JSON.stringify({ Note: '2026-13-45T99:00:00' }), { serverTimezone: TZ })
+    expect(r.Note).toBe('2026-13-45T99:00:00')
   })
 })

@@ -1,0 +1,12 @@
+---
+"@1c-odata/client": minor
+"@1c-odata/mcp": patch
+---
+
+**Breaking:** `parseInZone` places a wall-clock time a daylight-saving switch touches by one rule, `Temporal`'s `'compatible'`: a time the zone passes twice (the clocks go back) is the EARLIER instant, and a time the zone skips (the clocks go forward) moves forward by the gap — `2018-11-04T00:30` in `America/Sao_Paulo` is now 01:30 that day, not 23:30 the day before; `2025-10-26T02:30` in `Europe/Berlin` is now 02:30 CEST, an hour earlier than before. Every `Edm.DateTime` read from 1С goes through it. A new third argument, `parseInZone(naive, zone, { disambiguation: 'reject' })`, refuses a skipped time with an `InvalidArgumentError` instead (new public types `ParseInZoneOptions`, `ZoneDisambiguation`).
+
+**Breaking:** `parseInZone` rejects what names no real date-time with an `InvalidArgumentError` instead of rolling it over or failing with a raw `RangeError`: `2026-02-30` used to become `2026-03-02` and `24:00` the next day; a month `13`, a year `0000` and a string that is not `YYYY-MM-DDTHH:mm[:ss[.fff]]` (a space may stand for the `T`) fail the same way, as does an unknown timezone. Reading a response, a field the schema types `Edm.DateTime` with such a value is a `ParseError` naming the field and the value; a field only the schema-less heuristic took for a date stays the string it came as. Migration: catch `InvalidArgumentError` where you call `parseInZone` on input you do not control.
+
+Years `0001`–`0999` — 1С's dates go down to `0001`, and a typo such as `0202` for `2020` happens — now read and write correctly: `parseInZone` used to fail on them with a raw `RangeError`, failing the whole collection read, and `formatInZone` wrote the year without its leading zeros (`999-05-01T…`) into filters, function-import arguments and written entities. `formatInZone` rejects an invalid `Date` and one whose year in the zone falls outside `0001`–`9999` with an `InvalidArgumentError`.
+
+MCP `register_query` uses the client's `disambiguation: 'reject'` for naive periods instead of a check of its own: a time a daylight-saving switch skips is still refused, and a bare day whose midnight it skips still starts at 01:00. Changed: a naive period whose time the clocks pass twice is the earlier instant in every zone (in `Europe/Berlin` it was the later one), and a naive period with a year below 1000 is read instead of refused.

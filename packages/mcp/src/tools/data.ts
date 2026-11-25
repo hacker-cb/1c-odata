@@ -9,7 +9,7 @@ import type {
   UntypedEntity,
   V3QueryBuilder,
 } from '@1c-odata/client'
-import { formatInZone, parseInZone } from '@1c-odata/client'
+import { InvalidArgumentError, parseInZone } from '@1c-odata/client'
 import { raw } from '@1c-odata/client/filter'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -406,34 +406,34 @@ function toDate(
   let date: Date | undefined
   if (zone !== undefined) date = new Date(`${local}${frac}${zone}`)
   else {
-    date = naiveInZone(`${local}${frac}`, local, serverTimezone)
+    date = strictInZone(`${local}${frac}`, serverTimezone)
     // A bare day whose midnight a DST switch skips (e.g. America/Sao_Paulo, 2018-11-04) starts at 01:00.
     if (date === undefined && time === undefined && bareDateAs === 'start') {
-      date = naiveInZone(`${y}-${mo}-${d}T01:00:00`, `${y}-${mo}-${d}T01:00:00`, serverTimezone)
+      date = strictInZone(`${y}-${mo}-${d}T01:00:00`, serverTimezone)
     }
   }
   if (date === undefined || Number.isNaN(date.getTime())) {
     throw new Error(
       `Invalid ISO date: "${iso}" (no such instant: a local time a daylight-saving switch skips in ${serverTimezone}, ` +
-        'an impossible offset, or a year before 1000)',
+        'an impossible offset, or the year 0000)',
     )
   }
   return date
 }
 
 /**
- * `parseInZone`, answering `undefined` where it cannot place the wall time —
- * it throws on years it cannot format back (below 1000) — and where the
- * instant it returns does not read back as `local`: a wall time the zone skips
- * (the spring-forward gap) has no instant, and parseInZone would shift it
- * silently, moving the period boundary.
+ * `parseInZone` refusing a wall time the zone skips (the spring-forward gap):
+ * that has no instant, and the client's `'compatible'` rule would move it
+ * forward, shifting the period boundary. `undefined` for it and for anything
+ * else `parseInZone` refuses (a year outside 0001–9999). A time the zone
+ * passes twice is the earlier instant.
  */
-function naiveInZone(naive: string, local: string, zone: string): Date | undefined {
+function strictInZone(naive: string, zone: string): Date | undefined {
   try {
-    const date = parseInZone(naive, zone)
-    return formatInZone(date, zone).slice(0, 19) === local ? date : undefined
-  } catch {
-    return undefined
+    return parseInZone(naive, zone, { disambiguation: 'reject' })
+  } catch (err) {
+    if (err instanceof InvalidArgumentError && err.argument === 'naive') return undefined
+    throw err
   }
 }
 
