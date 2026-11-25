@@ -35,10 +35,13 @@ export async function mapResponseToError(
   request: RequestContext,
 ): Promise<ODataError> {
   const ct = headers['content-type'] ?? ''
+  // The media type alone — its parameters never decide the body's format —
+  // compared case-insensitively (RFC 9110 §8.3.1).
+  const mediaType = (ct.split(';')[0] ?? '').trim().toLowerCase()
   let parsed: ODataErrorBody
   let format: 'json' | 'xml'
 
-  if (ct.includes('application/json') || ct.includes('json')) {
+  if (mediaType.includes('json')) {
     let obj: { 'odata.error'?: { code?: unknown; message?: unknown } }
     try {
       obj = JSON.parse(body)
@@ -51,10 +54,11 @@ export async function mapResponseToError(
     // a usable HTTPError instead of a misleading "Invalid JSON" ParseError.
     parsed = { code: String(err.code ?? ''), message: extractODataMessage(err.message) }
     format = 'json'
-  } else if (ct.includes('xml')) {
+  } else if (mediaType.includes('xml')) {
     // Only a real `<m:error>` envelope counts as XML. An XHTML/proxy error page
-    // served with an `xml` content-type but no `<code>`/`<message>` is treated
-    // as no-envelope (same as HTML) rather than a fabricated category error.
+    // served with an `xml` content-type — even one with a `<code>` element in
+    // its markup — is treated as no-envelope (same as HTML) rather than a
+    // fabricated category error.
     const xmlBody = parseXmlError(body)
     if (!xmlBody) return noEnvelopeError(status, statusText, ct, body, request)
     parsed = xmlBody
@@ -197,20 +201,248 @@ function extractODataMessage(m: unknown): string {
   return 'Unknown OData error'
 }
 
+/** The namespace an OData V3 error envelope's elements live in. */
+const ODATA_METADATA_NS = 'http://schemas.microsoft.com/ado/2007/08/dataservices/metadata'
+
 /**
- * Parse the narrow OData/$batch `<error><code/><message/></error>` envelope.
- * Returns `null` when neither `<code>` nor `<message>` is present — i.e. the
- * body is not an OData XML error (e.g. an XHTML/proxy error page), so the caller
- * routes it through the no-envelope path instead of fabricating a code.
+ * Parse the OData error envelope: a root `error` element in the OData
+ * metadata namespace, its `code` and `message` read from its direct children
+ * in that namespace. 1С sends it prefixed —
+ * `<m:error xmlns:m="…/dataservices/metadata"><m:code>9</m:code><m:message>…</m:message></m:error>`
+ * — and the unprefixed form under a default namespace is the same envelope.
+ * Returns `null` for anything else — an XHTML/proxy error page, whatever
+ * `<code>` or `<message>` its markup holds, or an envelope with neither field
+ * — so the caller routes it through the no-envelope path instead of
+ * fabricating a code.
+ *
+ * A small linear scanner, not a full XML parser (the client carries no
+ * dependencies): it skips the prolog, reads attributes with their quoting,
+ * resolves namespace prefixes by scope, skips comments and processing
+ * instructions, takes CDATA as text and decodes the predefined and numeric
+ * entities; a closing tag must match the element it closes, and an envelope
+ * that never closes is none. Every step advances through the body, so no input costs more
+ * than one pass over it.
  */
 function parseXmlError(xml: string): ODataErrorBody | null {
-  const codeMatch = xml.match(/<code>(.*?)<\/code>/)
-  const messageMatch = xml.match(/<message[^>]*>(.*?)<\/message>/s)
-  if (!codeMatch && !messageMatch) return null
-  return {
-    code: codeMatch?.[1] ?? '0',
-    message: messageMatch?.[1] ?? 'Unknown XML error',
+  let i = skipXmlProlog(xml)
+  if (i < 0 || xml[i] !== '<') return null
+  const root = readStartTag(xml, i)
+  if (root === null || root.selfClosing) return null
+  const scopes = [namespaceDecls(root.attrs)]
+  if (!isODataElement(root.name, scopes, 'error')) return null
+
+  const found: { code?: string; message?: string } = {}
+  let capture: { field: 'code' | 'message'; parts: string[] } | null = null
+  const open: string[] = [] // names of the elements open inside the root
+  let closed = false
+  i = root.end
+  while (i < xml.length) {
+    const lt = xml.indexOf('<', i)
+    if (lt < 0) break
+    // A field's value is its own text; text of elements nested in it is not.
+    const ownText = capture !== null && open.length === 1
+    if (ownText && lt > i) capture?.parts.push(decodeXmlText(xml.slice(i, lt)))
+    if (xml.startsWith('<!--', lt) || xml.startsWith('<?', lt)) {
+      const close = xml.startsWith('<!--', lt) ? '-->' : '?>'
+      const e = xml.indexOf(close, lt + 2)
+      if (e < 0) break
+      i = e + close.length
+      continue
+    }
+    if (xml.startsWith('<![CDATA[', lt)) {
+      const e = xml.indexOf(']]>', lt + 9)
+      if (e < 0) break
+      if (ownText) capture?.parts.push(xml.slice(lt + 9, e))
+      i = e + 3
+      continue
+    }
+    if (xml.startsWith('</', lt)) {
+      const e = xml.indexOf('>', lt + 2)
+      if (e < 0) break
+      // A closing tag must close the innermost open element: anything else is not well-formed.
+      if (xml.slice(lt + 2, e).trim() !== (open.at(-1) ?? root.name)) return null
+      i = e + 1
+      if (open.length === 0) {
+        closed = true
+        break
+      }
+      open.pop()
+      scopes.pop()
+      if (open.length === 0 && capture !== null) {
+        found[capture.field] ??= capture.parts.join('')
+        capture = null
+      }
+      continue
+    }
+    const tag = readStartTag(xml, lt)
+    if (tag === null) return null
+    i = tag.end
+    if (tag.selfClosing && open.length > 0) continue
+    scopes.push(namespaceDecls(tag.attrs))
+    if (open.length === 0) {
+      const field = isODataElement(tag.name, scopes, 'code')
+        ? 'code'
+        : isODataElement(tag.name, scopes, 'message')
+          ? 'message'
+          : undefined
+      if (tag.selfClosing) {
+        if (field !== undefined) found[field] ??= ''
+        scopes.pop()
+        continue
+      }
+      if (field !== undefined && found[field] === undefined) capture = { field, parts: [] }
+    }
+    open.push(tag.name)
   }
+  // A truncated or unclosed envelope is not one, nor one with more after it
+  // than whitespace, comments and processing instructions (a second root).
+  if (!closed || !onlyMiscFrom(xml, i) || (found.code === undefined && found.message === undefined)) return null
+  return { code: found.code?.trim() ?? '0', message: found.message ?? 'Unknown XML error' }
+}
+
+/** Whether everything from `i` on is whitespace, comments and processing instructions — what may follow a root. */
+function onlyMiscFrom(xml: string, i: number): boolean {
+  let j = i
+  for (;;) {
+    j = skipXmlSpace(xml, j)
+    if (j >= xml.length) return true
+    const close = xml.startsWith('<!--', j) ? '-->' : xml.startsWith('<?', j) ? '?>' : undefined
+    if (close === undefined) return false
+    const e = xml.indexOf(close, j + 2)
+    if (e < 0) return false
+    j = e + close.length
+  }
+}
+
+/**
+ * Index of the root element's `<`, past an optional BOM, the XML declaration,
+ * comments, processing instructions, a doctype (internal subset included) and
+ * whitespace; -1 where the prolog does not close.
+ */
+function skipXmlProlog(xml: string): number {
+  let i = xml.charCodeAt(0) === 0xfeff ? 1 : 0
+  for (;;) {
+    i = skipXmlSpace(xml, i)
+    if (xml.startsWith('<?', i) || xml.startsWith('<!--', i)) {
+      const close = xml.startsWith('<?', i) ? '?>' : '-->'
+      const e = xml.indexOf(close, i + 2)
+      if (e < 0) return -1
+      i = e + close.length
+    } else if (xml.startsWith('<!DOCTYPE', i)) {
+      i = skipDoctype(xml, i + 9)
+      if (i < 0) return -1
+    } else {
+      return i
+    }
+  }
+}
+
+/** Index past a doctype's closing `>`, its quoted literals and `[…]` internal subset skipped whole; -1 if unclosed. */
+function skipDoctype(xml: string, from: number): number {
+  let quote = ''
+  let subset = false
+  for (let j = from; j < xml.length; j++) {
+    const c = xml[j]
+    if (quote !== '') {
+      if (c === quote) quote = ''
+    } else if (c === '"' || c === "'") quote = c
+    else if (c === '[') subset = true
+    else if (c === ']') subset = false
+    else if (c === '>' && !subset) return j + 1
+  }
+  return -1
+}
+
+interface XmlStartTag {
+  name: string
+  attrs: Map<string, string>
+  selfClosing: boolean
+  /** Index just past the tag's `>`. */
+  end: number
+}
+
+/** Read the start tag whose `<` is at `lt` — its name and attributes, values unquoted and decoded; `null` if malformed. */
+function readStartTag(xml: string, lt: number): XmlStartTag | null {
+  let j = readXmlName(xml, lt + 1)
+  const name = xml.slice(lt + 1, j)
+  if (name === '') return null
+  const attrs = new Map<string, string>()
+  for (;;) {
+    j = skipXmlSpace(xml, j)
+    if (xml.startsWith('/>', j)) return { name, attrs, selfClosing: true, end: j + 2 }
+    if (xml[j] === '>') return { name, attrs, selfClosing: false, end: j + 1 }
+    const k = readXmlName(xml, j)
+    if (k === j) return null
+    const attr = xml.slice(j, k)
+    j = skipXmlSpace(xml, k)
+    if (xml[j] !== '=') return null
+    j = skipXmlSpace(xml, j + 1)
+    const quote = xml[j]
+    if (quote !== '"' && quote !== "'") return null
+    const e = xml.indexOf(quote, j + 1)
+    if (e < 0) return null
+    attrs.set(attr, decodeXmlText(xml.slice(j + 1, e)))
+    j = e + 1
+  }
+}
+
+/** Index past the XML name starting at `i` (stops at whitespace, `/`, `>`, `=`, `<`, quotes). */
+function readXmlName(xml: string, i: number): number {
+  let j = i
+  while (j < xml.length && !/[\s/>=<"']/.test(xml[j] as string)) j++
+  return j
+}
+
+function skipXmlSpace(xml: string, i: number): number {
+  let j = i
+  while (j < xml.length && /\s/.test(xml[j] as string)) j++
+  return j
+}
+
+/** The namespace declarations among a tag's attributes: prefix (`''` for the default) → URI. */
+function namespaceDecls(attrs: Map<string, string>): Map<string, string> {
+  const decls = new Map<string, string>()
+  for (const [name, value] of attrs) {
+    if (name === 'xmlns') decls.set('', value)
+    else if (name.startsWith('xmlns:')) decls.set(name.slice(6), value)
+  }
+  return decls
+}
+
+/** Whether the element `qname`, under the namespace `scopes` (innermost last), is `local` in the OData metadata namespace. */
+function isODataElement(qname: string, scopes: Map<string, string>[], local: string): boolean {
+  const colon = qname.indexOf(':')
+  const prefix = colon < 0 ? '' : qname.slice(0, colon)
+  if ((colon < 0 ? qname : qname.slice(colon + 1)) !== local) return false
+  for (let s = scopes.length - 1; s >= 0; s--) {
+    const uri = scopes[s]?.get(prefix)
+    if (uri !== undefined) return uri === ODATA_METADATA_NS
+  }
+  return false
+}
+
+const XML_NAMED_ENTITIES: Readonly<Record<string, string>> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" }
+
+/** Decode the predefined and numeric character references; an unknown or out-of-range one is left as written. */
+function decodeXmlText(s: string): string {
+  if (!s.includes('&')) return s
+  return s.replace(/&(?:#x([0-9a-fA-F]+)|#([0-9]+)|(lt|gt|amp|quot|apos));/g, (ref, hex, dec, named) => {
+    if (named !== undefined) return XML_NAMED_ENTITIES[named] ?? ref
+    const cp = Number.parseInt(hex ?? dec, hex !== undefined ? 16 : 10)
+    return isXmlChar(cp) ? String.fromCodePoint(cp) : ref
+  })
+}
+
+/** Whether `cp` is a character XML allows (XML 1.0 §2.2 `Char`). */
+function isXmlChar(cp: number): boolean {
+  return (
+    cp === 0x9 ||
+    cp === 0xa ||
+    cp === 0xd ||
+    (cp >= 0x20 && cp <= 0xd7ff) ||
+    (cp >= 0xe000 && cp <= 0xfffd) ||
+    (cp >= 0x10000 && cp <= 0x10ffff)
+  )
 }
 
 /** Trim + cap a raw response body for use as a diagnostic snippet. */

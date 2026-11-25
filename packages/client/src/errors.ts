@@ -25,7 +25,8 @@ export interface ODataErrorBody {
 /**
  * Format of the wire-level error body:
  * - `'json'` — `odata.error` envelope (default for 1С OData V3).
- * - `'xml'` — `<m:error>` (only for `$batch` and a few legacy endpoints).
+ * - `'xml'` — `<m:error>` in the OData metadata namespace: 1С's answer to a
+ *   request that asks for XML (`$metadata`, an `Accept` overridden by a hook).
  * - `'none'` — the server returned a non-2xx with no recognizable OData error
  *   envelope (wrong entity-set path, over-long URL, HTML/proxy error page).
  *   `HTTPError.code`/`.odata` are then `undefined`; `.rawBody` holds a
