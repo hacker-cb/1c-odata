@@ -363,5 +363,28 @@ describe('transport — timeout around beforeRequest (#190)', () => {
     const pending = request(target, { timeout: 60_000, hooks })
     expect(ran).toBe(true)
     await expect(pending).resolves.toMatchObject({ status: 200 })
+
+describe('requestStream — a throwing afterResponse releases the response (#189)', () => {
+  it('cancels the unread body and rethrows the hook’s error as is', async () => {
+    const cancel = vi.fn()
+    const body = new ReadableStream({ cancel })
+    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(body, { status: 200 }))
+    try {
+      const hookErr = new Error('metrics down')
+      const err = await requestStream(
+        { method: 'GET', url: `${base}/File`, headers: {} },
+        {
+          hooks: {
+            afterResponse: () => {
+              throw hookErr
+            },
+          },
+        },
+      ).catch((e: unknown) => e)
+      expect(err).toBe(hookErr)
+      expect(cancel).toHaveBeenCalledOnce()
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

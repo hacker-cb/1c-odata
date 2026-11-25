@@ -443,7 +443,13 @@ export async function requestStream(
     }
 
     const { hooks } = callOpts
-    await runHook(() => hooks?.afterResponse?.(reqEvent, resEvent))
+    try {
+      await runHook(() => hooks?.afterResponse?.(reqEvent, resEvent))
+    } catch (e) {
+      // The caller never gets this response: release its connection.
+      response.body?.cancel().catch(() => {})
+      throw e
+    }
 
     // For error responses we DO consume the body to map to a typed error —
     // the caller never gets a chance to read it. For success, the body is
