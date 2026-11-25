@@ -83,6 +83,14 @@ function shapeRows<T>(rows: T[], compact: boolean | undefined, limits: Limits): 
 }
 
 /** A `… of N fetched rows; narrow with …` note for the summary, or '' when nothing was dropped. */
+/**
+ * Whether a paged read has more rows: some were dropped for size, or — by the
+ * total where one is known, else by a full page — the server has a next page.
+ */
+function hasMoreRows(truncated: boolean, offset: number, fetched: number, limit: number, total?: number): boolean {
+  return truncated || (total !== undefined ? offset + fetched < total : fetched === limit)
+}
+
 function truncationNote(truncated: boolean, shown: number, fetched: number, limits: Limits, narrow: string): string {
   if (!truncated) return ''
   return ` ⚠ Output truncated to ${shown} of ${fetched} fetched rows (~${limits.maxBytes}-byte budget); ${narrow}.`
@@ -177,9 +185,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
               fetched,
               returned: rows.length,
               truncated,
-              // More rows exist if we dropped some for size, or — by count when
-              // present, else by a full page — the server has a next page.
-              hasMore: truncated || (result.count !== undefined ? offset + fetched < result.count : fetched === limit),
+              hasMore: hasMoreRows(truncated, offset, fetched, limit, result.count),
             },
             value: rows,
           },
@@ -253,7 +259,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     {
       title: 'Query register virtual table',
       description:
-        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Control grouping with select: on balance/turnovers/balanceAndTurnovers/drCrTurnovers 1С sums the resources over the selected dimensions only, so fewer dimensions return fewer, coarser rows (e.g. on an AccountingRegister turnovers, select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account); on slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from (extDimensions takes neither); filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601 in the 1С server time unless they carry Z or an offset. Paginated via top/skip on the 1С server: each call reads one page and the exact total (1С computes the whole virtual table on every call, so a big table costs seconds per page — and a deep skip more than the first; narrow with condition/period/select rather than paging through it). orderBy sorts on the server (costs time on a big table) — with top it gives a server-side top-N, e.g. orderBy [{"field":"СуммаTurnoverDr","dir":"desc"}], top 10. Without orderBy rows come in 1С\'s own order, which stays the same from page to page.',
+        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns compact pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. Control grouping with select: on balance/turnovers/balanceAndTurnovers/drCrTurnovers 1С sums the resources over the selected dimensions only, so fewer dimensions return fewer, coarser rows (e.g. on an AccountingRegister turnovers, select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account); on slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from (extDimensions takes neither); filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601 in the 1С server time unless they carry Z or an offset. Paginated via top/skip on the 1С server: each call reads one page and, in a parallel request, the exact total (1С computes the whole virtual table for each, so a big table costs seconds per page — and a deep skip more than the first; narrow with condition/period/select rather than paging through it; on data changing meanwhile the total and the page can briefly disagree). orderBy sorts on the server (costs time on a big table) — with top it gives a server-side top-N, e.g. orderBy [{"field":"СуммаTurnoverDr","dir":"desc"}], top 10. Without orderBy rows come in 1С\'s own order: in tests it stayed the same from page to page, but 1С does not promise that — when pages must not overlap or skip rows, pass orderBy over fields that identify a row (e.g. the selected dimensions).',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         register: z.string().describe('Register entity set, e.g. AccumulationRegister_ТоварыНаСкладах'),
@@ -322,8 +328,9 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     async (args) =>
       toolResult(async () => {
         const { client } = await pool.get(args.connection)
-        // One page per call, paged by 1С itself ($skip/$top) with the exact
-        // total alongside ($inlinecount) — never the whole virtual table (#192).
+        // One page per call, paged by 1С itself ($skip/$top), with the exact
+        // total from the table's /$count alongside — never the whole virtual
+        // table (#192).
         const offset = args.skip ?? 0
         const limit = clampTop(args.top, limits)
         const page = await runRegisterTable(
@@ -333,8 +340,12 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           client.serverTimezone,
         )
         const total = page.count
-        const fetched = page.value.length
-        const { rows, truncated } = shapeRows(page.value, args.compact, limits)
+        // A publication that ignores $top would hand back more than the page:
+        // keep the page to `limit` rows and say so rather than pass them all on.
+        const ignoredTop = page.value.length > limit
+        const value = ignoredTop ? page.value.slice(0, limit) : page.value
+        const fetched = value.length
+        const { rows, truncated } = shapeRows(value, args.compact, limits)
         const note = truncationNote(
           truncated,
           rows.length,
@@ -342,21 +353,22 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           limits,
           'narrow with select/condition/filter, set compact:true, or page with skip',
         )
+        const topNote = ignoredTop
+          ? ` ⚠ 1С returned ${page.value.length} rows for top ${limit} — it ignored $top here; the page was cut to the first ${limit}, which may not start at skip ${offset}.`
+          : ''
         return {
-          summary: `${rows.length} row(s)${total !== undefined ? ` of ${total} total` : ''} from ${args.register}.${args.table}.${note}`,
+          summary: `${rows.length} row(s) of ${total} total from ${args.register}.${args.table}.${note}${topNote}`,
           data: {
             connection: args.connection,
             register: args.register,
             table: args.table,
-            ...(total !== undefined ? { total } : {}),
+            total,
             pagination: {
               skip: offset,
               top: limit,
               returned: rows.length,
               truncated,
-              // More rows exist if we dropped some for size, or — by the total
-              // when 1С reported one, else by a full page — the server has more.
-              hasMore: truncated || (total !== undefined ? offset + fetched < total : fetched === limit),
+              hasMore: hasMoreRows(truncated, offset, fetched, limit, total),
             },
             rows,
           },
@@ -614,11 +626,7 @@ function readOptions(args: {
   return {
     ...(args.select !== undefined ? { select: args.select } : {}),
     ...(args.filter !== undefined ? { filter: args.filter } : {}),
-    ...(args.orderBy !== undefined
-      ? {
-          orderBy: args.orderBy.map((o) => (o.dir !== undefined ? { field: o.field, dir: o.dir } : { field: o.field })),
-        }
-      : {}),
+    ...(args.orderBy !== undefined ? { orderBy: args.orderBy } : {}),
   }
 }
 

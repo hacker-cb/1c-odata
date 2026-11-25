@@ -4,9 +4,9 @@ import type { ODataV3Client } from './client/v3-client.js'
 import { V3QueryBuilder } from './client/v3-query.js'
 import { InvalidArgumentError } from './errors.js'
 import { buildFunctionUrl } from './functions.js'
-import { parseOptsFor, parseV3Collection } from './parser.js'
+import { parseOptsFor, parseV3Collection, parseV3Count } from './parser.js'
 import { assertNonNegativeInt } from './query/builder.js'
-import { qp } from './url-builder.js'
+import { formatOrderBy, qp } from './url-builder.js'
 
 /**
  * Args for `balance()` — single point in time. Both AccumulationRegister and
@@ -127,10 +127,11 @@ export interface ReadFiOptions extends RequestOptions {
   /**
    * `$orderby` — sort the result rows on the server, applied in order, e.g.
    * `[{ field: 'СуммаTurnoverDr', dir: 'desc' }]` with `top: 10` for the ten
-   * largest. `dir` defaults to `asc`. Sorting costs 1С time on a big table.
-   * An empty list sends no `$orderby`.
+   * largest. `field` is one property name — no spaces or commas; `dir`
+   * defaults to `asc`. Sorting costs 1С time on a big table. An empty list
+   * sends no `$orderby`.
    */
-  orderBy?: { field: string; dir?: 'asc' | 'desc' }[]
+  orderBy?: { field: string; dir?: 'asc' | 'desc' | undefined }[]
   /**
    * `$select` — the fields to return. On the aggregating tables (`Balance`,
    * `Turnovers`, `BalanceAndTurnovers`, `DrCrTurnovers`) this also sets the
@@ -150,28 +151,39 @@ export interface ReadFiOptions extends RequestOptions {
    * records the table is computed from. A blank string sends no `$filter`.
    */
   filter?: string
+  /**
+   * The total row count is asked for through {@link ReadFiCountOptions}
+   * (`count: true`), which changes what the method resolves to; here it can
+   * only be left out or `false`.
+   */
+  count?: false
 }
 
 /**
- * {@link ReadFiOptions} plus `count: true` — `$inlinecount=allpages`: also
- * return the total row count of the result (after `$filter`, before `$skip` /
- * `$top`). A virtual-table method called with it resolves to a
- * {@link ReadFiPage} `{ value, count }` instead of the bare row array. 1С
- * counts in a separate query, so on a big table it adds about as much time as
- * computing the page.
+ * {@link ReadFiOptions} plus `count: true` — also return the total row count of
+ * the result (after `$filter`, before `$skip` / `$top`). A virtual-table method
+ * called with it resolves to a {@link ReadFiPage} `{ value, count }` instead of
+ * the bare row array.
+ *
+ * The count is a second request, `…/Func()/$count` with the same table
+ * parameters and `$filter`, sent alongside the page — not `$inlinecount`, which
+ * the 1С documentation says makes `$skip` / `$top` ignored. On a big table 1С
+ * spends about as long counting as computing the page, in parallel. The two
+ * requests see the data a moment apart, so on data changing meanwhile the
+ * count and the page can briefly disagree. If either request fails, the call
+ * fails.
  */
-export interface ReadFiCountOptions extends ReadFiOptions {
+export interface ReadFiCountOptions extends Omit<ReadFiOptions, 'count'> {
   count: true
 }
 
 /**
  * One page of a virtual-table call made with `count: true`: the rows and the
- * total row count of the result (`odata.count`). `count` is absent only when
- * 1С did not report one.
+ * total row count of the result (`/$count`).
  */
 export interface ReadFiPage<R> {
   value: R[]
-  count?: number
+  count: number
 }
 
 /**
@@ -182,18 +194,8 @@ export interface ReadFiPage<R> {
  * an array of `{ field, dir? }` or a non-boolean `count` fails with
  * `InvalidArgumentError` before any request.
  */
-function readFiQueryParams(opts: ReadFiOptions & { count?: boolean }): string[] {
-  const params: string[] = []
-  if (opts.filter !== undefined) {
-    if (typeof opts.filter !== 'string') {
-      throw new InvalidArgumentError('ReadFiOptions.filter must be a string (a raw OData $filter expression)', {
-        argument: 'ReadFiOptions.filter',
-        received: opts.filter,
-      })
-    }
-    const filter = opts.filter.trim()
-    if (filter !== '') params.push(qp('$filter', filter))
-  }
+function readFiQueryParams(opts: ReadFiOptions | ReadFiCountOptions): string[] {
+  const params = filterParams(opts.filter)
   if (opts.select !== undefined) {
     if (!Array.isArray(opts.select) || !Array.from(opts.select).every((f) => typeof f === 'string')) {
       throw new InvalidArgumentError('ReadFiOptions.select must be an array of field-name strings', {
@@ -216,34 +218,68 @@ function readFiQueryParams(opts: ReadFiOptions & { count?: boolean }): string[] 
     assertNonNegativeInt(opts.skip, 'ReadFiOptions.skip')
     params.push(`$skip=${opts.skip}`)
   }
-  if (opts.count !== undefined && typeof opts.count !== 'boolean') {
+  if (opts.count !== undefined && typeof (opts.count as unknown) !== 'boolean') {
     throw new InvalidArgumentError('ReadFiOptions.count must be a boolean', {
       argument: 'ReadFiOptions.count',
       received: opts.count,
     })
   }
-  if (opts.count === true) params.push(qp('$inlinecount', 'allpages'))
   return params
 }
 
-/** The `$orderby` value of `ReadFiOptions.orderBy` — `field dir` pairs joined by commas; `''` for an empty list. */
+/** The `$filter` of a virtual-table call — `[]` when absent or blank; a non-string fails with `InvalidArgumentError`. */
+function filterParams(filter: unknown): string[] {
+  if (filter === undefined) return []
+  if (typeof filter !== 'string') {
+    throw new InvalidArgumentError('ReadFiOptions.filter must be a string (a raw OData $filter expression)', {
+      argument: 'ReadFiOptions.filter',
+      received: filter,
+    })
+  }
+  const trimmed = filter.trim()
+  return trimmed !== '' ? [qp('$filter', trimmed)] : []
+}
+
+/** Append encoded system options to a function-import URL that may already carry its parameters. */
+function withParams(url: string, params: string[]): string {
+  return params.length > 0 ? `${url}${url.includes('?') ? '&' : '?'}${params.join('&')}` : url
+}
+
+/**
+ * The `/$count` URL of a virtual-table call: `…/Set/Func()/$count`, the FI's
+ * own parameters kept in the query string. The set and function names reach
+ * the path encoded and validated (`buildFunctionUrl`), so the first `?` ends it.
+ */
+function countUrl(fiUrl: string): string {
+  const q = fiUrl.indexOf('?')
+  return q < 0 ? `${fiUrl}/$count` : `${fiUrl.slice(0, q)}/$count${fiUrl.slice(q)}`
+}
+
+/** A single OData property name or `Nav/Field` path — no whitespace, no commas. */
+const ORDER_BY_FIELD = /^[^\s,]+$/
+
+/**
+ * The `$orderby` value of `ReadFiOptions.orderBy` — `field dir` pairs joined by
+ * commas (`formatOrderBy`, shared with collection queries); `''` for an empty
+ * list. A field carrying its own direction (`'Сумма desc'`) or a second key
+ * (`'A,B'`) is rejected rather than sent as a malformed `$orderby`.
+ */
 function orderByParam(orderBy: unknown): string {
   const bad = (): never => {
     throw new InvalidArgumentError(
-      "ReadFiOptions.orderBy must be an array of { field: string, dir?: 'asc' | 'desc' } with a non-blank field",
+      "ReadFiOptions.orderBy must be an array of { field, dir?: 'asc' | 'desc' } where field is one property name (no spaces or commas)",
       { argument: 'ReadFiOptions.orderBy', received: orderBy },
     )
   }
   if (!Array.isArray(orderBy)) return bad()
-  return Array.from(orderBy as unknown[])
-    .map((o) => {
-      if (typeof o !== 'object' || o === null) return bad()
-      const { field, dir } = o as { field?: unknown; dir?: unknown }
-      if (typeof field !== 'string' || field.trim() === '') return bad()
-      if (dir !== undefined && dir !== 'asc' && dir !== 'desc') return bad()
-      return `${field.trim()} ${dir ?? 'asc'}`
-    })
-    .join(',')
+  const keys = Array.from(orderBy as unknown[]).map((o) => {
+    if (typeof o !== 'object' || o === null) return bad()
+    const { field, dir } = o as { field?: unknown; dir?: unknown }
+    if (typeof field !== 'string' || !ORDER_BY_FIELD.test(field.trim())) return bad()
+    if (dir !== undefined && dir !== 'asc' && dir !== 'desc') return bad()
+    return { field: field.trim(), dir: dir as 'asc' | 'desc' | undefined }
+  })
+  return formatOrderBy(keys)
 }
 
 /**
@@ -321,7 +357,10 @@ export class RegisterHelper<T> {
   }
 
   /** Virtual-table FI: balance at `Period`. Accumulation / Accounting register. */
-  async balance<R = Record<string, unknown>>(args: BalanceArgs, opts: ReadFiCountOptions): Promise<ReadFiPage<R>>
+  async balance<R = Record<string, unknown>>(
+    args: BalanceArgs | undefined,
+    opts: ReadFiCountOptions,
+  ): Promise<ReadFiPage<R>>
   async balance<R = Record<string, unknown>>(args?: BalanceArgs, opts?: ReadFiOptions): Promise<R[]>
   async balance<R = Record<string, unknown>>(
     args: BalanceArgs = {},
@@ -331,7 +370,10 @@ export class RegisterHelper<T> {
   }
 
   /** Virtual-table FI: turnovers over a `Period` range. Accumulation / Accounting register. */
-  async turnovers<R = Record<string, unknown>>(args: TurnoversArgs, opts: ReadFiCountOptions): Promise<ReadFiPage<R>>
+  async turnovers<R = Record<string, unknown>>(
+    args: TurnoversArgs | undefined,
+    opts: ReadFiCountOptions,
+  ): Promise<ReadFiPage<R>>
   async turnovers<R = Record<string, unknown>>(args?: TurnoversArgs, opts?: ReadFiOptions): Promise<R[]>
   async turnovers<R = Record<string, unknown>>(
     args: TurnoversArgs = {},
@@ -361,7 +403,10 @@ export class RegisterHelper<T> {
    * bound to the record type, register the `_RecordType` set instead —
    * `register('InformationRegister_X_RecordType')`.
    */
-  async sliceFirst<R = Record<string, unknown>>(args: SliceArgs, opts: ReadFiCountOptions): Promise<ReadFiPage<R>>
+  async sliceFirst<R = Record<string, unknown>>(
+    args: SliceArgs | undefined,
+    opts: ReadFiCountOptions,
+  ): Promise<ReadFiPage<R>>
   async sliceFirst<R = Record<string, unknown>>(args?: SliceArgs, opts?: ReadFiOptions): Promise<R[]>
   async sliceFirst<R = Record<string, unknown>>(
     args: SliceArgs = {},
@@ -378,7 +423,10 @@ export class RegisterHelper<T> {
    * bound to the record type, register the `_RecordType` set instead —
    * `register('InformationRegister_X_RecordType')`.
    */
-  async sliceLast<R = Record<string, unknown>>(args: SliceArgs, opts: ReadFiCountOptions): Promise<ReadFiPage<R>>
+  async sliceLast<R = Record<string, unknown>>(
+    args: SliceArgs | undefined,
+    opts: ReadFiCountOptions,
+  ): Promise<ReadFiPage<R>>
   async sliceLast<R = Record<string, unknown>>(args?: SliceArgs, opts?: ReadFiOptions): Promise<R[]>
   async sliceLast<R = Record<string, unknown>>(
     args: SliceArgs = {},
@@ -428,26 +476,32 @@ export class RegisterHelper<T> {
   /**
    * Shared dispatch for read-style virtual-table FIs. Builds the URL via
    * `buildFunctionUrl` (no `ref` — set-bound), appends `$filter` / `$select` /
-   * `$orderby` / `$top` / `$skip` / `$inlinecount` when requested, GETs through
-   * the transport (threading the per-call `RequestOptions`), and parses through
+   * `$orderby` / `$top` / `$skip` when requested, GETs through the transport
+   * (threading the per-call `RequestOptions`), and parses through
    * `parseV3Collection` so `Edm.DateTime` values become `Date` instances and the
    * `0001-01-01T00:00:00` empty-date sentinel becomes `null` (consistent with
-   * `client.functions.X.Y` dispatch). With `count: true` it resolves to the rows
-   * and `odata.count` together.
+   * `client.functions.X.Y` dispatch). With `count: true` it also GETs the
+   * table's `/$count` (same parameters, `$filter` only) in parallel and resolves
+   * to both; a failure of either fails the call.
    */
   private async callReadFi<R>(
     funcName: string,
     args: Record<string, unknown>,
-    opts: ReadFiOptions & { count?: boolean },
+    opts: ReadFiOptions | ReadFiCountOptions,
   ): Promise<R[] | ReadFiPage<R>> {
     const { top, skip, orderBy, count, select, filter, ...reqOpts } = opts
-    let url = buildFunctionUrl(this.client.baseUrl, this.entitySet, funcName, {}, args, this.client.serverTimezone)
-    const params = readFiQueryParams(opts)
-    if (params.length > 0) url += `${url.includes('?') ? '&' : '?'}${params.join('&')}`
-    const raw = await this.client.transportGet(url, reqOpts)
+    const fiUrl = buildFunctionUrl(this.client.baseUrl, this.entitySet, funcName, {}, args, this.client.serverTimezone)
+    const url = withParams(fiUrl, readFiQueryParams(opts))
     // withTypeHint=false: virtual-table FI results have a different shape than the entity type itself.
-    const parsed = parseV3Collection<R>(raw.body, parseOptsFor(this.client, this.entitySet, false))
-    if (count !== true) return parsed.value
-    return parsed.count !== undefined ? { value: parsed.value, count: parsed.count } : { value: parsed.value }
+    const rows = async (): Promise<R[]> =>
+      parseV3Collection<R>(
+        (await this.client.transportGet(url, reqOpts)).body,
+        parseOptsFor(this.client, this.entitySet, false),
+      ).value
+    if (count !== true) return rows()
+    const total = async (): Promise<number> =>
+      parseV3Count((await this.client.transportGet(withParams(countUrl(fiUrl), filterParams(filter)), reqOpts)).body)
+    const [value, n] = await Promise.all([rows(), total()])
+    return { value, count: n }
   }
 }

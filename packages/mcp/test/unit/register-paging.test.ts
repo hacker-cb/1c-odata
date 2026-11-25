@@ -9,7 +9,7 @@ import { registerDataTools } from '../../src/tools/data.js'
 type Handler = (args: Record<string, unknown>) => Promise<CallToolResult>
 
 interface Result {
-  total?: number
+  total: number
   totalCapped?: boolean
   pagination: { skip: number; top: number; returned: number; truncated: boolean; hasMore: boolean }
   rows: { n: number }[]
@@ -17,10 +17,10 @@ interface Result {
 
 /**
  * register_query over a register whose virtual table has `rowCount` rows and
- * pages them as 1С does: `$skip` / `$top` on the server, `odata.count` alongside
- * (left out where `reportCount` is false). Every call's options are recorded.
+ * pages them as 1С does: `$skip` / `$top` on the server (ignoring `$top` where
+ * `ignoreTop`), the count alongside. Every call's options are recorded.
  */
-function setup(rowCount: number, limits: Limits, { reportCount = true, pad = '' } = {}) {
+function setup(rowCount: number, limits: Limits, { ignoreTop = false, pad = '' } = {}) {
   let handler: Handler | undefined
   const server = {
     registerTool: (name: string, _config: unknown, h: Handler) => {
@@ -32,11 +32,11 @@ function setup(rowCount: number, limits: Limits, { reportCount = true, pad = '' 
     balance: async (_args: unknown, opts: ReadFiCountOptions) => {
       calls.push(opts)
       const skip = opts.skip ?? 0
-      const top = opts.top ?? rowCount
+      const top = ignoreTop ? rowCount : (opts.top ?? rowCount)
       const value = Array.from({ length: Math.max(0, Math.min(top, rowCount - skip)) }, (_, i) =>
         pad === '' ? { n: skip + i } : { n: skip + i, pad },
       )
-      return reportCount ? { value, count: rowCount } : { value }
+      return { value, count: rowCount }
     },
   }
   const client = { serverTimezone: 'Europe/Moscow', register: () => helper }
@@ -83,12 +83,17 @@ describe('register_query pages on the 1С server (#192)', () => {
     expect((await run({ skip: 4 })).data.pagination).toMatchObject({ returned: 4, hasMore: false })
   })
 
-  it('falls back to a full page as the hint when 1С reports no count', async () => {
-    const { run } = setup(6, limits, { reportCount: false })
-    const first = await run({ skip: 0 })
-    expect(first.data.total).toBeUndefined()
-    expect(first.data.pagination.hasMore).toBe(true)
-    expect((await run({ skip: 4 })).data.pagination.hasMore).toBe(false)
+  it('cuts a page 1С sent past top back to top, and says so', async () => {
+    const { run } = setup(10, limits, { ignoreTop: true })
+    const { data, summary } = await run({ skip: 4 })
+    expect(data.rows.map((r) => r.n)).toEqual([4, 5, 6, 7])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: true })
+    expect(JSON.stringify(summary)).toContain('ignored $top')
+  })
+
+  it('says nothing about $top when 1С kept to it', async () => {
+    const { run } = setup(10, limits)
+    expect(JSON.stringify((await run({ skip: 4 })).summary)).not.toContain('ignored $top')
   })
 
   it('keeps hasMore when the byte budget cut the page, even on the last rows', async () => {

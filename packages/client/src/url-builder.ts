@@ -138,6 +138,17 @@ export function qp(key: string, value: string): string {
   return `${encodeURIComponent(key)}=${encodeComponent(value, key)}`
 }
 
+/**
+ * The `$orderby` value: `field dir` pairs joined by commas, `dir` defaulting to
+ * `asc`. Shared by collection queries and the register virtual-table calls
+ * (`register.ts`); validating the fields is the caller's.
+ *
+ * @internal
+ */
+export function formatOrderBy(orderBy: readonly { field: string; dir?: 'asc' | 'desc' | undefined }[]): string {
+  return orderBy.map((o) => `${o.field} ${o.dir ?? 'asc'}`).join(',')
+}
+
 function buildQueryParams(q: QueryBuilder<unknown>, opts: { onlyFilter?: boolean } = {}): string[] {
   const s = q.state
   const params: string[] = []
@@ -145,10 +156,7 @@ function buildQueryParams(q: QueryBuilder<unknown>, opts: { onlyFilter?: boolean
   if (!opts.onlyFilter) {
     if (s.select) params.push(qp('$select', s.select.join(',')))
     if (s.expand) params.push(qp('$expand', s.expand.join(',')))
-    if (s.orderBy) {
-      const ob = s.orderBy.map((o) => `${o.field} ${o.dir}`).join(',')
-      params.push(qp('$orderby', ob))
-    }
+    if (s.orderBy) params.push(qp('$orderby', formatOrderBy(s.orderBy)))
     if (s.top !== undefined) params.push(qp('$top', String(s.top)))
     if (s.skip !== undefined) params.push(qp('$skip', String(s.skip)))
     if (s.inlineCount) params.push(qp('$inlinecount', 'allpages'))

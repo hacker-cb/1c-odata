@@ -22,7 +22,7 @@ function setup(serverTimezone: string) {
     {
       get: (_t, method: string) => async (args: Record<string, unknown>) => {
         calls.push({ method, args })
-        return []
+        return { value: [], count: 0 }
       },
     },
   )
