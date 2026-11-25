@@ -23,7 +23,7 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 | `query` | Read-only OData query: raw `$filter`, `$select`, `$expand`, `$orderby`, `$top`/`$skip`, optional count. |
 | `get_entity` | Fetch a single entity by `Ref_Key`. |
 | `count` | Count rows matching an optional `$filter`. |
-| `register_query` | Register virtual tables: balance / turnovers / slices / accounting (read-only analytics). `select` sets the server-side grouping; `filter` narrows the resulting rows. |
+| `register_query` | Register virtual tables: balance / turnovers / slices / accounting (read-only analytics). `select` picks fields and, on the aggregating tables of some 1С configurations (БП turnovers — not УТ `ТоварыНаСкладах` balance), also rolls the rows up; `filter` narrows the resulting rows; `orderBy` sorts on the server (with `top` — a top-N). Paged by 1С itself: each call reads one page (`skip` / `top`) and, in a parallel request, the exact `total`; on a big table a page still costs seconds, since 1С computes the whole virtual table every time. |
 | `add_connection` | Add/update a connection (writes config; optional `label` + password; password stored securely, never returned). |
 | `set_credentials` | Change a connection's login and/or password in place (keeps URL/timezone/label; password never returned). |
 | `set_label` | Set or clear a connection's display label (empty clears it → falls back to the name). |
@@ -189,7 +189,6 @@ it with env vars (all optional):
 | `ONEC_MCP_DEFAULT_TOP` | `50` | Page size when a call omits `top`. |
 | `ONEC_MCP_MAX_TOP` | `1000` | Hard ceiling on a call's `top`. |
 | `ONEC_MCP_MAX_BYTES` | `24000` | Per-result byte budget for the returned rows. |
-| `ONEC_MCP_MAX_REGISTER_ROWS` | `100000` | Cap on rows fetched from a register virtual table before client-side paging; beyond it `register_query` returns a `totalCapped` floor. |
 
 Pass `compact: true` to `query` / `get_entity` / `register_query` to also drop 1С `*_Type` annotation
 companions (and `@odata` noise) and fit more rows per response. Caveat: that also removes composite-type

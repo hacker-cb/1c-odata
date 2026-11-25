@@ -1,3 +1,4 @@
+import type { ReadFiCountOptions } from '@1c-odata/client'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { describe, expect, it } from 'vitest'
@@ -7,50 +8,128 @@ import { registerDataTools } from '../../src/tools/data.js'
 
 type Handler = (args: Record<string, unknown>) => Promise<CallToolResult>
 
-/** register_query over a register whose virtual table returns `rowCount` rows (capped by the call's $top). */
-function setup(rowCount: number, limits: Limits) {
+interface Result {
+  total: number
+  totalCapped?: boolean
+  pagination: { skip: number; top: number; returned: number; truncated: boolean; hasMore: boolean }
+  rows: { n: number }[]
+}
+
+/**
+ * register_query over a register whose virtual table has `rowCount` rows and
+ * pages them as 1С does: `$skip` / `$top` on the server (ignoring `$top` where
+ * `ignoreTop`), the count alongside. Every call's options are recorded.
+ */
+function setup(
+  rowCount: number,
+  limits: Limits,
+  { ignoreTop = false, ignoreSkip = false, count = rowCount, pad = '' } = {},
+) {
   let handler: Handler | undefined
   const server = {
     registerTool: (name: string, _config: unknown, h: Handler) => {
       if (name === 'register_query') handler = h
     },
   } as unknown as McpServer
+  const calls: ReadFiCountOptions[] = []
   const helper = {
-    balance: async (_args: unknown, opts: { top?: number }) =>
-      Array.from({ length: Math.min(rowCount, opts.top ?? rowCount) }, (_, i) => ({ n: i })),
+    balance: async (_args: unknown, opts: ReadFiCountOptions) => {
+      calls.push(opts)
+      const skip = ignoreSkip ? 0 : (opts.skip ?? 0)
+      const top = ignoreTop ? rowCount : (opts.top ?? rowCount)
+      const value = Array.from({ length: Math.max(0, Math.min(top, rowCount - skip)) }, (_, i) =>
+        pad === '' ? { n: skip + i } : { n: skip + i, pad },
+      )
+      return { value, count }
+    },
   }
   const client = { serverTimezone: 'Europe/Moscow', register: () => helper }
   const pool = { get: async () => ({ client }) as unknown as PoolEntry } as unknown as ReadPool
   registerDataTools(server, pool, limits)
-  return async (args: Record<string, unknown>) => {
+  const run = async (args: Record<string, unknown>) => {
     if (handler === undefined) throw new Error('register_query not registered')
     const res = await handler({ connection: 'c', register: 'AccumulationRegister_X', table: 'balance', ...args })
-    return (res.structuredContent ?? {}) as {
-      total: number
-      totalCapped?: boolean
-      pagination: { returned: number; hasMore: boolean }
-    }
+    expect(res.isError).toBeUndefined()
+    return { data: (res.structuredContent ?? {}) as unknown as Result, summary: res.content?.[0] }
   }
+  return { run, calls }
 }
 
-describe('register_query paging past the row cap', () => {
-  const limits: Limits = { ...DEFAULT_LIMITS, maxRegisterRows: 10, defaultTop: 4, maxTop: 4 }
+describe('register_query pages on the 1С server (#192)', () => {
+  const limits: Limits = { ...DEFAULT_LIMITS, defaultTop: 4, maxTop: 4 }
 
-  it('pages through the capped rows and stops at the cap, still flagging it', async () => {
-    const run = setup(25, limits)
-    const first = await run({ skip: 0 })
-    expect(first.totalCapped).toBe(true)
-    expect(first.pagination).toMatchObject({ returned: 4, hasMore: true })
-    const last = await run({ skip: 8 })
-    expect(last.pagination).toMatchObject({ returned: 2, hasMore: false })
-    expect(last.totalCapped).toBe(true)
-    const past = await run({ skip: 10 })
-    expect(past.pagination).toMatchObject({ returned: 0, hasMore: false })
+  it('asks 1С for one page and the count — never the whole table', async () => {
+    const { run, calls } = setup(250_000, limits)
+    const { data } = await run({ skip: 100_000 })
+    expect(calls).toEqual([{ top: 4, skip: 100_000, count: true }])
+    expect(data.rows.map((r) => r.n)).toEqual([100_000, 100_001, 100_002, 100_003])
+    // The total is exact past the old 100 000-row cap, and nothing is flagged as capped.
+    expect(data.total).toBe(250_000)
+    expect(data.totalCapped).toBeUndefined()
+    expect(data.pagination).toMatchObject({ skip: 100_000, top: 4, returned: 4, hasMore: true })
   })
 
-  it('keeps hasMore for a register under the cap while rows remain', async () => {
-    const run = setup(6, limits)
-    expect((await run({ skip: 0 })).pagination.hasMore).toBe(true)
-    expect((await run({ skip: 4 })).pagination.hasMore).toBe(false)
+  it('sends no $skip on the first page', async () => {
+    const { run, calls } = setup(3, limits)
+    await run({})
+    expect(calls).toEqual([{ top: 4, count: true }])
+  })
+
+  it('ends hasMore at the last row, and past it', async () => {
+    const { run } = setup(6, limits)
+    expect((await run({ skip: 0 })).data.pagination).toMatchObject({ returned: 4, hasMore: true })
+    expect((await run({ skip: 4 })).data.pagination).toMatchObject({ returned: 2, hasMore: false })
+    expect((await run({ skip: 6 })).data.pagination).toMatchObject({ returned: 0, hasMore: false })
+  })
+
+  it('keeps hasMore on an exact last full page only while the total says rows remain', async () => {
+    const { run } = setup(8, limits)
+    expect((await run({ skip: 4 })).data.pagination).toMatchObject({ returned: 4, hasMore: false })
+  })
+
+  it('cuts a page 1С sent past top (honouring skip) back to top, and says so', async () => {
+    const { run } = setup(10, limits, { ignoreTop: true })
+    const { data, summary } = await run({ skip: 4 })
+    expect(data.rows.map((r) => r.n)).toEqual([4, 5, 6, 7])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: true })
+    expect(JSON.stringify(summary)).toContain('ignored $top')
+  })
+
+  it('pages the whole table here when 1С ignored both $top and $skip', async () => {
+    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true })
+    const { data, summary } = await run({ skip: 8 })
+    expect(data.rows.map((r) => r.n)).toEqual([8, 9])
+    expect(data.pagination).toMatchObject({ returned: 2, hasMore: false })
+    expect(JSON.stringify(summary)).toContain('whole table and starting at skip 8')
+  })
+
+  it('keeps paging from the rows in hand when 1С ignored $top and the count is short', async () => {
+    // 1С honoured $skip but not $top and counted 3 of 10 rows: rows 4–9 came back.
+    const { run } = setup(10, limits, { ignoreTop: true, count: 3 })
+    const { data } = await run({ skip: 4 })
+    expect(data.rows.map((r) => r.n)).toEqual([4, 5, 6, 7])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: true })
+  })
+
+  it('pages on by full pages once the rows outrun a short count (ungrouped $select)', async () => {
+    // 1С counted 6 (grouped) but holds 10 rows (ungrouped).
+    const { run } = setup(10, limits, { count: 6 })
+    expect((await run({ skip: 0 })).data.pagination.hasMore).toBe(true)
+    const second = await run({ skip: 4 })
+    expect(second.data.pagination).toMatchObject({ returned: 4, hasMore: true })
+    expect(JSON.stringify(second.summary)).toContain('not the number of rows')
+    expect((await run({ skip: 8 })).data.pagination).toMatchObject({ returned: 2, hasMore: false })
+  })
+
+  it('says nothing about $top when 1С kept to it', async () => {
+    const { run } = setup(10, limits)
+    expect(JSON.stringify((await run({ skip: 4 })).summary)).not.toContain('ignored $top')
+  })
+
+  it('keeps hasMore when the byte budget cut the page, even on the last rows', async () => {
+    // Rows of ~600 bytes against a 1 KiB budget: only one of the four fits.
+    const { run } = setup(4, { ...limits, maxBytes: 1024 }, { pad: 'x'.repeat(600) })
+    const { data } = await run({ skip: 0 })
+    expect(data.pagination).toMatchObject({ returned: 1, truncated: true, hasMore: true })
   })
 })

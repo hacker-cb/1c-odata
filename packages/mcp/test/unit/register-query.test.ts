@@ -38,7 +38,7 @@ function setup(rows: Record<string, unknown>[] = [], serverTimezone = 'Europe/Mo
           // extDimensions takes only the options.
           const [args, opts] = method === 'extDimensions' ? [undefined, a as ReadFiOptions] : [a, o ?? {}]
           calls.push({ register, method, args, opts })
-          return rows
+          return { value: rows, count: rows.length }
         },
       },
     )
@@ -68,7 +68,8 @@ describe('register_query select / filter (#179)', () => {
     expect(calls[0]?.method).toBe('turnovers')
     // Passed through as given: the client's ReadFiOptions trims and drops blanks.
     expect(calls[0]?.opts).toEqual({
-      top: DEFAULT_LIMITS.maxRegisterRows + 1,
+      top: DEFAULT_LIMITS.defaultTop,
+      count: true,
       select: ['Account_Key', ' СуммаTurnoverDr ', ''],
       filter: ' СуммаTurnoverDr gt 100000 ',
     })
@@ -77,12 +78,34 @@ describe('register_query select / filter (#179)', () => {
   it('sends neither option when absent', async () => {
     const { run, calls } = setup()
     await run({ table: 'balance' })
-    expect(calls.map((c) => c.opts)).toEqual([{ top: DEFAULT_LIMITS.maxRegisterRows + 1 }])
+    expect(calls.map((c) => c.opts)).toEqual([{ top: DEFAULT_LIMITS.defaultTop, count: true }])
   })
 
   it('applies to the no-argument extDimensions table too', async () => {
     const { run, calls } = setup()
     await run({ table: 'extDimensions', select: ['Type_Key'] })
     expect(calls[0]?.opts.select).toEqual(['Type_Key'])
+  })
+})
+
+describe('register_query orderBy (#192)', () => {
+  it('passes orderBy to the virtual-table call, dir only where given', async () => {
+    const { run, calls } = setup()
+    const res = await run({
+      table: 'turnovers',
+      orderBy: [{ field: 'СуммаTurnoverDr', dir: 'desc' }, { field: 'Account_Key' }],
+      top: 10,
+    })
+    expect(res.isError).toBeUndefined()
+    expect(calls[0]?.opts).toEqual({
+      orderBy: [{ field: 'СуммаTurnoverDr', dir: 'desc' }, { field: 'Account_Key' }],
+      top: 10,
+      count: true,
+    })
+  })
+
+  it('rejects an unknown sort direction in the schema', async () => {
+    const { run } = setup()
+    await expect(run({ table: 'balance', orderBy: [{ field: 'A', dir: 'down' }] })).rejects.toThrow()
   })
 })
