@@ -100,7 +100,15 @@ describe('register_query pages on the 1С server (#192)', () => {
     const { data, summary } = await run({ skip: 8 })
     expect(data.rows.map((r) => r.n)).toEqual([8, 9])
     expect(data.pagination).toMatchObject({ returned: 2, hasMore: false })
-    expect(JSON.stringify(summary)).toContain('from skip 8')
+    expect(JSON.stringify(summary)).toContain('whole table and starting at skip 8')
+  })
+
+  it('keeps paging from the rows in hand when 1С ignored $top and the count is short', async () => {
+    // 1С honoured $skip but not $top and counted 3 of 10 rows: rows 4–9 came back.
+    const { run } = setup(10, limits, { ignoreTop: true, count: 3 })
+    const { data } = await run({ skip: 4 })
+    expect(data.rows.map((r) => r.n)).toEqual([4, 5, 6, 7])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: true })
   })
 
   it('pages on by full pages once the rows outrun a short count (ungrouped $select)', async () => {

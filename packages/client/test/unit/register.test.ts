@@ -448,6 +448,11 @@ describe('RegisterHelper ReadFiOptions ($skip / $orderby / count) — server-sid
     expect(pageAborted).toBe(true)
   })
 
+  it.each([['12oops'], ['1.5'], [''], ['1e3']])('fails the call when /$count answers %j', async (body) => {
+    capture('AccumulationRegister_X/Balance\\(\\)', { 'odata.metadata': '#X', value: [] }, body)
+    await expect(client().register('AccumulationRegister_X').balance({}, { count: true })).rejects.toThrow(/integer/)
+  })
+
   it('fails the call when /$count answers something that is not a number', async () => {
     capture('AccumulationRegister_X/Balance\\(\\)', { 'odata.metadata': '#X', value: [] }, 'n/a')
     await expect(client().register('AccumulationRegister_X').balance({}, { count: true })).rejects.toThrow(/integer/)

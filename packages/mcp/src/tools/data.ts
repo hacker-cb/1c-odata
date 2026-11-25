@@ -341,10 +341,12 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
         )
         const total = page.count
         // A publication that ignores $top hands back more than the page: keep
-        // the page to `limit` rows and say so rather than pass them all on. All
-        // `total` rows back means it ignored $skip as well — page them here.
+        // the page to `limit` rows and say so rather than pass them all on. As
+        // many rows as the count is taken for the whole table — $skip ignored
+        // too — and paged here; the note names the assumption, since a count
+        // short of the rows (see below) can mimic it.
         const ignoredTop = page.value.length > limit
-        const from = ignoredTop && page.value.length === total ? offset : 0
+        const from = ignoredTop && offset > 0 && page.value.length === total ? offset : 0
         const value = ignoredTop ? page.value.slice(from, from + limit) : page.value
         const fetched = value.length
         // 1С may count a $select as grouped while returning its rows ungrouped:
@@ -359,7 +361,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           'narrow with select/condition/filter, set compact:true, or page with skip',
         )
         const topNote = ignoredTop
-          ? ` ⚠ 1С returned ${page.value.length} rows for top ${limit} — it ignored $top here; the page was cut to ${limit} of them${from > 0 ? ` from skip ${offset}` : ''}.`
+          ? ` ⚠ 1С returned ${page.value.length} rows for top ${limit} — it ignored $top here; the page was cut to ${limit} of them, ${from > 0 ? `taking them as the whole table and starting at skip ${offset}` : 'taking them as starting at skip'}.`
           : ''
         const countNote = countShort
           ? ` ⚠ 1С counted ${total} row(s) but returned rows past that — with this select its count is not the number of rows; page on while hasMore is true.`
@@ -376,7 +378,11 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
               top: limit,
               returned: rows.length,
               truncated,
-              hasMore: hasMoreRows(truncated, offset, fetched, limit, countShort ? undefined : total),
+              // With $top ignored every row from where 1С started is in hand, so
+              // what is left of them says whether more remain.
+              hasMore: ignoredTop
+                ? truncated || from + fetched < page.value.length
+                : hasMoreRows(truncated, offset, fetched, limit, countShort ? undefined : total),
             },
             rows,
           },
