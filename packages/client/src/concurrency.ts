@@ -27,7 +27,7 @@ export async function assertExpectedVersion(
   expected: string,
   opts: RequestOptions,
 ): Promise<void> {
-  const url = buildV3KeyUrl(client.baseUrl, entitySet, key)
+  const url = buildV3KeyUrl(client.baseUrl, entitySet, key, client.serverTimezone)
   const raw = await client.transportGet(url, opts)
   const fresh = parseV3Single<{ DataVersion?: string }>(raw.body, { serverTimezone: client.serverTimezone })
   if (fresh.DataVersion !== expected) {

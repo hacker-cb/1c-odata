@@ -1,6 +1,9 @@
 import { InvalidArgumentError, QueryBuilder } from '@1c-odata/client'
 import { describe, expect, it } from 'vitest'
-import { buildV3CollectionUrl, buildV3CountUrl, buildV3KeyUrl } from '../../src/url-builder.js'
+import { buildV3CollectionUrl, buildV3CountUrl, buildV3KeyUrl, type EntityKey } from '../../src/url-builder.js'
+
+/** A keyed URL for a connection in Europe/Moscow. */
+const keyUrl = (base: string, set: string, key: EntityKey) => buildV3KeyUrl(base, set, key, 'Europe/Moscow')
 
 const base = 'http://1c.test/odata/standard.odata'
 
@@ -50,14 +53,14 @@ describe('V3 URL builder', () => {
   })
 
   it('builds keyed URL with single GUID key', () => {
-    const url = buildV3KeyUrl(base, 'Catalog_X', '818ed18b-76c9-11e4-8918-003048663bbb')
+    const url = keyUrl(base, 'Catalog_X', '818ed18b-76c9-11e4-8918-003048663bbb')
     expect(url).toBe(
       `${base}/Catalog_X(guid'818ed18b-76c9-11e4-8918-003048663bbb')?%24format=application%2Fjson%3Bodata%3Dnometadata`,
     )
   })
 
   it('builds keyed URL with composite key (Recorder + Recorder_Type)', () => {
-    const url = buildV3KeyUrl(base, 'AccumulationRegister_X', {
+    const url = keyUrl(base, 'AccumulationRegister_X', {
       Recorder: '818ed18b-76c9-11e4-8918-003048663bbb',
       Recorder_Type: 'StandardODATA.Document_X',
     })
@@ -76,10 +79,11 @@ describe('V3 URL builder', () => {
     // literal layer needs: doubled `''` apostrophes survive, and an embedded
     // `)` inside `'...'` is safe because the OData server tokenizes literals
     // by grammar, not by paren-counting.
-    const url = buildV3KeyUrl(base, 'InformationRegister_X', {
+    const url = keyUrl(base, 'InformationRegister_X', {
       Period: '2025-01-01T00:00:00',
       Code: "A&B C?D)'E",
     })
+    // A string stays a quoted string literal — 1С converts it to the field's type (#194).
     expect(url).toContain("Period='2025-01-01T00%3A00%3A00'")
     expect(url).toContain("Code='A%26B%20C%3FD)''E'")
   })
@@ -100,7 +104,7 @@ describe('V3 URL builder — entity set as one segment', () => {
   it.each(['', '.', '..'])('rejects the entity set %j, which would collapse into the path above the base', (set) => {
     expect(() => buildV3CollectionUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).toThrow(InvalidArgumentError)
     expect(() => buildV3CountUrl(base, new QueryBuilder(set, 'Europe/Moscow'))).toThrow(InvalidArgumentError)
-    expect(() => buildV3KeyUrl(base, set, '11111111-2222-3333-4444-555555555555')).toThrow(InvalidArgumentError)
+    expect(() => keyUrl(base, set, '11111111-2222-3333-4444-555555555555')).toThrow(InvalidArgumentError)
   })
 
   it('rejects a set name that cannot be encoded (a lone surrogate) as an InvalidArgumentError', () => {
@@ -125,7 +129,7 @@ describe('V3 URL builder — entity keys cannot rewrite the path', () => {
     ['a non-GUID string', 'abc'],
     ['an empty string', ''],
   ])('rejects %s as a key', (_name, key) => {
-    expect(() => buildV3KeyUrl(base, 'Catalog_X', key)).toThrow(InvalidArgumentError)
+    expect(() => keyUrl(base, 'Catalog_X', key)).toThrow(InvalidArgumentError)
   })
 
   it.each([
@@ -133,19 +137,46 @@ describe('V3 URL builder — entity keys cannot rewrite the path', () => {
     ['a field with a quote', { "A')": G }],
     ['an empty composite key', {}],
   ])('rejects %s', (_name, key) => {
-    expect(() => buildV3KeyUrl(base, 'InformationRegister_X', key as Record<string, string>)).toThrow(
-      InvalidArgumentError,
-    )
+    expect(() => keyUrl(base, 'InformationRegister_X', key as Record<string, string>)).toThrow(InvalidArgumentError)
   })
 
   it('rejects an array as a composite key', () => {
     const key = ['11111111-2222-3333-4444-555555555555'] as unknown as Record<string, string>
-    expect(() => buildV3KeyUrl(base, 'Catalog_X', key)).toThrow(InvalidArgumentError)
+    expect(() => keyUrl(base, 'Catalog_X', key)).toThrow(InvalidArgumentError)
   })
 
-  it('still quotes a numeric composite-key value from an untyped caller', () => {
-    const key = { LineNumber: 1 } as unknown as Record<string, string>
-    expect(buildV3KeyUrl(base, 'Document_X_Товары', key)).toContain("(LineNumber='1')")
+  it('writes composite-key values by JS type, as the 1С docs show them (#194)', () => {
+    const period = new Date('2024-12-31T21:00:00Z') // 2025-01-01 00:00 in Moscow
+    expect(keyUrl(base, 'InformationRegister_X', { Period: period, Валюта_Key: G })).toContain(
+      `(Period=datetime'2025-01-01T00:00:00',Валюта_Key=guid'${G}')`,
+    )
+    expect(keyUrl(base, 'Document_X_Товары', { Ref_Key: G, LineNumber: 1 })).toContain(
+      `(Ref_Key=guid'${G}',LineNumber=1)`,
+    )
+    expect(keyUrl(base, 'Document_X_Товары', { Ref_Key: G, LineNumber: 12345678901234567890n })).toContain(
+      'LineNumber=12345678901234567890)',
+    )
+    // A string number is still a string literal.
+    expect(keyUrl(base, 'Document_X_Товары', { LineNumber: '1' })).toContain("(LineNumber='1')")
+  })
+
+  it('writes a Date key in the connection serverTimezone, milliseconds kept', () => {
+    const period = new Date('2025-07-01T09:30:00.250Z')
+    expect(buildV3KeyUrl(base, 'InformationRegister_X', { Period: period }, 'America/New_York')).toContain(
+      "(Period=datetime'2025-07-01T05:30:00.250')",
+    )
+  })
+
+  it.each([
+    ['an invalid Date', new Date(Number.NaN), 'invalid Date'],
+    ['a non-finite number', Number.POSITIVE_INFINITY, 'finite number'],
+    ['a boolean', true, 'must be a string, number, bigint or Date'],
+    ['null', null, 'must be a string, number, bigint or Date'],
+    ['an object', { a: 1 }, 'must be a string, number, bigint or Date'],
+  ])('rejects %s as a composite-key value', (_name, value, why) => {
+    const key = { Period: value } as unknown as EntityKey
+    expect(() => keyUrl(base, 'InformationRegister_X', key)).toThrow(InvalidArgumentError)
+    expect(() => keyUrl(base, 'InformationRegister_X', key)).toThrow(why)
   })
 
   it('keeps a virtual-table path whose quoted argument holds slashes', () => {
@@ -161,16 +192,16 @@ describe('V3 URL builder — entity keys cannot rewrite the path', () => {
   )
 
   it('keeps a GUID key and a composite key of 1С names', () => {
-    expect(buildV3KeyUrl(base, 'Catalog_X', G)).toBe(
+    expect(keyUrl(base, 'Catalog_X', G)).toBe(
       `${base}/Catalog_X(guid'${G}')?%24format=application%2Fjson%3Bodata%3Dnometadata`,
     )
-    expect(buildV3KeyUrl(base, 'InformationRegister_X', { Recorder: G, Валюта: "a/b'c" })).toContain(
+    expect(keyUrl(base, 'InformationRegister_X', { Recorder: G, Валюта: "a/b'c" })).toContain(
       `(Recorder=guid'${G}',Валюта='a%2Fb''c')`,
     )
   })
 
   it('answers a lone surrogate in a key value or a query option with InvalidArgumentError', () => {
-    expect(() => buildV3KeyUrl(base, 'InformationRegister_X', { Code: 'a\ud800' })).toThrow(InvalidArgumentError)
+    expect(() => keyUrl(base, 'InformationRegister_X', { Code: 'a\ud800' })).toThrow(InvalidArgumentError)
     const q = new QueryBuilder('Catalog_X', 'Europe/Moscow').select('A\ud800' as never)
     expect(() => buildV3CollectionUrl(base, q)).toThrow(InvalidArgumentError)
   })

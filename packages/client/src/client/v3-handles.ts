@@ -93,7 +93,7 @@ export class V3EntityHandle<T> {
 
   async get(opts: RequestOptions = {}): Promise<T> {
     const key = this.keyNow()
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone)
     const raw = await this.client.transportGet(url, opts)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
@@ -105,7 +105,7 @@ export class V3EntityHandle<T> {
     if (opts.expectVersion !== undefined) {
       await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone)
     const raw = await this.client.transportPatch(url, body, opts, this.entitySet, this.extraHeaders)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
@@ -117,7 +117,7 @@ export class V3EntityHandle<T> {
     if (opts.expectVersion !== undefined) {
       await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone)
     const raw = await this.client.transportPut(url, body, opts, this.entitySet, this.extraHeaders)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
@@ -128,7 +128,7 @@ export class V3EntityHandle<T> {
     if (opts.expectVersion !== undefined) {
       await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone)
     await this.client.transportDelete(url, opts, this.entitySet, this.extraHeaders)
   }
 

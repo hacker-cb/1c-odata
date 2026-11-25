@@ -1,12 +1,21 @@
 // packages/client/src/url-builder.ts
 import { InvalidArgumentError } from './errors.js'
+import { formatNumberLiteral } from './format-number.js'
 import type { QueryBuilder } from './query/builder.js'
+import { formatInZone } from './timezone.js'
 
 /**
- * Composite key for entities with multiple key fields (registers).
+ * An entity key: a `Ref_Key` GUID string, or a composite key — an object of
+ * key field → value for entities with several key fields (registers, tabular
+ * rows). A composite value is written by its JS type, as the 1С docs show it:
+ * a GUID string as `guid'…'`, any other string as a quoted literal, a `number`
+ * or `bigint` bare (`LineNumber=1`), a `Date` as `datetime'…'` in the
+ * connection's `serverTimezone` (`Period=datetime'2025-01-01T00:00:00'`) — so
+ * a `Period` read back from a record keys it as it came.
+ *
  * @public
  */
-export type EntityKey = string | Record<string, string>
+export type EntityKey = string | Record<string, string | number | bigint | Date>
 
 /** A GUID in the 8-4-4-4-12 hex form — the only string key 1С entities take (`Ref_Key`). @internal */
 export const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -107,10 +116,11 @@ export function buildV3CollectionUrl(base: string, q: QueryBuilder<unknown>): st
 }
 
 /**
- * Build a V3 keyed URL: `<base>/<EntitySet>(<key>)?$format=...`.
+ * Build a V3 keyed URL: `<base>/<EntitySet>(<key>)?$format=...`. A `Date` in a
+ * composite key is written in `serverTimezone`.
  */
-export function buildV3KeyUrl(base: string, entitySet: string, key: EntityKey): string {
-  const keyExpr = formatKey(key)
+export function buildV3KeyUrl(base: string, entitySet: string, key: EntityKey, serverTimezone: string): string {
+  const keyExpr = formatKey(key, serverTimezone)
   const path = `${base}/${encodeSegment(entitySet)}(${keyExpr})`
   const formatParam = qp('$format', 'application/json;odata=nometadata')
   return `${path}?${formatParam}`
@@ -179,12 +189,14 @@ export function normalizeBaseUrl(url: string): string {
 /**
  * Format a key as it appears inside `(...)`:
  *   string → `guid'...'` — must be a GUID (a 1С `Ref_Key`)
- *   object → `field1=guid'...',field2='string'` — field names must be 1С names
+ *   object → `field1=guid'...',field2='string',LineNumber=1,Period=datetime'...'`
+ *            — field names must be 1С names; values by JS type (see `EntityKey`),
+ *            a `Date` in `serverTimezone`
  * Anything else is an `InvalidArgumentError`: a key goes into the URL path, so a
  * caller-supplied string (an MCP `get_entity` argument, say) with `'`, `)` or
  * `/` must not rewrite the path the request — with its credentials — reaches.
  */
-export function formatKey(key: EntityKey): string {
+export function formatKey(key: EntityKey, serverTimezone: string): string {
   if (typeof key === 'string') {
     if (!GUID_RE.test(key)) {
       throw new InvalidArgumentError('Entity key must be a GUID (8-4-4-4-12 hex form) or a composite-key object', {
@@ -212,19 +224,34 @@ export function formatKey(key: EntityKey): string {
           },
         )
       }
-      // A number is quoted as its string, as it always was for untyped callers.
-      if (typeof v !== 'string' && typeof v !== 'number') {
-        throw new InvalidArgumentError(`Composite-key field ${k} must be a string value`, {
-          argument: 'key',
-          received: v,
-        })
-      }
-      return `${k}=${formatKeyValue(String(v))}`
+      return `${k}=${formatKeyValue(k, v, serverTimezone)}`
     })
     .join(',')
 }
 
-function formatKeyValue(v: string): string {
+/** One composite-key value as its OData literal, by JS type. */
+function formatKeyValue(field: string, v: unknown, serverTimezone: string): string {
+  if (typeof v === 'string') return formatKeyString(v)
+  // Digits, `.` and `-` only — URL-safe by construction.
+  if (typeof v === 'number') return formatNumberLiteral(v, `key ${field}`)
+  if (typeof v === 'bigint') return String(v)
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) {
+      throw new InvalidArgumentError(`Composite-key field ${field} is an invalid Date`, {
+        argument: 'key',
+        received: v,
+      })
+    }
+    // Digits, `-`, `:`, `.` and `T` — `:` is a legal path character, written raw as 1С writes it in its own links.
+    return `datetime'${formatInZone(v, serverTimezone)}'`
+  }
+  throw new InvalidArgumentError(`Composite-key field ${field} must be a string, number, bigint or Date`, {
+    argument: 'key',
+    received: v,
+  })
+}
+
+function formatKeyString(v: string): string {
   // GUID-shaped: quote as guid. Hex+hyphens only — URL-safe by construction.
   if (GUID_RE.test(v)) return `guid'${v}'`
   // Otherwise treat as string literal. Two-step encoding: OData apostrophe
