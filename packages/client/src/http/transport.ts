@@ -88,10 +88,18 @@ async function prepareRequest(
     ...(combined !== undefined ? { signal: combined } : {}),
   }
 
-  // beforeRequest hook may mutate headers, body, etc.
+  // beforeRequest hook may mutate headers, body, etc. The timeout already runs
+  // (the hook sees its signal), but the callers' `finally` that clears it is
+  // not reached yet — a throwing hook must clear it here, or the pending timer
+  // holds a short-lived process open for the whole timeout.
   if (callOpts.hooks?.beforeRequest) {
-    const result = await callOpts.hooks.beforeRequest(reqEvent)
-    if (result) reqEvent = result
+    try {
+      const result = await callOpts.hooks.beforeRequest(reqEvent)
+      if (result) reqEvent = result
+    } catch (e) {
+      if (timeoutId) clearTimeout(timeoutId)
+      throw e
+    }
   }
 
   const fetchInit: RequestInit = {

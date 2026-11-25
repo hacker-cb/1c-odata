@@ -1,7 +1,7 @@
 import { BasicAuth, HTTPError, NetworkError, type RequestEvent, TimeoutError } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { request } from '../../src/http/transport.js'
+import { request, requestStream } from '../../src/http/transport.js'
 import { createMswServer } from '../fixtures/msw-server.js'
 
 const server = createMswServer()
@@ -275,4 +275,33 @@ describe('transport.request — NetworkError carries the undici cause (#180)', (
       'Network error: fetch failed (failed)',
     )
   })
+})
+
+describe('transport — a failing beforeRequest clears the timeout (#190)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  for (const [name, call] of [
+    ['request', request],
+    ['requestStream', requestStream],
+  ] as const) {
+    it(`${name}: no timer is left pending when the hook rejects`, async () => {
+      vi.useFakeTimers()
+      const hookErr = new Error('token fetch failed')
+      const err = await call(
+        { method: 'GET', url: `${base}/X`, headers: { Authorization: auth.header } },
+        {
+          timeout: 60_000,
+          hooks: {
+            beforeRequest: async () => {
+              throw hookErr
+            },
+          },
+        },
+      ).catch((e: unknown) => e)
+      expect(err).toBe(hookErr)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+  }
 })
