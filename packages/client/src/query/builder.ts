@@ -142,6 +142,12 @@ export class QueryBuilder<T = Record<string, unknown>> {
   /**
    * Add `$inlinecount=allpages` so response includes `odata.count` (string in
    * 1С, library parses to `number`).
+   *
+   * Caveat: by the 1С 8.3.27 documentation, `$inlinecount` makes 1С ignore
+   * `$skip` / `$top`, returning the collection from its start. On the bases
+   * checked so far 1С honours the paging; where it must not depend on the
+   * platform, page without `withCount()` and take the total from `.count()`
+   * (`/$count` with the same `$filter`) instead.
    */
   withCount(): this {
     this.state.inlineCount = true

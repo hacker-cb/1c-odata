@@ -56,10 +56,9 @@ interface QueryOptions {
   select?: string[] | undefined
   expand?: string[] | undefined
   orderBy?: { field: string; dir?: 'asc' | 'desc' | undefined }[] | undefined
-  count?: boolean | undefined
 }
 
-/** Apply the non-paging query options ($filter/$select/$expand/$orderby/$inlinecount) to a builder. */
+/** Apply the non-paging query options ($filter/$select/$expand/$orderby) to a builder. */
 function applyQueryOptions(builder: V3QueryBuilder<UntypedEntity>, opts: QueryOptions): V3QueryBuilder<UntypedEntity> {
   let q = builder
   const filter = opts.filter
@@ -67,8 +66,44 @@ function applyQueryOptions(builder: V3QueryBuilder<UntypedEntity>, opts: QueryOp
   if (opts.select !== undefined && opts.select.length > 0) q = q.select(...opts.select)
   if (opts.expand !== undefined && opts.expand.length > 0) q = q.expand(...opts.expand)
   if (opts.orderBy !== undefined) for (const o of opts.orderBy) q = q.orderBy(o.field, o.dir ?? 'asc')
-  if (opts.count === true) q = q.withCount()
   return q
+}
+
+/**
+ * One page of `q` and, with `count`, the total from the set's `/$count` (the
+ * same `$filter`) in parallel — never `$inlinecount`, with which 1С by its
+ * 8.3.27 documentation drops `$skip` / `$top` (#206). One failing aborts the
+ * other rather than leave it loading what no one reads.
+ */
+async function pageAndCount(
+  q: V3QueryBuilder<UntypedEntity>,
+  count: boolean,
+): Promise<{ value: UntypedEntity[]; count?: number }> {
+  if (!count) return { value: (await q.get()).value }
+  const sibling = new AbortController()
+  try {
+    const [page, total] = await Promise.all([q.get({ signal: sibling.signal }), q.count({ signal: sibling.signal })])
+    return { value: page.value, count: total }
+  } catch (err) {
+    sibling.abort()
+    throw err
+  }
+}
+
+/**
+ * A page 1С sent past `limit` — a publication that ignores `$top` — kept to
+ * `limit` rows. Where the rows match the whole `total`, `$skip` was ignored
+ * too and the page starts at `offset` here; otherwise at the first row sent.
+ */
+function keepToTop<T>(
+  rows: T[],
+  limit: number,
+  offset: number,
+  total: number | undefined,
+): { value: T[]; ignoredTop: boolean; from: number } {
+  if (rows.length <= limit) return { value: rows, ignoredTop: false, from: 0 }
+  const from = offset > 0 && rows.length === total ? offset : 0
+  return { value: rows.slice(from, from + limit), ignoredTop: true, from }
 }
 
 /**
@@ -94,6 +129,13 @@ function hasMoreRows(truncated: boolean, offset: number, fetched: number, limit:
 function truncationNote(truncated: boolean, shown: number, fetched: number, limits: Limits, narrow: string): string {
   if (!truncated) return ''
   return ` ⚠ Output truncated to ${shown} of ${fetched} fetched rows (~${limits.maxBytes}-byte budget); ${narrow}.`
+}
+
+/** The summary's note on a page 1С sent past `top`, cut back by {@link keepToTop}. */
+function ignoredTopNote(sent: number, limit: number, from: number, offset: number): string {
+  const start =
+    from > 0 ? `taking them as the whole set and starting at skip ${offset}` : 'taking them as starting at skip'
+  return ` ⚠ 1С returned ${sent} rows for top ${limit} — it ignored $top here; the page was cut to ${limit} of them, ${start}.`
 }
 
 /** Entity-set paths that are really register virtual tables / flat record sets — nudge toward register_query. */
@@ -140,7 +182,10 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           .describe('Sort specification (applied in order)'),
         top: z.number().int().optional().describe('Max rows to return this page (server-capped; omit for the default)'),
         skip: z.number().int().min(0).optional().describe('Offset for pagination (default 0)'),
-        count: z.boolean().optional().describe('Include the total row count (OData $inlinecount)'),
+        count: z
+          .boolean()
+          .optional()
+          .describe('Include the total row count — a parallel /$count request with the same filter'),
         compact: z
           .boolean()
           .optional()
@@ -154,18 +199,18 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
         const { client } = await pool.get(connection)
         const limit = clampTop(top, limits)
         const offset = skip ?? 0
-        let q = applyQueryOptions(client.query<UntypedEntity>(entitySet), {
-          filter,
-          select,
-          expand,
-          orderBy,
-          count,
-        }).top(limit)
+        let q = applyQueryOptions(client.query<UntypedEntity>(entitySet), { filter, select, expand, orderBy }).top(
+          limit,
+        )
         if (offset > 0) q = q.skip(offset)
 
-        const result = await q.get()
-        const fetched = result.value.length
-        const { rows, truncated } = shapeRows(result.value, compact, limits)
+        const page = await pageAndCount(q, count === true)
+        const total = page.count
+        // A publication that ignores $top hands back more than the page: keep
+        // it to `limit` rows and say so rather than pass them all on.
+        const { value, ignoredTop, from } = keepToTop(page.value, limit, offset, total)
+        const fetched = value.length
+        const { rows, truncated } = shapeRows(value, compact, limits)
         const note = truncationNote(
           truncated,
           rows.length,
@@ -173,19 +218,24 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           limits,
           'narrow with select, set compact:true, or page with skip',
         )
+        const topNote = ignoredTop ? ignoredTopNote(page.value.length, limit, from, offset) : ''
         return {
-          summary: `${rows.length} row(s)${result.count !== undefined ? ` of ${result.count} total` : ''} from ${entitySet}.${note}${registerHint(entitySet)}`,
+          summary: `${rows.length} row(s)${total !== undefined ? ` of ${total} total` : ''} from ${entitySet}.${note}${topNote}${registerHint(entitySet)}`,
           data: {
             connection,
             entitySet,
-            ...(result.count !== undefined ? { count: result.count } : {}),
+            ...(total !== undefined ? { count: total } : {}),
             pagination: {
               skip: offset,
               top: limit,
               fetched,
               returned: rows.length,
               truncated,
-              hasMore: hasMoreRows(truncated, offset, fetched, limit, result.count),
+              // With $top ignored every row from where 1С started is in hand, so
+              // what is left of them says whether more remain.
+              hasMore: ignoredTop
+                ? truncated || from + fetched < page.value.length
+                : hasMoreRows(truncated, offset, fetched, limit, total),
             },
             value: rows,
           },
