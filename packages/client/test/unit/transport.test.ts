@@ -560,85 +560,137 @@ describe('transport — beforeRequest under a request signal, merged (#189 over 
   })
 })
 
-describe('transport — timeout around afterResponse (#204)', () => {
+describe('requestStream — timeout around afterResponse (#204)', () => {
   const target = { method: 'GET' as const, url: `${base}/X`, headers: { Authorization: auth.header } }
-  const ok = () => server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
 
-  for (const [name, call] of [
-    ['request', request],
-    ['requestStream', requestStream],
-  ] as const) {
-    it(`${name}: a hook still pending at the deadline fails the call with TimeoutError, even ignoring the signal`, async () => {
-      ok()
+  /** A 200 whose unread body records its cancellation. */
+  function streamed() {
+    const cancel = vi.fn()
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response(new ReadableStream({ cancel }), { status: 200 }))
+    return { cancel, restore: () => spy.mockRestore() }
+  }
+
+  it('a hook still pending at the deadline fails the call with TimeoutError, even ignoring the signal; the body is cancelled', async () => {
+    const { cancel, restore } = streamed()
+    try {
+      const afterResponse = vi.fn(() => new Promise<void>(() => {}))
       const onError = vi.fn()
-      const err = await call(target, {
-        timeout: 30,
-        hooks: { afterResponse: () => new Promise<void>(() => {}), onError },
-      }).catch((e: unknown) => e)
+      const err = await requestStream(target, { timeout: 30, hooks: { afterResponse, onError } }).catch(
+        (e: unknown) => e,
+      )
+      expect(afterResponse).toHaveBeenCalledOnce()
       expect(err).toBeInstanceOf(TimeoutError)
       expect((err as TimeoutError).timeoutMs).toBe(30)
       expect(onError).toHaveBeenCalledOnce()
       expect(onError.mock.calls[0]?.[1]).toBe(err)
-    })
+      expect(cancel).toHaveBeenCalledOnce()
+    } finally {
+      restore()
+    }
+  })
 
-    it(`${name}: a hook aborted by the deadline through its signal yields TimeoutError, not a bare AbortError`, async () => {
-      ok()
-      const err = await call(target, {
-        timeout: 30,
-        hooks: {
-          afterResponse: (req) =>
-            new Promise<void>((_, reject) => {
-              req.signal?.addEventListener('abort', () => reject(req.signal?.reason), { once: true })
-            }),
-        },
-      }).catch((e: unknown) => e)
+  it('a hook aborted by the deadline through its signal yields TimeoutError, not a bare AbortError', async () => {
+    const { restore } = streamed()
+    try {
+      const afterResponse = vi.fn(
+        (req: RequestEvent) =>
+          new Promise<void>((_, reject) => {
+            req.signal?.addEventListener('abort', () => reject(req.signal?.reason), { once: true })
+          }),
+      )
+      const err = await requestStream(target, { timeout: 30, hooks: { afterResponse } }).catch((e: unknown) => e)
+      expect(afterResponse).toHaveBeenCalledOnce()
       expect(err).toBeInstanceOf(TimeoutError)
-    })
+    } finally {
+      restore()
+    }
+  })
 
-    it(`${name}: a caller's abort during the hook stays the caller's abort, not a timeout`, async () => {
-      ok()
+  it('a hook stopping the abort event on req.signal still cannot hold the call past the deadline', async () => {
+    const { restore } = streamed()
+    try {
+      const afterResponse = (req: RequestEvent) => {
+        req.signal?.addEventListener('abort', (ev) => ev.stopImmediatePropagation())
+        return new Promise<void>(() => {})
+      }
+      const err = await requestStream(target, { timeout: 30, hooks: { afterResponse } }).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(TimeoutError)
+    } finally {
+      restore()
+    }
+  })
+
+  it("a caller's abort during the hook stays the caller's abort, not a timeout", async () => {
+    const { cancel, restore } = streamed()
+    try {
       const ctrl = new AbortController()
       const reason = new Error('caller gave up')
       const onError = vi.fn()
-      const err = await call(target, {
+      const afterResponse = () => {
+        setTimeout(() => ctrl.abort(reason), 10)
+        return new Promise<void>(() => {})
+      }
+      const err = await requestStream(target, {
         timeout: 5_000,
         signal: ctrl.signal,
-        hooks: {
-          afterResponse: () => {
-            setTimeout(() => ctrl.abort(reason), 10)
-            return new Promise<void>(() => {})
-          },
-          onError,
-        },
+        hooks: { afterResponse, onError },
       }).catch((e: unknown) => e)
       expect(err).toBe(reason)
       expect(onError).not.toHaveBeenCalled()
-    })
+      expect(cancel).toHaveBeenCalledOnce()
+    } finally {
+      restore()
+    }
+  })
 
-    it(`${name}: a hook that settles in time leaves the call as it was`, async () => {
-      ok()
-      const res = await call(target, {
+  it('a hook that throws its own error ends the call with it, and aborts what it left under req.signal', async () => {
+    const { restore } = streamed()
+    try {
+      const hookErr = new Error('metrics down')
+      let hookSignal: AbortSignal | undefined
+      const err = await requestStream(target, {
+        timeout: 60_000,
+        hooks: {
+          afterResponse: (req) => {
+            hookSignal = req.signal
+            throw hookErr
+          },
+        },
+      }).catch((e: unknown) => e)
+      expect(err).toBe(hookErr)
+      expect(hookSignal?.aborted).toBe(true)
+    } finally {
+      restore()
+    }
+  })
+
+  it('a hook that settles in time leaves the call as it was', async () => {
+    const { restore } = streamed()
+    try {
+      const res = await requestStream(target, {
         timeout: 5_000,
         hooks: { afterResponse: () => new Promise<void>((r) => setTimeout(r, 10)) },
       })
-      expect('status' in res ? res.status : res.response.status).toBe(200)
-    })
-  }
-
-  it('requestStream: a timeout during the hook cancels the unread body', async () => {
-    const cancel = vi.fn()
-    const spy = vi
-      .spyOn(globalThis, 'fetch')
-      .mockResolvedValue(new Response(new ReadableStream({ cancel }), { status: 200 }))
-    try {
-      const err = await requestStream(target, {
-        timeout: 30,
-        hooks: { afterResponse: () => new Promise<void>(() => {}) },
-      }).catch((e: unknown) => e)
-      expect(err).toBeInstanceOf(TimeoutError)
-      expect(cancel).toHaveBeenCalledOnce()
+      expect(res.response.status).toBe(200)
+      await res.response.body?.cancel()
     } finally {
-      spy.mockRestore()
+      restore()
     }
+  })
+})
+
+describe('request — afterResponse is not bounded by the timeout (#204)', () => {
+  it('a hook slower than the timeout leaves the response read before it standing', async () => {
+    server.use(http.post(`${base}/Document_X`, () => HttpResponse.json({ Ref_Key: 'k' }, { status: 201 })))
+    const onError = vi.fn()
+    const res = await request(
+      { method: 'POST', url: `${base}/Document_X`, headers: { Authorization: auth.header }, body: '{}' },
+      { timeout: 30, hooks: { afterResponse: () => new Promise<void>((r) => setTimeout(r, 80)), onError } },
+    )
+    expect(res.status).toBe(201)
+    expect(res.body).toContain('"Ref_Key"')
+    expect(onError).not.toHaveBeenCalled()
   })
 })

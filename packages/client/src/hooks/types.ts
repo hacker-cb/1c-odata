@@ -47,7 +47,13 @@ export interface RequestHooks {
   /** Before request goes on the wire. Return a (possibly modified) RequestEvent to inject headers / correlation IDs. */
   // biome-ignore lint/suspicious/noConfusingVoidType: void is intentional — it keeps side-effect-only `(req) => void` hooks assignable; the RequestEvent return is the optional "replace the event" path.
   beforeRequest?: (req: RequestEvent) => void | RequestEvent | Promise<void | RequestEvent>
-  /** After response is received and parsed. */
+  /**
+   * After response is received and parsed. Not bounded by the request timeout
+   * on a buffered call — the response is already read and stands however long
+   * the hook takes. On a streamed read (`readStream`, `body` undefined) it is:
+   * a hook outlasting the timeout fails the call with a `TimeoutError` and the
+   * unread body is cancelled.
+   */
   afterResponse?: (req: RequestEvent, res: ResponseEvent) => void | Promise<void>
   /** When an error (network/timeout/HTTP) is about to be thrown. */
   onError?: (req: RequestEvent, err: ODataError) => void | Promise<void>

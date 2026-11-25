@@ -28,6 +28,12 @@ export interface ClientOptions {
    * **Omitting this option entirely disables the timeout** — requests wait
    * indefinitely. Set `0` to explicitly disable. There is NO hidden default
    * cap; production code should set a reasonable value (e.g. `30_000`).
+   *
+   * It bounds the exchange with 1С, `beforeRequest` included. It does not
+   * bound `afterResponse` on a buffered call — the response is read by then
+   * and stands however long the hook takes — but does on a streamed read
+   * (`readStream`), where the body is still unread: a hook outlasting it fails
+   * the call with a `TimeoutError` and the body is cancelled.
    */
   timeout?: number
 
@@ -48,7 +54,7 @@ export interface RequestOptions {
    * `AbortSignal.any`: either one aborts the call, a retry's pause included.
    */
   signal?: AbortSignal
-  /** Override timeout. `0` = disable. */
+  /** Override timeout. `0` = disable. What it bounds: `ClientOptions.timeout`. */
   timeout?: number
   /** Override retry policy. `false` = disable retries for this call. */
   retry?: RetryPolicy | false
