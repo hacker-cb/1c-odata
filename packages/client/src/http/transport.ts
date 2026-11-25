@@ -70,7 +70,7 @@ interface PreparedRequest {
 async function prepareRequest(
   config: RequestConfig,
   callOpts: TransportOptions & RequestOptions,
-  trace: HookTrace | undefined,
+  trace: AttemptTrace | undefined,
 ): Promise<PreparedRequest> {
   const start = Date.now()
 
@@ -117,6 +117,7 @@ async function prepareRequest(
     timeoutSignal?.abort()
     throw e
   }
+  if (trace) trace.method = reqEvent.method
 
   const fetchInit: RequestInit = {
     method: reqEvent.method,
@@ -244,14 +245,16 @@ function networkErrorMessage(e: unknown): string {
 }
 
 /**
- * One call's record of whether a hook's own exception ended it. Retry hands
- * a fresh one to every attempt and never repeats an attempt a hook ended —
- * per call, so no other request's hooks can touch it.
+ * One call's record for retry: whether a hook's own exception ended it, and
+ * the method actually sent. Retry hands a fresh one to every attempt — per
+ * call, so no other request's hooks can touch it.
  *
  * @internal — written by the transport, read by `http/retry.ts`.
  */
-export interface HookTrace {
+export interface AttemptTrace {
   threw: boolean
+  /** The method sent, after `beforeRequest` — set once the hook has run. */
+  method?: RequestEvent['method']
 }
 
 /**
@@ -260,7 +263,11 @@ export interface HookTrace {
  * `onError` rethrowing `handed`, the very error it was given, leaves that the
  * library's error, retried as its type and status say.
  */
-async function runHook<T>(call: () => T | PromiseLike<T>, trace: HookTrace | undefined, handed?: unknown): Promise<T> {
+async function runHook<T>(
+  call: () => T | PromiseLike<T>,
+  trace: AttemptTrace | undefined,
+  handed?: unknown,
+): Promise<T> {
   try {
     return await call()
   } catch (e) {
@@ -282,7 +289,7 @@ async function translateAndFireError(
   timeoutSignal: AbortController | undefined,
   timeoutMs: number | undefined,
   requestSignal: AbortSignal | null | undefined,
-  trace: HookTrace | undefined,
+  trace: AttemptTrace | undefined,
 ): Promise<never> {
   const request: RequestContext = { method: reqEvent.method, url: reqEvent.url }
   // The request signal carries the reason of whichever source aborted it
@@ -331,7 +338,7 @@ async function translateAndFireError(
 export async function request(
   config: RequestConfig,
   callOpts: TransportOptions & RequestOptions,
-  trace?: HookTrace,
+  trace?: AttemptTrace,
 ): Promise<RawResponse> {
   const prepared = await prepareRequest(config, callOpts, trace)
   const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs } = prepared
@@ -419,7 +426,7 @@ export async function request(
 export async function requestStream(
   config: RequestConfig,
   callOpts: TransportOptions & RequestOptions,
-  trace?: HookTrace,
+  trace?: AttemptTrace,
 ): Promise<StreamResponse> {
   const prepared = await prepareRequest(config, callOpts, trace)
   const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs } = prepared

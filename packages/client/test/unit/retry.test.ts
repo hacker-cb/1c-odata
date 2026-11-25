@@ -393,3 +393,51 @@ describe('requestWithRetry — what stops a retry, re-read (#189)', () => {
     expect(n).toBe(3)
   })
 })
+
+describe('requestWithRetry — decides by the method actually sent (#189)', () => {
+  const busy = () =>
+    new HttpResponse('{"odata.error":{"code":"0","message":{"value":"busy"}}}', {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    })
+  const policy: RetryPolicy = { ...retryPolicy, retryableStatuses: [503], retryableMethods: ['GET'] }
+
+  it('a beforeRequest turning GET into PATCH: the 503 is not retried when PATCH is not retryable', async () => {
+    let n = 0
+    server.use(
+      http.patch(`${base}/Catalog_X`, () => {
+        n++
+        return busy()
+      }),
+    )
+    const err = await requestWithRetry(
+      { method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header } },
+      { retry: policy, hooks: { beforeRequest: (req) => ({ ...req, method: 'PATCH', body: '{}' }) } },
+    ).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(HTTPError)
+    expect(n).toBe(1)
+  })
+
+  it('a beforeRequest turning PATCH into GET: the 503 is retried when GET is', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        return busy()
+      }),
+    )
+    await requestWithRetry(
+      { method: 'PATCH', url: `${base}/Catalog_X`, headers: { Authorization: auth.header }, body: '{}' },
+      {
+        retry: policy,
+        hooks: {
+          beforeRequest: (req) => {
+            const { body: _body, ...rest } = req
+            return { ...rest, method: 'GET' }
+          },
+        },
+      },
+    ).catch(() => {})
+    expect(n).toBe(3)
+  })
+})

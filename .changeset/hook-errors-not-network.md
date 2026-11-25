@@ -11,3 +11,5 @@ A JSON error body of `null` — from a proxy, say — is now a `ParseError` ("mi
 A caller's abort is now rethrown as the reason it was given — `controller.abort(new Error('…'))` comes back as that error, as a plain `abort()` already came back as its `AbortError` — and is never retried, whatever the reason's type; before, a custom reason became a `NetworkError` that retry repeated. A caller's abort that lands before the timeout fires is the caller's abort, not a `TimeoutError`.
 
 In `requestStream()`, an `afterResponse` hook that throws now cancels the unread response body, releasing its connection, instead of leaving it to the garbage collector.
+
+Retry now decides by the method that was actually sent: a `beforeRequest` hook that replaces the method — `GET` into `PATCH`, say — is checked against `retryableMethods` as sent, so a write it produces is not repeated unless its method is listed, and a request it turns into a listed method is retried.

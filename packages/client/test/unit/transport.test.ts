@@ -1,7 +1,7 @@
 import { BasicAuth, HTTPError, NetworkError, type RequestEvent, TimeoutError } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { type HookTrace, request, requestStream } from '../../src/http/transport.js'
+import { type AttemptTrace, request, requestStream } from '../../src/http/transport.js'
 import { createMswServer } from '../fixtures/msw-server.js'
 
 const server = createMswServer()
@@ -433,13 +433,13 @@ describe('transport — the per-call hook trace retry reads (#189)', () => {
       http.get(`${base}/Ok`, () => HttpResponse.json({ value: [] })),
       http.get(`${base}/Busy`, failing),
     )
-    const afterTrace: HookTrace = { threw: false }
+    const afterTrace: AttemptTrace = { threw: false }
     await request(at('Ok'), { hooks: { afterResponse: () => Promise.reject(new Error('x')) } }, afterTrace).catch(
       () => {},
     )
     expect(afterTrace.threw).toBe(true)
 
-    const rethrowTrace: HookTrace = { threw: false }
+    const rethrowTrace: AttemptTrace = { threw: false }
     const rethrown = await request(
       at('Busy'),
       {
@@ -454,7 +454,7 @@ describe('transport — the per-call hook trace retry reads (#189)', () => {
     expect(rethrown).toBeInstanceOf(HTTPError)
     expect(rethrowTrace.threw).toBe(false)
 
-    const otherTrace: HookTrace = { threw: false }
+    const otherTrace: AttemptTrace = { threw: false }
     await request(
       at('Busy'),
       {
@@ -484,7 +484,7 @@ describe('transport — the per-call hook trace retry reads (#189)', () => {
       held = r
     })
     // B: onError holds the error it was handed, then rethrows it — the library's error.
-    const bTrace: HookTrace = { threw: false }
+    const bTrace: AttemptTrace = { threw: false }
     const b = request(
       at('Busy'),
       {
@@ -501,7 +501,7 @@ describe('transport — the per-call hook trace retry reads (#189)', () => {
     ).catch((e: unknown) => e)
     await holding
     // A: its afterResponse throws that same object — A's hook's own exception.
-    const aTrace: HookTrace = { threw: false }
+    const aTrace: AttemptTrace = { threw: false }
     const a = request(
       at('Ok'),
       {
