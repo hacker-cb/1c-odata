@@ -1,5 +1,12 @@
 # @1c-odata/metadata
 
+## 0.9.1
+
+### Patch Changes
+
+- Updated dependencies [[`5b7df24`](https://github.com/hacker-cb/1c-odata/commit/5b7df24d16b07d8c6775a589523c3ac09efdd67f), [`6c9aa0d`](https://github.com/hacker-cb/1c-odata/commit/6c9aa0dcb153d1ba3b6a308651d90c40685d688c), [`6dd16fe`](https://github.com/hacker-cb/1c-odata/commit/6dd16fe27544cd8fcf7d612a2773331a974d74dd), [`8d973aa`](https://github.com/hacker-cb/1c-odata/commit/8d973aa5cf636d8d214bb1fbb99f9fe1e62d08d2)]:
+  - @1c-odata/client@0.9.1
+
 ## 0.9.0
 
 ### Patch Changes
