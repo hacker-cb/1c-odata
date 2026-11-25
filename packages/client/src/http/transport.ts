@@ -59,19 +59,19 @@ interface PreparedRequest {
  * dispatch paths. Runs the `beforeRequest` hook, combines signals, and
  * starts the timeout.
  *
- * The timeout covers the hook too: it starts first, the hook sees it in
- * `req.signal`, and a hook still pending when it fires fails the call with a
- * `TimeoutError` (`onError` fired) even where the hook ignores the signal. A
- * hook that throws before then fails the call with its own error, unchanged;
- * the timer is left to fire at its deadline, so work the hook started under
- * `req.signal` stays bounded by it.
+ * The timeout covers the hook too: it starts first and the hook sees it in
+ * `req.signal`. The wait for the hook ends with that signal — a timeout while
+ * it runs fails the call with a `TimeoutError` (`onError` fired), a caller's
+ * abort with the abort's reason, even where the hook ignores the signal. A
+ * hook that throws fails the call with its own error, unchanged; the call ends
+ * there, so its timer is cleared and `req.signal` aborted — work the hook left
+ * running under it is cancelled rather than left without a deadline.
  */
 async function prepareRequest(
   config: RequestConfig,
   callOpts: TransportOptions & RequestOptions,
 ): Promise<PreparedRequest> {
   const start = Date.now()
-  const beforeRequest = callOpts.hooks?.beforeRequest
 
   // Combine signals: client.signal + per-call.signal + timeout signal.
   const signals: AbortSignal[] = []
@@ -83,10 +83,6 @@ async function prepareRequest(
   if (timeoutMs && timeoutMs > 0) {
     timeoutSignal = new AbortController()
     timeoutId = setTimeout(() => timeoutSignal?.abort(), timeoutMs)
-    // A deadline, not work: whatever the request is waiting on (a socket, the
-    // hook's own I/O) keeps the process alive; the timer alone never does, so
-    // a path that leaves it pending cannot hold a short-lived process open.
-    timeoutId.unref()
     signals.push(timeoutSignal.signal)
   }
   const combined = signals.length > 0 ? AbortSignal.any(signals) : undefined
@@ -101,15 +97,18 @@ async function prepareRequest(
   }
 
   // beforeRequest hook may mutate headers, body, etc.
-  if (beforeRequest) {
+  if (callOpts.hooks?.beforeRequest) {
     try {
-      const result = await withinDeadline(beforeRequest, reqEvent, timeoutSignal?.signal)
+      const result = await settleWithin(callOpts.hooks.beforeRequest(reqEvent), combined)
       if (result) reqEvent = result
     } catch (e) {
       // The deadline passed while the hook ran: a timeout, as on the wire.
       if (timeoutSignal?.signal.aborted && e instanceof Error && e.name === 'AbortError') {
         await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs)
       }
+      // The callers' `finally` that clears the timer is not reached from here.
+      if (timeoutId) clearTimeout(timeoutId)
+      timeoutSignal?.abort()
       throw e
     }
   }
@@ -125,30 +124,22 @@ async function prepareRequest(
 }
 
 /**
- * Run the `beforeRequest` hook, rejecting with the deadline's abort reason (an
- * `AbortError`) the moment `deadline` fires — whether or not the hook honours
- * `req.signal`. A hook outrun by the deadline is left to settle on its own; its
- * later rejection is nobody's to handle and is swallowed.
+ * Await `value`, rejecting with `signal`'s abort reason the moment it aborts —
+ * whether or not the work behind `value` honours the signal. Work outrun by
+ * the signal is left to settle on its own (the race keeps its rejection handled).
  */
-async function withinDeadline(
-  hook: NonNullable<RequestHooks['beforeRequest']>,
-  reqEvent: RequestEvent,
-  deadline: AbortSignal | undefined,
-  // biome-ignore lint/suspicious/noConfusingVoidType: mirrors the hook's own return type.
-): Promise<void | RequestEvent> {
-  const pending = Promise.resolve().then(() => hook(reqEvent))
-  if (!deadline) return pending
-  pending.catch(() => {})
+async function settleWithin<T>(value: T | PromiseLike<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return value
   let onAbort = (): void => {}
-  const expired = new Promise<never>((_, reject) => {
-    onAbort = () => reject(deadline.reason)
-    if (deadline.aborted) onAbort()
-    else deadline.addEventListener('abort', onAbort, { once: true })
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason)
+    if (signal.aborted) onAbort()
+    else signal.addEventListener('abort', onAbort, { once: true })
   })
   try {
-    return await Promise.race([pending, expired])
+    return await Promise.race([value, aborted])
   } finally {
-    deadline.removeEventListener('abort', onAbort)
+    signal.removeEventListener('abort', onAbort)
   }
 }
 

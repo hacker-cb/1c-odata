@@ -288,7 +288,7 @@ describe('transport — timeout around beforeRequest (#190)', () => {
     ['request', request],
     ['requestStream', requestStream],
   ] as const) {
-    it(`${name}: a rejecting hook fails the call with its own error, and the timer does not hold the process`, async () => {
+    it(`${name}: a rejecting hook fails the call with its own error, leaving no timer and its signal aborted`, async () => {
       vi.useFakeTimers()
       const hookErr = new Error('token fetch failed')
       let hookSignal: AbortSignal | undefined
@@ -305,13 +305,9 @@ describe('transport — timeout around beforeRequest (#190)', () => {
       }).catch((e: unknown) => e)
       expect(err).toBe(hookErr)
       expect(onError).not.toHaveBeenCalled()
-      // The timer is pending but unref'd: it never keeps a short-lived process alive …
-      expect(vi.getTimerCount()).toBe(1)
-      // … and it still bounds what the hook started under its signal.
-      expect(hookSignal?.aborted).toBe(false)
-      await vi.advanceTimersByTimeAsync(60_000)
-      expect(hookSignal?.aborted).toBe(true)
       expect(vi.getTimerCount()).toBe(0)
+      // The call is over: work the hook left running under its signal is cancelled.
+      expect(hookSignal?.aborted).toBe(true)
     })
 
     it(`${name}: a hook still pending at the deadline fails the call with TimeoutError, even ignoring the signal`, async () => {
@@ -338,18 +334,34 @@ describe('transport — timeout around beforeRequest (#190)', () => {
       }).catch((e: unknown) => e)
       expect(err).toBeInstanceOf(TimeoutError)
     })
+
+    it(`${name}: a caller's abort during the hook stays the caller's abort, not a timeout`, async () => {
+      const ctrl = new AbortController()
+      const onError = vi.fn()
+      setTimeout(() => ctrl.abort(), 10)
+      const err = await call(target, {
+        timeout: 5_000,
+        signal: ctrl.signal,
+        hooks: { beforeRequest: () => new Promise<void>(() => {}), onError },
+      }).catch((e: unknown) => e)
+      expect(err).not.toBeInstanceOf(TimeoutError)
+      expect((err as Error).name).toBe('AbortError')
+      expect(onError).not.toHaveBeenCalled()
+    })
   }
 
-  it('the timeout timer is unref’d', async () => {
-    const spy = vi.spyOn(globalThis, 'setTimeout')
+  it('calls beforeRequest as a method of the hooks object, synchronously', async () => {
     server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
-    try {
-      await request(target, { timeout: 60_000 })
-      const ours = spy.mock.calls.findIndex((c) => c[1] === 60_000)
-      const timer = spy.mock.results[ours]?.value as NodeJS.Timeout
-      expect(timer.hasRef()).toBe(false)
-    } finally {
-      spy.mockRestore()
+    let ran = false
+    const hooks = {
+      token: 'abc',
+      beforeRequest(this: { token: string }, req: RequestEvent): RequestEvent {
+        ran = true
+        return { ...req, headers: { ...req.headers, 'x-token': this.token } }
+      },
     }
+    const pending = request(target, { timeout: 60_000, hooks })
+    expect(ran).toBe(true)
+    await expect(pending).resolves.toMatchObject({ status: 200 })
   })
 })
