@@ -1,5 +1,15 @@
 # @1c-odata/mcp
 
+## 0.9.1
+
+### Patch Changes
+
+- [#209](https://github.com/hacker-cb/1c-odata/pull/209) [`8d973aa`](https://github.com/hacker-cb/1c-odata/commit/8d973aa5cf636d8d214bb1fbb99f9fe1e62d08d2) Thanks [@hacker-cb](https://github.com/hacker-cb)! - MCP `query` with `count: true` no longer sends `$inlinecount`. By the 1С 8.3.27 documentation `$inlinecount` makes 1С drop `$skip` / `$top`, so on a publication that behaves as documented `query` with `count` and `skip` would silently return the start of the collection as the page asked for. The tool now reads the page alone and the exact total from the set's `/$count` (same `$filter`) in a parallel request — as `register_query` does — and a failure of either fails the call and aborts the other. The page never holds more than `top` rows: one 1С sends past `top` (a publication ignoring `$top`) is cut back to `top`. A page that cannot be placed — past `top` without `count`, or at a `skip` with exactly as many rows as 1С counted (it ignored `$skip`, or counts short) — offers no paging on (`hasMore: false`), and the summary says why. An empty page always ends the paging, whatever the count says. The client's `withCount()` is unchanged; its JSDoc now names the documented caveat and the `.count()` alternative.
+
+- Updated dependencies [[`5b7df24`](https://github.com/hacker-cb/1c-odata/commit/5b7df24d16b07d8c6775a589523c3ac09efdd67f), [`6c9aa0d`](https://github.com/hacker-cb/1c-odata/commit/6c9aa0dcb153d1ba3b6a308651d90c40685d688c), [`6dd16fe`](https://github.com/hacker-cb/1c-odata/commit/6dd16fe27544cd8fcf7d612a2773331a974d74dd), [`8d973aa`](https://github.com/hacker-cb/1c-odata/commit/8d973aa5cf636d8d214bb1fbb99f9fe1e62d08d2)]:
+  - @1c-odata/client@0.9.1
+  - @1c-odata/metadata@0.9.1
+
 ## 0.9.0
 
 ### Minor Changes
