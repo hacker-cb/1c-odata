@@ -185,11 +185,17 @@ export class SecretStore {
     return { backend: 'file' }
   }
 
-  /** Remove a password from every backend (file + keychain), regardless of preference. */
-  async remove(name: string): Promise<void> {
-    // Best-effort delete from BOTH backends — a secret may have been written to
-    // either on an earlier run (e.g. keychain then later `--insecure-storage`).
-    await this.keychainDelete(name)
+  /**
+   * Remove a password from every backend (file + keychain), regardless of
+   * preference — a secret may have been written to either on an earlier run
+   * (e.g. keychain then later `--insecure-storage`). Best-effort on the
+   * keychain unless `strict`: then a keychain this store reads that fails to
+   * delete (an error, not "no such entry") throws, as a password left there
+   * would be read again once the keychain answers. `--insecure-storage` never
+   * reads the keychain, so its delete stays best-effort even then.
+   */
+  async remove(name: string, opts: { strict?: boolean } = {}): Promise<void> {
+    await this.keychainDelete(name, opts.strict === true && !this.insecure)
     this.fileDelete(name)
   }
 
@@ -205,13 +211,22 @@ export class SecretStore {
     }
   }
 
-  private async keychainDelete(name: string): Promise<void> {
+  /**
+   * Delete `name`'s keychain entry. "No such entry" is not an error (the
+   * backend answers `false`); a keychain that fails otherwise is ignored —
+   * nothing reachable to delete — unless `strict`, when it throws.
+   */
+  private async keychainDelete(name: string, strict = false): Promise<void> {
     const mod = await this.keyringModule()
     if (mod === null) return
     try {
       this.keychainEntry(mod, name).deletePassword()
-    } catch {
-      // no entry / keychain unreachable — nothing to delete
+    } catch (err) {
+      if (strict) {
+        throw new Error(
+          `Could not delete the stored password of "${name}" from the OS keychain (${errMessage(err)}); nothing was changed. Fix the keychain and retry.`,
+        )
+      }
     }
   }
 

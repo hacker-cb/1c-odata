@@ -207,7 +207,8 @@ async function applyUpsertSecret(
     return { passwordBackend: (await store.write(name, password)).backend, passwordCleared: false }
   }
   if (existing !== undefined && !sameAuthTarget(existing, next)) {
-    await store.remove(name)
+    // Fail closed: a password left behind would go to the new target once read again.
+    await store.remove(name, { strict: true })
     return { passwordCleared: true }
   }
   return { passwordCleared: false }
