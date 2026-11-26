@@ -147,10 +147,17 @@ describe('register_query pages on the 1С server (#192)', () => {
     expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
   })
 
-  it('narrows extDimensions only by what it takes', async () => {
-    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true })
-    const { summary } = await run({ skip: 8, table: 'extDimensions' })
+  it('narrows extDimensions only by what it takes, the truncation hint included', async () => {
+    const { run } = setup(
+      10,
+      { ...limits, maxBytes: 1024 },
+      { ignoreTop: true, ignoreSkip: true, pad: 'x'.repeat(600) },
+    )
+    const { data, summary } = await run({ skip: 8, table: 'extDimensions' })
+    expect(data.pagination.truncated).toBe(true)
+    expect(JSON.stringify(summary)).toContain('narrow with filter or select, or set compact:true')
     expect(JSON.stringify(summary)).toContain('Paging on stops here: narrow with filter or select')
+    expect(JSON.stringify(summary)).not.toContain('condition')
   })
 
   it('claims no rows past the count on an empty page past it', async () => {

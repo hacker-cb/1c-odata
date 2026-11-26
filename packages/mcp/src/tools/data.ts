@@ -430,21 +430,14 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           client.serverTimezone,
         )
         const total = page.count
+        // extDimensions takes no condition or period: only its system options narrow it.
+        const narrowBy = args.table === 'extDimensions' ? 'filter or select' : 'condition, period, filter or select'
         const {
           value,
           more,
           pageable,
           note: pageNote,
-        } = placePage(
-          page.value,
-          limit,
-          offset,
-          total,
-          // extDimensions takes no condition or period: only its system options narrow it.
-          args.table === 'extDimensions'
-            ? 'narrow with filter or select'
-            : 'narrow with condition, period, filter or select',
-        )
+        } = placePage(page.value, limit, offset, total, `narrow with ${narrowBy}`)
         // 1С may count a $select as rolled up while returning its rows un-rolled:
         // once a page's rows outrun the count it is no guide to whether more remain.
         const countNote =
@@ -457,7 +450,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           rows.length,
           value.length,
           limits,
-          `narrow with select/condition/filter${pageable ? ', set compact:true, or page with skip' : ' or set compact:true'}`,
+          `narrow with ${narrowBy}${pageable ? ', set compact:true, or page with skip' : ', or set compact:true'}`,
         )
         return {
           summary: `${rows.length} row(s) of ${total} total from ${args.register}.${args.table}.${note}${pageNote}${countNote}`,
