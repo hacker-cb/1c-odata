@@ -35,9 +35,8 @@ export interface ClientOptions {
    * (`readStream`), where the body is still unread: a hook outlasting it fails
    * the call with a `TimeoutError` and the body is cancelled. Reading a
    * streamed body once `readStream` has returned is not bounded by it — bound
-   * that with your own `AbortSignal`. It bounds the wait for `onError` on a
-   * timeout (not awaited at all) and on a network failure (awaited for what is
-   * left of it), but not on an HTTP error — see `RequestHooks.onError`.
+   * that with your own `AbortSignal`. What it bounds of each hook, `onError`
+   * included: `RequestHooks`, "How long the call waits for a hook".
    */
   timeout?: number
 

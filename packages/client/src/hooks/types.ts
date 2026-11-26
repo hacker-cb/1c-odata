@@ -53,6 +53,32 @@ export interface ResponseEvent {
  *   throw err // still the library's error: a retryable 503 is retried
  * }
  * ```
+ *
+ * **How long the call waits for a hook.** A caller's abort (its own
+ * `AbortSignal`, client- or call-level) ends the wait for every hook but one —
+ * `afterResponse` on a buffered call, where the response is already in hand
+ * and a write 1С has made must not turn into an abort. The `timeout` ends it
+ * only while it still bounds the exchange. A wait that ends early leaves the
+ * hook to finish by itself, under an aborted `req.signal`, and what it throws
+ * later is dropped. It is the promise a hook returns that is waited for: its
+ * synchronous part runs before the call goes on either way.
+ *
+ * - `beforeRequest` — timeout and abort. The timeout: a `TimeoutError`
+ *   (`onError` called). The abort: its reason.
+ * - `afterResponse`, buffered call — neither. The response, however long the
+ *   hook takes.
+ * - `afterResponse`, streamed read (`readStream`) — timeout and abort. A
+ *   `TimeoutError` (`onError` called) or the abort's reason; the unread body
+ *   is cancelled.
+ * - `onError` with a `TimeoutError` — not waited for at all: the
+ *   `TimeoutError` at once.
+ * - `onError` with a `NetworkError` — what is left of the timeout, and abort.
+ *   Past the deadline, that `NetworkError` — retried as one where a retry
+ *   policy allows, the outrun hook still running. The abort: its reason.
+ * - `onError` with an `HTTPError` (or a subclass) — abort only: the exchange
+ *   is over and the timeout stopped with the body read. The abort: its reason.
+ *
+ * With neither a `timeout` nor a signal, every hook is waited for in full.
  * @public
  */
 export interface RequestHooks {
@@ -60,24 +86,16 @@ export interface RequestHooks {
   // biome-ignore lint/suspicious/noConfusingVoidType: void is intentional — it keeps side-effect-only `(req) => void` hooks assignable; the RequestEvent return is the optional "replace the event" path.
   beforeRequest?: (req: RequestEvent) => void | RequestEvent | Promise<void | RequestEvent>
   /**
-   * After response is received and parsed. Not bounded by the request timeout
-   * on a buffered call — the response is already read and stands however long
-   * the hook takes. On a streamed read (`readStream`, `body` undefined) it is:
-   * a hook outlasting the timeout fails the call with a `TimeoutError` and the
-   * unread body is cancelled.
+   * After response is received and parsed. Bounded on a streamed read
+   * (`readStream`, `body` undefined) but not on a buffered call — see "How
+   * long the call waits for a hook" above.
    */
   afterResponse?: (req: RequestEvent, res: ResponseEvent) => void | Promise<void>
   /**
-   * When an error (network/timeout/HTTP) is about to be thrown. Its wait is
-   * bounded like the request: on a `TimeoutError` it is called but not
-   * awaited — the call fails at once, and what it throws or rejects with later
-   * is dropped. On a `NetworkError` it is awaited until what is left of the
-   * timeout, or the caller's abort: the call then fails with that
-   * `NetworkError`, or with the abort's reason, and the hook goes on by itself
-   * under an aborted `req.signal`. With neither a timeout nor a signal, and on
-   * an `HTTPError` (the exchange is over), it is awaited in full. To be sure a
-   * side effect of it finished — a log flushed — await that in your own code,
-   * not through the call's rejection.
+   * When an error (network/timeout/HTTP) is about to be thrown. How long the
+   * call waits for it: see "How long the call waits for a hook" above — on a
+   * timeout not at all. To be sure a side effect of it finished — a log
+   * flushed — await that in your own code, not through the call's rejection.
    */
   onError?: (req: RequestEvent, err: ODataError) => void | Promise<void>
 }

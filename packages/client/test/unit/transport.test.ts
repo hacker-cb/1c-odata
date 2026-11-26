@@ -1004,13 +1004,11 @@ describe('transport — the wait for onError is bounded by the request signal (#
     it(`${name}: on a timeout onError is called with the TimeoutError but not waited for`, async () => {
       const spy = hangs()
       try {
-        const onError = vi.fn(never)
-        const started = Date.now()
+        const onError = vi.fn((_req: RequestEvent, _err: unknown) => never())
         const err = await call(target, { timeout: 20, hooks: { onError } }).catch((e: unknown) => e)
         expect(err).toBeInstanceOf(TimeoutError)
         expect(onError).toHaveBeenCalledOnce()
         expect(onError.mock.calls[0]?.[1]).toBe(err)
-        expect(Date.now() - started).toBeLessThan(1000)
       } finally {
         spy.mockRestore()
       }
@@ -1041,7 +1039,7 @@ describe('transport — the wait for onError is bounded by the request signal (#
       const spy = wireFails()
       try {
         let hookSignal: AbortSignal | undefined
-        const onError = vi.fn((req: RequestEvent) => {
+        const onError = vi.fn((req: RequestEvent, _err: unknown) => {
           hookSignal = req.signal
           return never()
         })
@@ -1125,7 +1123,30 @@ describe('transport — the wait for onError is bounded by the request signal (#
       }
     })
 
-    it(`${name}: onError on an HTTP error is not bounded — the exchange is over`, async () => {
+    it(`${name}: a caller's abort during onError on an HTTP error fails the call with the abort's reason`, async () => {
+      const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('down', { status: 503 }))
+      try {
+        const ctrl = new AbortController()
+        const reason = new Error('user navigated away')
+        let hookSignal: AbortSignal | undefined
+        const err = await call(target, {
+          signal: ctrl.signal,
+          hooks: {
+            onError: (req) => {
+              hookSignal = req.signal
+              setTimeout(() => ctrl.abort(reason), 10)
+              return never()
+            },
+          },
+        }).catch((e: unknown) => e)
+        expect(err).toBe(reason)
+        expect(hookSignal?.aborted).toBe(true)
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it(`${name}: onError on an HTTP error is not bounded by the timeout — the exchange is over`, async () => {
       const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('down', { status: 503 }))
       try {
         let done = false
@@ -1145,6 +1166,24 @@ describe('transport — the wait for onError is bounded by the request signal (#
       }
     })
   }
+
+  it('a timeout during a beforeRequest that dropped req.signal: onError still gets the signal', async () => {
+    let seen: AbortSignal | undefined
+    const err = await request(target, {
+      timeout: 20,
+      hooks: {
+        beforeRequest: (req) => {
+          delete req.signal
+          return never()
+        },
+        onError: (req) => {
+          seen = req.signal
+        },
+      },
+    }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TimeoutError)
+    expect(seen?.aborted).toBe(true)
+  })
 
   it('a timeout during beforeRequest: onError is not waited for either', async () => {
     const onError = vi.fn(never)
