@@ -299,10 +299,13 @@ function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & Fiel
             : `substring(${expr}, ${s})`
         return wrapField<string>(inner, ctx)
       },
-      add: (v: unknown) => wrapField<number>(`${expr} add ${formatLiteral(v, ctx, expr)}`, ctx),
-      sub: (v: unknown) => wrapField<number>(`${expr} sub ${formatLiteral(v, ctx, expr)}`, ctx),
-      mul: (v: unknown) => wrapField<number>(`${expr} mul ${formatLiteral(v, ctx, expr)}`, ctx),
-      div: (v: unknown) => wrapField<number>(`${expr} div ${formatLiteral(v, ctx, expr)}`, ctx),
+      // Each arithmetic operation in its own parentheses: OData binds mul/div
+      // tighter than add/sub, so a chain written bare — `A add 1 mul 2` — would
+      // not compute what the calls say, `(A add 1) mul 2`.
+      add: (v: unknown) => wrapField<number>(`(${expr} add ${formatLiteral(v, ctx, expr)})`, ctx),
+      sub: (v: unknown) => wrapField<number>(`(${expr} sub ${formatLiteral(v, ctx, expr)})`, ctx),
+      mul: (v: unknown) => wrapField<number>(`(${expr} mul ${formatLiteral(v, ctx, expr)})`, ctx),
+      div: (v: unknown) => wrapField<number>(`(${expr} div ${formatLiteral(v, ctx, expr)})`, ctx),
       round: () => wrapField<number>(`round(${expr})`, ctx),
       year: () => wrapField<number>(`year(${expr})`, ctx),
       month: () => wrapField<number>(`month(${expr})`, ctx),
