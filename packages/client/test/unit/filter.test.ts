@@ -417,6 +417,25 @@ describe('FilterBuilder — undefined is no value (#229)', () => {
     expect(() => c((f) => u(f.Code).like?.(undefined))).toThrow(InvalidArgumentError)
     expect(() => c((f) => u(f.Date).datedifference?.(undefined, 'day').eq(1))).toThrow(InvalidArgumentError)
     expect(() => c((f) => u(f.Recorder).isof?.(undefined))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Recorder).cast?.(undefined).eq('x'))).toThrow(InvalidArgumentError)
+  })
+
+  it('a function or a symbol is no value either — an uncalled method, a symbol', () => {
+    expect(() => c((f) => u(f.Сумма).eq?.(f.Date.year))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Code).eq?.(Symbol('x')))).toThrow(InvalidArgumentError)
+  })
+
+  it('the types refuse undefined: a field typed `X | undefined` compares with an X, null or a field', () => {
+    type Row = { Артикул: string | undefined; Сумма: number | null | undefined }
+    const t = (fn: (f: FieldExprMap<Row>) => ReturnType<typeof raw>) => compileFilter<Row>('UTC', fn)
+    const row: Row = { Артикул: 'A-1', Сумма: null }
+    expect(t((f) => f.Артикул.eq('A-1'))).toBe(`Артикул eq 'A-1'`)
+    expect(t((f) => f.Сумма.eq(null))).toBe('Сумма eq null')
+    expect(t((f) => f.Артикул.ne(f.Артикул))).toBe('Артикул ne Артикул')
+    // @ts-expect-error — `undefined` is not a value
+    expect(() => t((f) => f.Артикул.eq(undefined))).toThrow(InvalidArgumentError)
+    // @ts-expect-error — a value that may be undefined is checked before the filter
+    expect(() => t((f) => f.Артикул.ne(row.Сумма === null ? undefined : row.Артикул))).toThrow(InvalidArgumentError)
   })
 
   it('in a lambda the error names the row path', () => {

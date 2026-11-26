@@ -53,6 +53,12 @@ describe('V3 URL builder', () => {
       expect(url).not.toContain('%24select')
       expect(url).not.toContain('%24expand')
     }
+    // Blank names only are an empty list too; blank names beside real ones are dropped.
+    const blank = new QueryBuilder('Catalog_X', 'Europe/Moscow').select('', ' ').expand('')
+    expect(buildV3CollectionUrl(base, blank)).not.toMatch(/%24(select|expand)/)
+    expect(buildV3CollectionUrl(base, new QueryBuilder('Catalog_X', 'Europe/Moscow').select('Code', ''))).toMatch(
+      /%24select=Code(&|$)/,
+    )
     // A later non-empty call still sends its fields.
     expect(buildV3CollectionUrl(base, q.select('Code'))).toContain('%24select=Code')
     expect(buildV3CountUrl(base, q.expand('Code'))).toContain('%24expand=Code')

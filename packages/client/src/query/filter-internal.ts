@@ -109,9 +109,9 @@ const dslFilters = new WeakSet<object>()
  * The OData literal of a comparison or operator argument: a scalar by its JS
  * type, or an expression the DSL built (a field as the value, `f.A.eq(f.B)`)
  * as its own text. Any other object with an `_expr` field is refused — taken
- * as an expression, a value from outside would rewrite the filter. `undefined`
- * is refused too — a missing variable or property, not a value: `null` is how
- * to compare with an empty one. Reading a value that is not the DSL's can fail
+ * as an expression, a value from outside would rewrite the filter. `undefined`,
+ * a function and a symbol are refused too — a missing variable or property, or
+ * a method passed uncalled, not a value: `null` compares with a null field. Reading a value that is not the DSL's can fail
  * on its own (no prototype, a `toString` that is not a function, a revoked
  * `Proxy`): that is an `InvalidArgumentError` naming the field too, the
  * failure its `cause`.
@@ -125,9 +125,12 @@ function formatLiteral(v: unknown, ctx: CompileContext, argument: string): strin
       { argument, received: (v as { _expr: string })._expr },
     )
   }
-  if (v === undefined) {
+  // Not values: a missing variable or property, or a function / symbol passed
+  // where its result was meant — written by `String(v)` they would reach 1С as text.
+  if (v === undefined || typeof v === 'function' || typeof v === 'symbol') {
     throw new InvalidArgumentError(
-      `Filter value for "${argument}" is undefined — pass null to compare with an empty value`,
+      `Filter value for "${argument}" is ${v === undefined ? 'undefined' : `a ${typeof v}`}, not a value` +
+        ' — pass null to compare with a null field',
       { argument, received: v },
     )
   }
@@ -310,9 +313,11 @@ export type FieldExprFor<V> = BaseOps<V> &
   (V extends boolean ? BooleanOps : object) &
   (V extends string ? RefOps : object)
 
+// `undefined` is no value (an `InvalidArgumentError` at run time), so a field
+// typed `X | undefined` compares with an `X`, `null` where it admits one, or a field.
 interface BaseOps<V> {
-  eq(v: V | FieldExpr<V>): FilterExpression
-  ne(v: V | FieldExpr<V>): FilterExpression
+  eq(v: Exclude<V, undefined> | FieldExpr<V>): FilterExpression
+  ne(v: Exclude<V, undefined> | FieldExpr<V>): FilterExpression
 }
 
 interface NumberOps {

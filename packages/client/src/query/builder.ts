@@ -116,8 +116,8 @@ export class QueryBuilder<T = Record<string, unknown>> {
   /**
    * Comma-separated `$select`. `'**'` excludes tabular parts (1С extension).
    * `'*'` is all properties (incl. tabular — large for documents). No fields
-   * (`select(...[])`) sends no `$select` — all properties, as 1С reads an
-   * empty `$select=` too.
+   * (`select(...[])`, or blank names only) sends no `$select` — all
+   * properties, as 1С reads an empty `$select=` too.
    */
   select<K extends keyof T & string>(...fields: (K | '*' | '**')[]): this {
     this.state.select = fields as string[]
@@ -135,7 +135,8 @@ export class QueryBuilder<T = Record<string, unknown>> {
 
   /**
    * `$expand` navigation properties (comma-separated server-side). Stacks
-   * across calls; while the list is empty no `$expand` is sent.
+   * across calls — an empty call adds nothing and removes nothing; while no
+   * property is listed, no `$expand` is sent.
    */
   expand<K extends keyof T & string>(...props: K[]): this {
     this.state.expand = (this.state.expand ?? []).concat(props as string[])
