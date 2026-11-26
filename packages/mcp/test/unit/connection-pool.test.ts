@@ -97,6 +97,61 @@ describe('ConnectionPool.get', () => {
   })
 })
 
+describe('ConnectionPool.abortDownloads (#233)', () => {
+  /** A download that hangs until its signal aborts, as fetchMetadataXml does. */
+  const hang = () =>
+    vi.mocked(fetchMetadataXml).mockImplementation(
+      ({ signal }) =>
+        new Promise((_, reject) => {
+          if (signal?.aborted === true) reject(signal.reason)
+          signal?.addEventListener('abort', () => reject(signal.reason))
+        }),
+    )
+
+  it('aborts the $metadata download in flight; built entries stay, and a later get downloads anew', async () => {
+    const p = pool()
+    const built = await p.get('trade')
+    write('config.json', {
+      connections: {
+        trade: { baseUrl: 'http://h/odata/standard.odata', login: 'u', serverTimezone: 'Europe/Moscow' },
+        other: { baseUrl: 'http://h3/odata/standard.odata', login: 'u', serverTimezone: 'Europe/Moscow' },
+      },
+    })
+    write('credentials.json', { trade: 'pw', other: 'pw' })
+    hang()
+    const pending = p.get('other')
+    await vi.waitFor(() => expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2))
+    p.abortDownloads()
+    await expect(pending).rejects.toThrow()
+    await expect(p.get('trade')).resolves.toBe(built)
+    vi.mocked(fetchMetadataXml).mockReset().mockResolvedValue('<edmx/>')
+    await expect(p.get('other')).resolves.toBeDefined()
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops a build still reading its source: it fails, and the next get builds anew', async () => {
+    const source = new FileConnectionSource({ dataDir: dir, insecure: true })
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const getSecret = source.getSecret.bind(source)
+    vi.spyOn(source, 'getSecret').mockImplementationOnce(async (name) => {
+      await gate
+      return getSecret(name)
+    })
+    const p = new ConnectionPool(source)
+    const stale = p.get('trade')
+    await vi.waitFor(() => expect(source.getSecret).toHaveBeenCalledTimes(1))
+    p.abortDownloads()
+    const fresh = p.get('trade')
+    release()
+    await expect(stale).rejects.toThrow()
+    await expect(fresh).resolves.toBeDefined()
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('ConnectionPool.list', () => {
   it('lists connections sorted by name with their password source and loaded flag', async () => {
     const p = pool()

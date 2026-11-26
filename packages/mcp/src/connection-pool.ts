@@ -74,6 +74,10 @@ export class ConnectionPool implements ReadPool {
   private readonly source: ConnectionSource
   private readonly fetchTimeout: number
   private readonly cache = new Map<string, Promise<PoolEntry>>()
+  /** The signal of the `$metadata` downloads started since the last {@link abortDownloads}. */
+  private downloads = new AbortController()
+  /** The builds still in flight — what {@link abortDownloads} drops from the cache. */
+  private readonly building = new Set<Promise<PoolEntry>>()
 
   constructor(source: ConnectionSource, opts: ConnectionPoolOptions = {}) {
     this.source = source
@@ -108,18 +112,22 @@ export class ConnectionPool implements ReadPool {
     const cached = this.cache.get(name)
     if (cached !== undefined) return cached
 
-    const pending = this.build(name)
+    const pending = this.build(name, this.downloads.signal)
     this.cache.set(name, pending)
+    this.building.add(pending)
     try {
       return await pending
     } catch (err) {
       // Never cache a failed build — let the next call retry.
       if (this.cache.get(name) === pending) this.cache.delete(name)
       throw err
+    } finally {
+      this.building.delete(pending)
     }
   }
 
-  private async build(name: string): Promise<PoolEntry> {
+  /** Build an entry; `signal` aborts its `$metadata` download, or the build before it starts. */
+  private async build(name: string, signal: AbortSignal): Promise<PoolEntry> {
     const stored = await this.source.getBase(name)
     if (stored === undefined) {
       throw new InvalidArgumentError(`No connection named "${name}"`, { argument: 'connection' })
@@ -145,6 +153,7 @@ export class ConnectionPool implements ReadPool {
     // the add path; a hand-edited / migrated config.json bypasses that, and the
     // client constructor would otherwise only reject it post-download.
     validateConnection(connection)
+    signal.throwIfAborted()
 
     // Inline fetch→parse→build (rather than metadata's fetchMetadataIndex) so we
     // keep the intermediate EdmxModel for describe_entity (keys/navigation) —
@@ -153,6 +162,7 @@ export class ConnectionPool implements ReadPool {
       baseUrl: connection.baseUrl,
       auth: connectionAuth(connection),
       timeout: this.fetchTimeout,
+      signal,
     })
     const edmx = parseEdmx(xml)
     const index = buildMetadataIndex(edmx, stored.shape !== undefined ? { shape: stored.shape } : {})
@@ -164,5 +174,18 @@ export class ConnectionPool implements ReadPool {
   /** Drop a cached entry so the next {@link get} re-downloads `$metadata`. */
   refresh(name: string): void {
     this.cache.delete(name)
+  }
+
+  /**
+   * Abort every `$metadata` download in flight — which no single call's cancel
+   * does, a download being shared by every call waiting on its connection — and
+   * drop the entries still building, so the calls waiting on them fail and the
+   * next {@link get} builds anew. For a host whose server closed; the entries
+   * already built stay, and the pool stays usable.
+   */
+  abortDownloads(): void {
+    this.downloads.abort()
+    this.downloads = new AbortController()
+    for (const [name, pending] of this.cache) if (this.building.has(pending)) this.cache.delete(name)
   }
 }

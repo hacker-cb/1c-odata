@@ -34,6 +34,10 @@ A call the MCP client cancels (`notifications/cancelled`) aborts the HTTP reques
 parallel `/$count` included. The first `$metadata` download of a connection is not aborted: every call
 waiting on that connection shares it.
 
+`serve` exits once the MCP client closes its end of stdin (the MCP stdio shutdown signal): the calls still running are
+aborted with their requests to 1С, unanswered, and so are the connection pool's `$metadata` downloads in flight. A script feeding requests
+through a pipe keeps stdin open until its last answer has come.
+
 ## Quick start
 
 ### 1. Add a connection (in a terminal)
