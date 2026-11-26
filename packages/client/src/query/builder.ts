@@ -1,6 +1,12 @@
 import { InvalidArgumentError } from '../errors.js'
 import type { EntitySchema, MetadataIndex } from '../validate.js'
-import { type CompileContext, type FieldExprMap, type FilterExpression, makeFieldProxy } from './filter-internal.js'
+import {
+  asCondition,
+  type CompileContext,
+  type FieldExprMap,
+  type FilterExpression,
+  makeFieldProxy,
+} from './filter-internal.js'
 
 /**
  * Internal accumulated state of a query. Public for inspection by V3 url-builder
@@ -90,6 +96,12 @@ export class QueryBuilder<T = Record<string, unknown>> {
    * one, or for a field it does not list — a reference named `*_Key`. Such a
    * string must have the GUID form (`InvalidArgumentError` otherwise); for any
    * other GUID field use `guid()` from `@1c-odata/client/filter`.
+   *
+   * The callback must return a filter expression. Anything else is an
+   * `InvalidArgumentError`, and a filter set before stays as it was — where
+   * `undefined` from untyped code (`.filter((f) => build?.(f))`) used to drop
+   * that filter and send the request over the whole set. To query without a
+   * filter, build a new query.
    */
   filter(fn: (f: FieldExprMap<T>) => FilterExpression): this {
     const schema = this.filterSchema()
@@ -99,7 +111,8 @@ export class QueryBuilder<T = Record<string, unknown>> {
       metadataIndex: schema?.metadataIndex,
     }
     const f = makeFieldProxy<T>('', ctx, schema?.entity)
-    this.state.filter = fn(f)
+    // Checked before it is stored: a filter set before stays as it was.
+    this.state.filter = asCondition(fn(f), 'filter() callback result')
     return this
   }
 

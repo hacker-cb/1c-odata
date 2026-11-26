@@ -78,6 +78,92 @@ const fieldTypes = new WeakMap<object, string>()
  */
 const dslExpressions = new WeakSet<object>()
 
+/**
+ * `v` as a condition — what `filter()` takes from its callback and the
+ * combinators (`and`, `or`, `not`, `any`, `all`) take as operands: an
+ * expression, read by its `_expr` text as the combinators always read it (so a
+ * copy of one, or one another copy of this package built, still counts).
+ * Anything else — `undefined` from untyped code, `null`, a string, an object
+ * without `_expr` text — is an `InvalidArgumentError` naming `argument`, and so
+ * is a `guid()` literal: a value to compare with, not a condition.
+ *
+ * @internal
+ */
+export function asCondition(v: unknown, argument: string): FilterExpression {
+  if (typeof v === 'object' && v !== null && guidLiterals.has(v)) {
+    throw new InvalidArgumentError(
+      `${argument} got a guid() literal — a value to compare a field with (f.<Field>.eq(guid(…))), not a condition`,
+      { argument, received: (v as { _expr: string })._expr },
+    )
+  }
+  const holder = (typeof v === 'object' && v !== null) || typeof v === 'function'
+  let text: unknown
+  try {
+    text = holder ? (v as { _expr?: unknown })._expr : undefined
+  } catch (cause) {
+    // A revoked Proxy, a throwing getter: unreadable is no condition either.
+    throw new InvalidArgumentError(`${argument} cannot be read as a filter expression`, {
+      argument,
+      received: v,
+      cause,
+    })
+  }
+  if (typeof text !== 'string') {
+    throw new InvalidArgumentError(
+      `${argument} must be a filter expression (f.<Field>.eq(…), and(…), raw(…)); received ${
+        v === null ? 'null' : holder ? 'an object without _expr text' : typeof v
+      }`,
+      { argument, received: v },
+    )
+  }
+  // The DSL's own expressions are frozen; anything else is read once, here, and
+  // its text kept — a getter cannot hand the renderer other text later.
+  return dslExpressions.has(v as object) ? (v as FilterExpression) : makeFilter(text)
+}
+
+/**
+ * The compile context of `any()` / `all()`'s collection operand — an
+ * `InvalidArgumentError` where untyped code passed no field the DSL built
+ * (`undefined`, a plain object), rather than a `TypeError` reading it.
+ *
+ * @internal
+ */
+export function lambdaContext(field: unknown, argument: string): { ctx: CompileContext; expr: string } {
+  let ctx: unknown
+  let expr: unknown
+  try {
+    if (typeof field === 'object' && field !== null) {
+      ctx = (field as { _ctx?: unknown })._ctx
+      expr = (field as { _expr?: unknown })._expr
+    }
+  } catch (cause) {
+    throw new InvalidArgumentError(`${argument} cannot be read as a field of the filter`, {
+      argument,
+      received: field,
+      cause,
+    })
+  }
+  if (!isCompileContext(ctx) || typeof expr !== 'string') {
+    throw new InvalidArgumentError(`${argument} must be a collection field of the filter (f.<Field>)`, {
+      argument,
+      received: field,
+    })
+  }
+  return { ctx, expr }
+}
+
+/** Whether `v` has the shape of a `CompileContext` the field proxy made. */
+function isCompileContext(v: unknown): v is CompileContext {
+  if (typeof v !== 'object' || v === null) return false
+  const c = v as { serverTimezone?: unknown; lambdaCounter?: { value?: unknown } | null }
+  return (
+    typeof c.serverTimezone === 'string' &&
+    typeof c.lambdaCounter === 'object' &&
+    c.lambdaCounter !== null &&
+    typeof c.lambdaCounter.value === 'number'
+  )
+}
+
 /** Register `expr` as built by the DSL and return it. */
 function dslExpression<T extends object>(expr: T): T {
   dslExpressions.add(expr)
