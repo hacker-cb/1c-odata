@@ -77,6 +77,59 @@ describe('ODataV3Client.query', () => {
     })
   })
 
+  it('count() sends the query’s $filter, $select and $expand to /$count (#215)', async () => {
+    let capturedUrl = ''
+    server.use(
+      http.get(`${base}/Catalog_X/$count`, ({ request }) => {
+        capturedUrl = request.url
+        return new HttpResponse('3', { headers: { 'content-type': 'text/plain' } })
+      }),
+    )
+    const n = await client
+      .query<{ DeletionMark: boolean }>('Catalog_X')
+      .filter((f) => f.DeletionMark.eq(false))
+      .select('Owner/Description')
+      .expand('Owner')
+      .top(5)
+      .count()
+    expect(n).toBe(3)
+    const params = new URL(capturedUrl).searchParams
+    expect(params.get('$filter')).toBe('DeletionMark eq false')
+    expect(params.get('$select')).toBe('Owner/Description')
+    expect(params.get('$expand')).toBe('Owner')
+    expect(params.has('$top')).toBe(false)
+  })
+
+  it('count() fails on a $select 1С rejects as get() does (#215)', async () => {
+    // 1С: a navigation path in $select needs its $expand — on /$count as on the page.
+    const reject = ({ request }: { request: Request }) => {
+      const params = new URL(request.url).searchParams
+      if (params.get('$select')?.includes('/') && !params.has('$expand')) {
+        return HttpResponse.json(
+          {
+            'odata.error': {
+              code: '14',
+              message: { lang: 'ru', value: 'Только из навигационных ссылок, указанных в опции $expand' },
+            },
+          },
+          { status: 400 },
+        )
+      }
+      return new HttpResponse('1', { headers: { 'content-type': 'text/plain' } })
+    }
+    server.use(http.get(`${base}/Catalog_X/$count`, reject), http.get(`${base}/Catalog_X`, reject))
+    const q = () => client.query('Catalog_X').select('Owner/Description')
+    const fromGet = await q()
+      .get()
+      .catch((e: unknown) => e)
+    const fromCount = await q()
+      .count()
+      .catch((e: unknown) => e)
+    expect(fromGet).toBeInstanceOf(Error)
+    expect(fromCount).toBeInstanceOf((fromGet as Error).constructor)
+    expect((fromCount as { status?: number }).status).toBe(400)
+  })
+
   it('entity(set, key).get() returns single entity', async () => {
     server.use(
       http.get(/Catalog_X\(guid'818ed18b-76c9-11e4-8918-003048663bbb'\)/, () =>

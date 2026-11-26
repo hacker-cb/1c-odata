@@ -71,10 +71,11 @@ function applyQueryOptions(builder: V3QueryBuilder<UntypedEntity>, opts: QueryOp
 
 /**
  * One page of `q` and, with `count`, the total from the set's `/$count` (the
- * same `$filter`) in parallel — never `$inlinecount`, with which 1С by its
- * 8.3.27 documentation drops `$skip` / `$top` (#206). One failing aborts the
- * other rather than leave it loading what no one reads; `signal` — the MCP
- * request's own — aborts both.
+ * same `$filter`, `$select` and `$expand`, so a virtual table in the path is
+ * counted as its page rolls up, #215) in parallel — never `$inlinecount`, with
+ * which 1С by its 8.3.27 documentation drops `$skip` / `$top` (#206). One
+ * failing aborts the other rather than leave it loading what no one reads;
+ * `signal` — the MCP request's own — aborts both.
  */
 async function pageAndCount(
   q: V3QueryBuilder<UntypedEntity>,
@@ -227,7 +228,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
         count: z
           .boolean()
           .optional()
-          .describe('Include the total row count — a parallel /$count request with the same filter'),
+          .describe('Include the total row count — a parallel /$count request with the same filter, select and expand'),
         compact: z
           .boolean()
           .optional()

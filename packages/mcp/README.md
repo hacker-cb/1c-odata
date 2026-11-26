@@ -20,7 +20,7 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 | `list_entities` | Entity sets, filtered by kind (catalog / document / register / …) and a name substring. Paginated. |
 | `describe_entity` | One entity: properties (type / nullable / maxLength), keys, navigation properties, value storages, kind. |
 | `list_enums` | Enumeration types and their members. |
-| `query` | Read-only OData query: raw `$filter`, `$select`, `$expand`, `$orderby`, `$top`/`$skip`, optional count — the exact total from the set's `/$count` (same `$filter`) in a parallel request, never `$inlinecount`. |
+| `query` | Read-only OData query: raw `$filter`, `$select`, `$expand`, `$orderby`, `$top`/`$skip`, optional count — the exact total from the set's `/$count` (same `$filter`, `$select` and `$expand`, so a register virtual table in the path is counted as `select` rolls it up) in a parallel request, never `$inlinecount`. |
 | `get_entity` | Fetch a single entity by `Ref_Key`. |
 | `count` | Count rows matching an optional `$filter`. |
 | `register_query` | Register virtual tables: balance / turnovers / slices / accounting (read-only analytics). `select` picks fields and, on the aggregating tables of some 1С configurations (БП turnovers — not УТ `ТоварыНаСкладах` balance), also rolls the rows up; `filter` narrows the resulting rows; `orderBy` sorts on the server (with `top` — a top-N). Paged by 1С itself: each call reads one page (`skip` / `top`) and, in a parallel request, the exact `total`; on a big table a page still costs seconds, since 1С computes the whole virtual table every time. |
