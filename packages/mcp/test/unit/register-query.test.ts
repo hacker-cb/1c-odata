@@ -7,7 +7,10 @@ import type { PoolEntry, ReadPool } from '../../src/connection-pool.js'
 import { DEFAULT_LIMITS } from '../../src/limits.js'
 import { registerDataTools } from '../../src/tools/data.js'
 
-type Handler = (args: Record<string, unknown>) => Promise<CallToolResult>
+type Handler = (args: Record<string, unknown>, extra: { signal: AbortSignal }) => Promise<CallToolResult>
+
+/** What the MCP SDK hands a tool handler beside its arguments — a request never cancelled. */
+const extra = { signal: new AbortController().signal }
 
 interface Call {
   register: string
@@ -27,7 +30,7 @@ function setup(rows: Record<string, unknown>[] = [], serverTimezone = 'Europe/Mo
     // Validate through the tool's own inputSchema, as the SDK does: a parameter
     // missing from the schema is stripped here exactly as it would be in a call.
     registerTool: (name: string, config: { inputSchema: ZodRawShape }, handler: Handler) =>
-      handlers.set(name, (args) => handler(z.object(config.inputSchema).parse(args))),
+      handlers.set(name, (args) => handler(z.object(config.inputSchema).parse(args), extra)),
   } as unknown as McpServer
   const calls: Call[] = []
   const helper = (register: string) =>
@@ -36,7 +39,9 @@ function setup(rows: Record<string, unknown>[] = [], serverTimezone = 'Europe/Mo
       {
         get: (_t, method: string) => async (a: unknown, o?: ReadFiOptions) => {
           // extDimensions takes only the options.
-          const [args, opts] = method === 'extDimensions' ? [undefined, a as ReadFiOptions] : [a, o ?? {}]
+          const [args, given] = method === 'extDimensions' ? [undefined, a as ReadFiOptions] : [a, o ?? {}]
+          // The MCP request's signal rides along (#216, cancel.test.ts); the options are what is pinned here.
+          const { signal: _signal, ...opts } = given
           calls.push({ register, method, args, opts })
           return { value: rows, count: rows.length }
         },
@@ -48,7 +53,7 @@ function setup(rows: Record<string, unknown>[] = [], serverTimezone = 'Europe/Mo
   const run = async (args: Record<string, unknown>) => {
     const handler = handlers.get('register_query')
     if (handler === undefined) throw new Error('register_query not registered')
-    return handler({ connection: 'c', register: 'AccountingRegister_Хозрасчетный', ...args })
+    return handler({ connection: 'c', register: 'AccountingRegister_Хозрасчетный', ...args }, extra)
   }
   return { run, calls }
 }

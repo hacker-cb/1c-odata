@@ -5,7 +5,10 @@ import type { PoolEntry, ReadPool } from '../../src/connection-pool.js'
 import { DEFAULT_LIMITS, type Limits } from '../../src/limits.js'
 import { registerDataTools } from '../../src/tools/data.js'
 
-type Handler = (args: Record<string, unknown>) => Promise<CallToolResult>
+type Handler = (args: Record<string, unknown>, extra: { signal: AbortSignal }) => Promise<CallToolResult>
+
+/** What the MCP SDK hands a tool handler beside its arguments — a request never cancelled. */
+const extra = { signal: new AbortController().signal }
 
 interface Result {
   count?: number
@@ -79,7 +82,7 @@ function setup(
   registerDataTools(server, pool, limits)
   const run = async (args: Record<string, unknown>) => {
     if (handler === undefined) throw new Error('query not registered')
-    const res = await handler({ connection: 'c', entitySet: 'Catalog_Валюты', ...args })
+    const res = await handler({ connection: 'c', entitySet: 'Catalog_Валюты', ...args }, extra)
     return { res, data: (res.structuredContent ?? {}) as unknown as Result, summary: res.content?.[0] }
   }
   return { run, calls }

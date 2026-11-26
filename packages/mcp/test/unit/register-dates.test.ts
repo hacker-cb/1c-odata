@@ -6,14 +6,17 @@ import type { PoolEntry, ReadPool } from '../../src/connection-pool.js'
 import { DEFAULT_LIMITS } from '../../src/limits.js'
 import { registerDataTools } from '../../src/tools/data.js'
 
-type Handler = (args: Record<string, unknown>) => Promise<CallToolResult>
+type Handler = (args: Record<string, unknown>, extra: { signal: AbortSignal }) => Promise<CallToolResult>
+
+/** What the MCP SDK hands a tool handler beside its arguments — a request never cancelled. */
+const extra = { signal: new AbortController().signal }
 
 /** register_query against a client whose RegisterHelper records the FI arguments of each call. */
 function setup(serverTimezone: string) {
   let handler: Handler | undefined
   const server = {
     registerTool: (name: string, config: { inputSchema: ZodRawShape }, h: Handler) => {
-      if (name === 'register_query') handler = (args) => h(z.object(config.inputSchema).parse(args))
+      if (name === 'register_query') handler = (args) => h(z.object(config.inputSchema).parse(args), extra)
     },
   } as unknown as McpServer
   const calls: { method: string; args: Record<string, unknown> }[] = []
@@ -31,7 +34,7 @@ function setup(serverTimezone: string) {
   registerDataTools(server, pool, DEFAULT_LIMITS)
   const run = (args: Record<string, unknown>) => {
     if (handler === undefined) throw new Error('register_query not registered')
-    return handler({ connection: 'c', register: 'AccumulationRegister_X', ...args })
+    return handler({ connection: 'c', register: 'AccumulationRegister_X', ...args }, extra)
   }
   return { run, calls }
 }
