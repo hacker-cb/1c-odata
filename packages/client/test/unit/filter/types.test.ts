@@ -41,7 +41,10 @@ describe('filter DSL types — nullable fields get their operators (#230)', () =
     expect(c((f) => f.Сумма.add(5).le(f.Количество))).toBe('(Сумма add 5) le Количество')
     expect(c((f) => f.Сумма.mul(f.Количество).round().eq(10))).toBe('round((Сумма mul Количество)) eq 10')
     expect(c((f) => f.Сумма.eq(null))).toBe('Сумма eq null')
-    expectTypeOf<FieldExprMap<Doc>['Сумма']['add']>().returns.toEqualTypeOf<ChainedFieldExpr<number | null>>()
+    c((f) => {
+      expectTypeOf(f.Сумма.add(5)).toEqualTypeOf<ChainedFieldExpr<number | null>>()
+      return f.Сумма.gt(0)
+    })
   })
 
   it('Date | null, string | null, boolean | null', () => {
@@ -61,8 +64,15 @@ describe('filter DSL types — nullable fields get their operators (#230)', () =
 
   it('arithmetic on a nullable field keeps its null', () => {
     expect(c((f) => f.Сумма.add(1).eq(null))).toBe('(Сумма add 1) eq null')
-    // A non-null field's arithmetic stays non-null, as before.
-    expectTypeOf<FieldExprMap<Doc>['Количество']['add']>().returns.toEqualTypeOf<ChainedFieldExpr<number>>()
+    // A nullable operand brings its null too, whichever side it is on.
+    expect(c((f) => f.Количество.add(f.Сумма).eq(null))).toBe('(Количество add Сумма) eq null')
+    c((f) => {
+      // A non-null field's arithmetic stays non-null, as before; a nullable operand makes it nullable.
+      expectTypeOf(f.Количество.add(1)).toEqualTypeOf<ChainedFieldExpr<number>>()
+      expectTypeOf(f.Количество.add(f.Сумма)).toEqualTypeOf<ChainedFieldExpr<number | null>>()
+      expectTypeOf(f.Сумма.add(1)).toEqualTypeOf<ChainedFieldExpr<number | null>>()
+      return f.Количество.gt(0)
+    })
   })
 
   it('a field that holds only null keeps eq / ne, and nothing it cannot have', () => {
@@ -85,7 +95,11 @@ describe('filter DSL types — bigint (int64Mode: bigint) (#230)', () => {
     expect(c((f) => f.Int64.gt(5n))).toBe('Int64 gt 5')
     expect(c((f) => f.Int64.add(1n).eq(10n))).toBe('(Int64 add 1) eq 10')
     expect(c((f) => f.Int64Required.sub(f.Int64Required).lt(0n))).toBe('(Int64Required sub Int64Required) lt 0')
-    expectTypeOf<FieldExprMap<Doc>['Int64']['add']>().returns.toEqualTypeOf<ChainedFieldExpr<bigint | null>>()
+    c((f) => {
+      expectTypeOf(f.Int64.add(1n)).toEqualTypeOf<ChainedFieldExpr<bigint | null>>()
+      expectTypeOf(f.Int64Required.add(1)).toEqualTypeOf<ChainedFieldExpr<bigint>>()
+      return f.Int64.gt(0)
+    })
     expectTypeOf<FieldExprMap<Doc>['Int64Required']['round']>().returns.toEqualTypeOf<ChainedFieldExpr<bigint>>()
   })
 
@@ -106,7 +120,10 @@ describe('filter DSL types — bigint (int64Mode: bigint) (#230)', () => {
   it('a field typed number | bigint (shared across int64 modes) keeps the numeric operators', () => {
     expect(c((f) => f.Счётчик.gt(5))).toBe('Счётчик gt 5')
     expect(c((f) => f.Счётчик.add(1n).eq(2))).toBe('(Счётчик add 1) eq 2')
-    expectTypeOf<FieldExprMap<Doc>['Счётчик']['add']>().returns.toEqualTypeOf<ChainedFieldExpr<number | bigint>>()
+    c((f) => {
+      expectTypeOf(f.Счётчик.add(1)).toEqualTypeOf<ChainedFieldExpr<number | bigint>>()
+      return f.Счётчик.gt(0)
+    })
   })
 })
 
@@ -126,11 +143,13 @@ describe('filter DSL types — any() / all() over a nullable tabular part (#230)
     const scalar = (f: FieldExprMap<Doc>) => any(f.Сумма, () => f.Сумма.gt(0))
     // @ts-expect-error — a field that holds only null is no collection
     const nothing = (f: FieldExprMap<Doc>) => all(f.Пусто, () => f.Сумма.gt(0))
-    expect([scalar, nothing]).toHaveLength(2)
+    // @ts-expect-error — not even with an explicit row type
+    const forced = (f: FieldExprMap<Doc>) => any<Row>(f.Пусто, (t) => t.Количество.gt(0))
+    expect([scalar, nothing, forced]).toHaveLength(3)
   })
 
   it('an explicit row type and an any-typed field still work as before', () => {
-    expect(c((f) => any<Row>(f.Товары, (t) => t.Количество.gt(0)))).toBe('Товары/any(t0: t0/Количество gt 0)')
+    expect(c((f) => any<Row>(f.Услуги, (t) => t.Количество.gt(0)))).toBe('Услуги/any(t0: t0/Количество gt 0)')
     // biome-ignore lint/suspicious/noExplicitAny: the any-typed field is the case under test
     type Loose = { Rows: any }
     const loose = compileFilter<Loose>('UTC', (f) => any<{ B: number }>(f.Rows, (t) => t.B.gt(1)))

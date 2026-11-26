@@ -38,12 +38,27 @@ function needsAndWrap(expr: string): boolean {
 }
 
 /**
- * A nullable / optional collection field for `any()` / `all()`: one whose row
- * type is inferred. A field that holds no array at all (`null` only) infers
- * none and is refused here. This overload comes first, so the last one —
- * what `Parameters<typeof any>` reads — stays the plain `FieldExpr<V[]>`.
+ * The row type of a collection field `F` — its element type, `null` /
+ * `undefined` aside; `never` for a field that holds no array.
  */
-type NullableCollection<V> = unknown extends V ? never : unknown
+type RowOf<F> =
+  F extends FieldExpr<infer C>
+    ? [NonNullable<C>] extends [never]
+      ? never
+      : NonNullable<C> extends readonly (infer V)[]
+        ? V
+        : never
+    : never
+
+/**
+ * `any()` / `all()`'s first overload takes a collection field typed nullable
+ * or optional (a generated tabular part), its row type read off the field
+ * itself — so a field holding no array (`null` only) is refused even with an
+ * explicit type argument. The second, plain `FieldExpr<V[]>` overload stays
+ * last: it is what `Parameters<typeof any>` reads, and where an explicit row
+ * type (`any<Row>(…)`) goes.
+ */
+type HasRows<F> = [RowOf<F>] extends [never] ? never : unknown
 
 /** Variadic AND. @public */
 export function and(...exprs: FilterExpression[]): FilterExpression {
@@ -67,36 +82,36 @@ export function not(e: FilterExpression): FilterExpression {
 }
 
 /** Lambda — at least one row matches. The collection may be typed nullable or optional (a generated tabular part). @public */
-export function any<V>(
-  field: FieldExpr<V[] | null | undefined> & NullableCollection<V>,
-  fn: (t: FieldExprMap<V>) => FilterExpression,
+export function any<F extends FieldExpr<readonly unknown[] | null | undefined>>(
+  field: F & HasRows<F>,
+  fn: (t: FieldExprMap<RowOf<F>>) => FilterExpression,
 ): FilterExpression
 export function any<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression
-export function any<V>(
-  field: FieldExpr<V[] | null | undefined>,
-  fn: (t: FieldExprMap<V>) => FilterExpression,
+export function any(
+  field: FieldExpr<readonly unknown[] | null | undefined>,
+  fn: (t: never) => FilterExpression,
 ): FilterExpression {
   const { ctx, expr } = lambdaContext(field, 'any() collection')
   const id = `t${ctx.lambdaCounter.value++}`
-  const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
-  const body = asCondition(fn(inner), 'any() lambda result')
+  const inner = makeFieldProxy<unknown>(`${id}/`, ctx, rowSchemaOf(field, ctx))
+  const body = asCondition(fn(inner as never), 'any() lambda result')
   return makeFilter(`${expr}/any(${id}: ${body._expr})`)
 }
 
 /** Lambda — all rows match. The collection may be typed nullable or optional (a generated tabular part). @public */
-export function all<V>(
-  field: FieldExpr<V[] | null | undefined> & NullableCollection<V>,
-  fn: (t: FieldExprMap<V>) => FilterExpression,
+export function all<F extends FieldExpr<readonly unknown[] | null | undefined>>(
+  field: F & HasRows<F>,
+  fn: (t: FieldExprMap<RowOf<F>>) => FilterExpression,
 ): FilterExpression
 export function all<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression
-export function all<V>(
-  field: FieldExpr<V[] | null | undefined>,
-  fn: (t: FieldExprMap<V>) => FilterExpression,
+export function all(
+  field: FieldExpr<readonly unknown[] | null | undefined>,
+  fn: (t: never) => FilterExpression,
 ): FilterExpression {
   const { ctx, expr } = lambdaContext(field, 'all() collection')
   const id = `t${ctx.lambdaCounter.value++}`
-  const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
-  const body = asCondition(fn(inner), 'all() lambda result')
+  const inner = makeFieldProxy<unknown>(`${id}/`, ctx, rowSchemaOf(field, ctx))
+  const body = asCondition(fn(inner as never), 'all() lambda result')
   return makeFilter(`${expr}/all(${id}: ${body._expr})`)
 }
 

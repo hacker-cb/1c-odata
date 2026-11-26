@@ -441,16 +441,22 @@ interface BaseOps<V> {
 /** What a numeric field compares with beyond its own type. */
 type NumericExtra<V> = IsOf<V, number | bigint> extends true ? NumericOperand : never
 
-/** Numeric operators; `R` is what arithmetic yields — the field's numeric type and its `null`. */
+/** The `null` a field-expression operand brings into an arithmetic result. */
+type NullOf<O> = O extends FieldExpr<infer C> ? Extract<C, null> : never
+
+/**
+ * Numeric operators; `R` is what arithmetic yields — the field's numeric type
+ * and its `null`, plus the `null` of a nullable field-expression operand.
+ */
 interface NumberOps<R> {
   gt(v: NumericOperand): FilterExpression
   ge(v: NumericOperand): FilterExpression
   lt(v: NumericOperand): FilterExpression
   le(v: NumericOperand): FilterExpression
-  add(v: NumericOperand): ChainedFieldExpr<R>
-  sub(v: NumericOperand): ChainedFieldExpr<R>
-  mul(v: NumericOperand): ChainedFieldExpr<R>
-  div(v: NumericOperand): ChainedFieldExpr<R>
+  add<O extends NumericOperand>(v: O): ChainedFieldExpr<R | NullOf<O>>
+  sub<O extends NumericOperand>(v: O): ChainedFieldExpr<R | NullOf<O>>
+  mul<O extends NumericOperand>(v: O): ChainedFieldExpr<R | NullOf<O>>
+  div<O extends NumericOperand>(v: O): ChainedFieldExpr<R | NullOf<O>>
   round(): ChainedFieldExpr<R>
 }
 
