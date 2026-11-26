@@ -1,10 +1,10 @@
 import { InvalidArgumentError } from '../errors.js'
 import type { EntitySchema, MetadataIndex } from '../validate.js'
 import {
+  asCondition,
   type CompileContext,
   type FieldExprMap,
   type FilterExpression,
-  isDslExpression,
   makeFieldProxy,
 } from './filter-internal.js'
 
@@ -97,11 +97,11 @@ export class QueryBuilder<T = Record<string, unknown>> {
    * string must have the GUID form (`InvalidArgumentError` otherwise); for any
    * other GUID field use `guid()` from `@1c-odata/client/filter`.
    *
-   * The callback must return an expression the DSL built. Anything else —
-   * `undefined` from untyped code (`.filter((f) => build?.(f))`), a string, a
-   * plain object — is an `InvalidArgumentError`, and a filter set before stays
-   * as it was: written into the query, it would drop that filter and send the
-   * request over the whole set.
+   * The callback must return a filter expression. Anything else is an
+   * `InvalidArgumentError`, and a filter set before stays as it was — where
+   * `undefined` from untyped code (`.filter((f) => build?.(f))`) used to drop
+   * that filter and send the request over the whole set. To query without a
+   * filter, build a new query.
    */
   filter(fn: (f: FieldExprMap<T>) => FilterExpression): this {
     const schema = this.filterSchema()
@@ -111,16 +111,8 @@ export class QueryBuilder<T = Record<string, unknown>> {
       metadataIndex: schema?.metadataIndex,
     }
     const f = makeFieldProxy<T>('', ctx, schema?.entity)
-    const result: unknown = fn(f)
-    if (!isDslExpression(result)) {
-      throw new InvalidArgumentError(
-        `filter() callback must return a filter expression built by the DSL (f.<Field>.eq(…), and(…), raw(…)); received ${
-          result === null ? 'null' : typeof result
-        }`,
-        { argument: 'filter', received: result },
-      )
-    }
-    this.state.filter = result
+    // Checked before it is stored: a filter set before stays as it was.
+    this.state.filter = asCondition(fn(f), 'filter() callback result')
     return this
   }
 

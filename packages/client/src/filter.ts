@@ -1,6 +1,7 @@
 import { InvalidArgumentError } from './errors.js'
 import type { ChainedFieldExpr, FieldExpr, FieldExprMap, FilterExpression } from './query/filter-internal.js'
 import {
+  asCondition,
   type CompileContext,
   makeFieldProxy,
   makeFilter,
@@ -39,20 +40,22 @@ function needsAndWrap(expr: string): boolean {
 /** Variadic AND. @public */
 export function and(...exprs: FilterExpression[]): FilterExpression {
   if (exprs.length === 0) throw new InvalidArgumentError('and() requires at least one expression')
-  if (exprs.length === 1) return exprs[0] as FilterExpression
-  return makeFilter(exprs.map((e) => (needsAndWrap(e._expr) ? `(${e._expr})` : e._expr)).join(' and '))
+  const ops = exprs.map((e, i) => asCondition(e, `and() operand ${i + 1}`))
+  if (ops.length === 1) return ops[0] as FilterExpression
+  return makeFilter(ops.map((e) => (needsAndWrap(e._expr) ? `(${e._expr})` : e._expr)).join(' and '))
 }
 
 /** Variadic OR. @public */
 export function or(...exprs: FilterExpression[]): FilterExpression {
   if (exprs.length === 0) throw new InvalidArgumentError('or() requires at least one expression')
-  if (exprs.length === 1) return exprs[0] as FilterExpression
-  return makeFilter(exprs.map((e) => `(${e._expr})`).join(' or '))
+  const ops = exprs.map((e, i) => asCondition(e, `or() operand ${i + 1}`))
+  if (ops.length === 1) return ops[0] as FilterExpression
+  return makeFilter(ops.map((e) => `(${e._expr})`).join(' or '))
 }
 
 /** Negation. @public */
 export function not(e: FilterExpression): FilterExpression {
-  return makeFilter(`not (${e._expr})`)
+  return makeFilter(`not (${asCondition(e, 'not() operand')._expr})`)
 }
 
 /** Lambda — at least one row matches. @public */
@@ -60,7 +63,7 @@ export function any<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => Filter
   const ctx = (field as unknown as { _ctx: CompileContext })._ctx
   const id = `t${ctx.lambdaCounter.value++}`
   const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
-  const body = fn(inner)
+  const body = asCondition(fn(inner), 'any() lambda result')
   return makeFilter(`${field._expr}/any(${id}: ${body._expr})`)
 }
 
@@ -69,7 +72,7 @@ export function all<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => Filter
   const ctx = (field as unknown as { _ctx: CompileContext })._ctx
   const id = `t${ctx.lambdaCounter.value++}`
   const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
-  const body = fn(inner)
+  const body = asCondition(fn(inner), 'all() lambda result')
   return makeFilter(`${field._expr}/all(${id}: ${body._expr})`)
 }
 

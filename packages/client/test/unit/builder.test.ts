@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { InvalidArgumentError } from '../../src/errors.js'
-import { and, guid, raw } from '../../src/filter.js'
+import { all, and, any, guid, not, or, raw } from '../../src/filter.js'
 import { QueryBuilder } from '../../src/query/builder.js'
 import type { FieldExprMap, FilterExpression } from '../../src/query/filter-internal.js'
 
@@ -43,9 +43,10 @@ describe('QueryBuilder state', () => {
   })
 })
 
-describe('QueryBuilder.filter — the callback returns a DSL expression', () => {
-  type Row = { A: number; Code: string; Active: boolean }
+describe('QueryBuilder.filter — the callback returns a condition', () => {
+  type Row = { A: number; Code: string; Active: boolean; Rows: { B: number }[] }
   const loose = (fn: unknown) => fn as (f: FieldExprMap<Row>) => FilterExpression
+  const G = '8af68945-1c2d-11ef-9b6a-00155d102d01'
 
   it('undefined is an InvalidArgumentError and keeps the filter set before', () => {
     const q = new QueryBuilder<Row>('Catalog_X', 'Europe/Moscow').filter((f) => f.A.eq(1))
@@ -56,26 +57,43 @@ describe('QueryBuilder.filter — the callback returns a DSL expression', () => 
       caught = e
     }
     expect(caught).toBeInstanceOf(InvalidArgumentError)
-    expect(caught).toMatchObject({ argument: 'filter', received: undefined })
+    expect(caught).toMatchObject({ argument: 'filter() callback result', received: undefined })
     expect(q.state.filter?._expr).toBe('A eq 1')
   })
 
   it.each([
     ['null', null],
     ['a string', 'A eq 1'],
-    ['a plain object with _expr', { _expr: '1 eq 1' }],
-    ['a guid() literal', guid('8af68945-1c2d-11ef-9b6a-00155d102d01')],
+    ['an object without _expr text', { expr: 'A eq 1' }],
+    ['a guid() literal', guid(G)],
   ])('%s is refused too', (_, value) => {
     const q = new QueryBuilder<Row>('Catalog_X', 'Europe/Moscow')
     expect(() => q.filter(loose(() => value))).toThrow(InvalidArgumentError)
     expect(q.state.filter).toBeUndefined()
   })
 
-  it('a filter, raw() and a boolean field are taken', () => {
+  it('a filter, raw(), a boolean field and a copy of a filter are taken', () => {
     const q = new QueryBuilder<Row>('Catalog_X', 'Europe/Moscow')
     expect(q.filter((f) => f.Code.eq('x')).state.filter?._expr).toBe(`Code eq 'x'`)
     expect(q.filter(() => raw('A gt 0')).state.filter?._expr).toBe('A gt 0')
     expect(q.filter(loose((f: FieldExprMap<Row>) => f.Active)).state.filter?._expr).toBe('Active')
+    // A typed copy (spread) keeps its text: no membership check to fail it.
+    expect(q.filter(() => ({ ...raw('A eq 1') })).state.filter?._expr).toBe('A eq 1')
+  })
+
+  it('the combinators refuse a non-condition operand with an InvalidArgumentError, not a TypeError', () => {
+    const q = new QueryBuilder<Row>('Catalog_X', 'Europe/Moscow').filter((f) => f.A.eq(1))
+    const none = undefined as unknown as FilterExpression
+    for (const build of [
+      (f: FieldExprMap<Row>) => and(f.A.eq(1), none),
+      (f: FieldExprMap<Row>) => or(f.A.eq(1), guid(G) as unknown as FilterExpression),
+      () => not(none),
+      (f: FieldExprMap<Row>) => any(f.Rows, () => none),
+      (f: FieldExprMap<Row>) => all(f.Rows, (() => 'B gt 0') as unknown as () => FilterExpression),
+    ]) {
+      expect(() => q.filter(build)).toThrow(InvalidArgumentError)
+    }
+    expect(q.state.filter?._expr).toBe('A eq 1')
   })
 
   it('typed code cannot return undefined from the callback', () => {

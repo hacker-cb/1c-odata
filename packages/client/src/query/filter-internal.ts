@@ -79,15 +79,32 @@ const fieldTypes = new WeakMap<object, string>()
 const dslExpressions = new WeakSet<object>()
 
 /**
- * Whether `v` is an expression the DSL built — a filter, or a field expression
- * (a boolean field stands as a filter by itself), but not a `guid()` literal.
- * What `filter()` takes from its callback.
+ * `v` as a condition — what `filter()` takes from its callback and the
+ * combinators (`and`, `or`, `not`, `any`, `all`) take as operands: an
+ * expression, read by its `_expr` text as the combinators always read it (so a
+ * copy of one, or one another copy of this package built, still counts).
+ * Anything else — `undefined` from untyped code, `null`, a string, an object
+ * without `_expr` text — is an `InvalidArgumentError` naming `argument`, and so
+ * is a `guid()` literal: a value to compare with, not a condition.
  *
  * @internal
  */
-export function isDslExpression(v: unknown): v is FilterExpression {
-  // A `guid()` literal is a value, not a condition.
-  return typeof v === 'object' && v !== null && dslExpressions.has(v) && !guidLiterals.has(v)
+export function asCondition(v: unknown, argument: string): FilterExpression {
+  if (typeof v === 'object' && v !== null && guidLiterals.has(v)) {
+    throw new InvalidArgumentError(
+      `${argument} got a guid() literal — a value to compare a field with (f.<Field>.eq(guid(…))), not a condition`,
+      { argument, received: (v as { _expr: string })._expr },
+    )
+  }
+  if (typeof v !== 'object' || v === null || typeof (v as { _expr?: unknown })._expr !== 'string') {
+    throw new InvalidArgumentError(
+      `${argument} must be a filter expression (f.<Field>.eq(…), and(…), raw(…)); received ${
+        v === null ? 'null' : typeof v === 'object' ? 'an object without _expr text' : typeof v
+      }`,
+      { argument, received: v },
+    )
+  }
+  return v as FilterExpression
 }
 
 /** Register `expr` as built by the DSL and return it. */
