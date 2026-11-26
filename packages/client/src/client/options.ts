@@ -28,6 +28,10 @@ export interface ClientOptions {
    * **Omitting this option entirely disables the timeout** — requests wait
    * indefinitely. Set `0` to explicitly disable. There is NO hidden default
    * cap; production code should set a reasonable value (e.g. `30_000`).
+   * A value above `2³¹ − 1` ms (about 24.8 days) — `Infinity` included — is
+   * capped at it, the longest delay a Node timer keeps; `TimeoutError.timeoutMs`
+   * then reports the capped value. A value that is not a positive number
+   * (negative, `NaN`) disables the timeout, as `0` does.
    *
    * It bounds the exchange with 1С, `beforeRequest` included. It does not
    * bound `afterResponse` on a buffered call — the response is read by then

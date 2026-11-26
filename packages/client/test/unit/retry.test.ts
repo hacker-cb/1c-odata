@@ -10,6 +10,7 @@ import {
 import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { requestWithRetry } from '../../src/http/retry.js'
+import { MAX_TIMER_MS } from '../../src/http/timer.js'
 import { createMswServer } from '../fixtures/msw-server.js'
 
 const server = createMswServer()
@@ -468,6 +469,65 @@ describe('requestWithRetry — an outrun onError cannot stop the retry (#212)', 
       expect(res.status).toBe(200)
       expect(calls).toBe(2)
     } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
+describe('requestWithRetry — a pause past what a timer keeps (#232)', () => {
+  it('a delay above 2³¹−1 ms is capped at it, not fired at once', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        return new HttpResponse(null, { status: 503 })
+      }),
+    )
+    const spy = vi.spyOn(globalThis, 'setTimeout')
+    const caller = new AbortController()
+    let pending: Promise<unknown> | undefined
+    try {
+      pending = requestWithRetry(
+        { method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header }, signal: caller.signal },
+        { retry: { ...retryPolicy, initialDelayMs: 3e9, maxDelayMs: 3e9 } },
+      ).catch((e: unknown) => e)
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_MS))
+      // Fired at once, the pause would have let a second attempt through by now.
+      await new Promise((r) => setTimeout(r, 30))
+      expect(n).toBe(1)
+    } finally {
+      // Ends the pause whatever failed above: no 24.8-day timer outlives the test.
+      caller.abort()
+      spy.mockRestore()
+    }
+    expect(await pending).toMatchObject({ name: 'AbortError' })
+  })
+})
+
+describe('requestWithRetry — maxDelayMs caps the first pause too', () => {
+  it('an initialDelayMs above maxDelayMs waits maxDelayMs', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        if (n < 2) return new HttpResponse(null, { status: 503 })
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const spy = vi.spyOn(globalThis, 'setTimeout')
+    const caller = new AbortController()
+    try {
+      const pending = requestWithRetry(
+        { method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header }, signal: caller.signal },
+        { retry: { ...retryPolicy, initialDelayMs: 30_000, maxDelayMs: 5 } },
+      )
+      await vi.waitFor(() => expect(n).toBe(2))
+      await pending
+      expect(spy).toHaveBeenCalledWith(expect.any(Function), 5)
+      expect(spy).not.toHaveBeenCalledWith(expect.any(Function), 30_000)
+    } finally {
+      // Ends an uncapped 30 s pause at once, should the cap ever break.
+      caller.abort()
       spy.mockRestore()
     }
   })
