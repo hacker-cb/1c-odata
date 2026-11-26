@@ -390,39 +390,60 @@ export type FieldExprMap<T> = { [K in keyof T]-?: ChainedFieldExpr<T[K]> }
  * intersections so e.g. `string` exposes `startsWith` while `number` exposes
  * `add`/`gt` and so on. Always includes `BaseOps<V>` (eq/ne).
  *
+ * The surface is read off `NonNullable<V>` as a whole, not distributed over
+ * its union: a generated nullable field (`Сумма?: number | null`) has the
+ * operators of `number`, a `Date | null` those of `Date`. An `Edm.Int64` read
+ * as `bigint` gets the numeric operators typed for `bigint` — `number`
+ * operands taken as well — and its arithmetic stays `bigint`.
+ *
  * @public
  */
 export type FieldExprFor<V> = BaseOps<V> &
-  (V extends string ? StringOps : object) &
-  (V extends number | bigint ? NumberOps : object) &
-  (V extends Date ? DateOps : object) &
-  (V extends boolean ? BooleanOps : object) &
-  (V extends string ? RefOps : object)
+  (IsOf<V, string> extends true ? StringOps & RefOps : object) &
+  (IsOf<V, number> extends true ? NumberOps<number> : object) &
+  (IsOf<V, bigint> extends true ? NumberOps<bigint> : object) &
+  (IsOf<V, Date> extends true ? DateOps : object) &
+  (IsOf<V, boolean> extends true ? BooleanOps : object)
+
+/**
+ * Whether every non-null value of `V` is a `T` — `false` for a field that
+ * holds nothing but `null` / `undefined`. Not distributive: `number | null`
+ * reads as `number`, a mixed `string | number` as neither.
+ */
+type IsOf<V, T> = [NonNullable<V>] extends [never] ? false : [NonNullable<V>] extends [T] ? true : false
+
+/** An operand of a numeric operator on a field of type `N`: a `bigint` field takes a `number` too. */
+type NumericOperand<N extends number | bigint> = N | number | FieldExpr<N> | FieldExpr<number>
 
 interface BaseOps<V> {
   /**
    * `<field> eq <v>`. `null` compares with a null field; `undefined` is no
    * value — an `InvalidArgumentError` (check a value that may be missing, a
-   * field left out of `$select`, before the filter).
+   * field left out of `$select`, before the filter). An `Edm.Int64` field
+   * read as `bigint` also takes a `number`.
    */
-  eq(v: V | FieldExpr<V>): FilterExpression
+  eq(v: V | FieldExpr<V> | BigintExtra<V>): FilterExpression
   /**
    * `<field> ne <v>`. `null` compares with a null field; `undefined` is no
-   * value — an `InvalidArgumentError`.
+   * value — an `InvalidArgumentError`. An `Edm.Int64` field read as `bigint`
+   * also takes a `number`.
    */
-  ne(v: V | FieldExpr<V>): FilterExpression
+  ne(v: V | FieldExpr<V> | BigintExtra<V>): FilterExpression
 }
 
-interface NumberOps {
-  gt(v: number | FieldExpr<number>): FilterExpression
-  ge(v: number | FieldExpr<number>): FilterExpression
-  lt(v: number | FieldExpr<number>): FilterExpression
-  le(v: number | FieldExpr<number>): FilterExpression
-  add(v: number | FieldExpr<number>): ChainedFieldExpr<number>
-  sub(v: number | FieldExpr<number>): ChainedFieldExpr<number>
-  mul(v: number | FieldExpr<number>): ChainedFieldExpr<number>
-  div(v: number | FieldExpr<number>): ChainedFieldExpr<number>
-  round(): ChainedFieldExpr<number>
+/** What a `bigint` field compares with beyond its own type: a `number`, a numeric expression. */
+type BigintExtra<V> = IsOf<V, bigint> extends true ? number | FieldExpr<number> : never
+
+interface NumberOps<N extends number | bigint> {
+  gt(v: NumericOperand<N>): FilterExpression
+  ge(v: NumericOperand<N>): FilterExpression
+  lt(v: NumericOperand<N>): FilterExpression
+  le(v: NumericOperand<N>): FilterExpression
+  add(v: NumericOperand<N>): ChainedFieldExpr<N>
+  sub(v: NumericOperand<N>): ChainedFieldExpr<N>
+  mul(v: NumericOperand<N>): ChainedFieldExpr<N>
+  div(v: NumericOperand<N>): ChainedFieldExpr<N>
+  round(): ChainedFieldExpr<N>
 }
 
 interface StringOps {

@@ -58,8 +58,11 @@ export function not(e: FilterExpression): FilterExpression {
   return makeFilter(`not (${asCondition(e, 'not() operand')._expr})`)
 }
 
-/** Lambda — at least one row matches. @public */
-export function any<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression {
+/** Lambda — at least one row matches. The collection may be typed nullable or optional (a generated tabular part). @public */
+export function any<V>(
+  field: FieldExpr<V[] | null | undefined>,
+  fn: (t: FieldExprMap<V>) => FilterExpression,
+): FilterExpression {
   const { ctx, expr } = lambdaContext(field, 'any() collection')
   const id = `t${ctx.lambdaCounter.value++}`
   const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
@@ -67,8 +70,11 @@ export function any<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => Filter
   return makeFilter(`${expr}/any(${id}: ${body._expr})`)
 }
 
-/** Lambda — all rows match. @public */
-export function all<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression {
+/** Lambda — all rows match. The collection may be typed nullable or optional (a generated tabular part). @public */
+export function all<V>(
+  field: FieldExpr<V[] | null | undefined>,
+  fn: (t: FieldExprMap<V>) => FilterExpression,
+): FilterExpression {
   const { ctx, expr } = lambdaContext(field, 'all() collection')
   const id = `t${ctx.lambdaCounter.value++}`
   const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
