@@ -1,4 +1,5 @@
 // packages/client/src/query/filter-internal.ts
+import { InvalidArgumentError } from '../errors.js'
 import { formatNumberLiteral } from '../format-number.js'
 import { formatScalarLiteral } from '../url-builder.js'
 
@@ -55,15 +56,50 @@ export interface CompileContext {
   lambdaCounter: { value: number }
 }
 
-function makeFilter(expr: string): FilterExpression {
-  return Object.freeze({ _expr: expr }) as unknown as FilterExpression
+/**
+ * Every expression the DSL itself built — filters and field expressions alike.
+ * What tells an expression from a value: an `_expr` field proves nothing, since
+ * any object parsed from JSON can carry one, but membership here cannot be
+ * forged by data.
+ */
+const dslExpressions = new WeakSet<object>()
+
+/** Register `expr` as built by the DSL and return it. */
+function dslExpression<T extends object>(expr: T): T {
+  dslExpressions.add(expr)
+  return expr
 }
 
+/**
+ * A frozen `FilterExpression` over the OData V3 string `expr`, registered as
+ * built by the DSL.
+ *
+ * @internal
+ */
+export function makeFilter(expr: string): FilterExpression {
+  return dslExpression(Object.freeze({ _expr: expr })) as unknown as FilterExpression
+}
+
+/**
+ * The OData literal of a comparison or operator argument: a scalar by its JS
+ * type, or an expression the DSL built (a field as the value, `f.A.eq(f.B)`)
+ * as its own text. Any other object with an `_expr` field is refused — taken
+ * as an expression, a value from outside would rewrite the filter.
+ */
 function formatLiteral(v: unknown, ctx: CompileContext, argument: string): string {
   if (v === null) return 'null'
   const literal = formatScalarLiteral(v, ctx.serverTimezone, argument)
   if (literal !== undefined) return literal
-  if (typeof v === 'object' && '_expr' in v) return (v as { _expr: string })._expr
+  if (typeof v === 'object') {
+    if (dslExpressions.has(v)) return (v as { _expr: string })._expr
+    if ('_expr' in v) {
+      throw new InvalidArgumentError(
+        `Filter value for "${argument}" is an object with an "_expr" field that the filter DSL did not build — ` +
+          'pass a scalar, or a field expression (f.<Field>) to compare with another field',
+        { argument, received: v },
+      )
+    }
+  }
   return `'${String(v).replace(/'/g, "''")}'`
 }
 
@@ -198,7 +234,7 @@ export function makeFieldProxy<T>(prefix: string, ctx: CompileContext): FieldExp
 }
 
 function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & FieldExpr<V> & { _ctx: CompileContext } {
-  const f = {
+  const f = dslExpression({
     _expr: expr,
     _ctx: ctx,
     eq: (v: unknown) => makeFilter(`${expr} eq ${formatLiteral(v, ctx, expr)}`),
@@ -240,7 +276,7 @@ function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & Fiel
       wrapField<number>(`datedifference(${expr}, ${formatLiteral(other, ctx, expr)}, '${unit}')`, ctx),
     isof: (typeName: string) => makeFilter(`isof(${expr}, ${formatLiteral(typeName, ctx, expr)})`),
     cast: (typeName: string) => wrapField<string>(`cast(${expr}, ${formatLiteral(typeName, ctx, expr)})`, ctx),
-  }
+  })
   return f as unknown as FieldExprFor<V> & FieldExpr<V> & { _ctx: CompileContext }
 }
 

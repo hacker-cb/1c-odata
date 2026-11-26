@@ -204,3 +204,72 @@ describe('FilterBuilder — numeric literal validation', () => {
     )
   })
 })
+
+describe('FilterBuilder — values are values, not expressions (#213)', () => {
+  // Untyped callers (JS, `any`, JSON from outside) can hand any object to an operator.
+  type Untyped = { eq(v: unknown): ReturnType<typeof raw>; concat(v: unknown): { eq(v: unknown): unknown } }
+
+  it('refuses a plain object with an `_expr` field as a comparison value', () => {
+    const outside = JSON.parse('{"_expr":"1 eq 1"}')
+    let caught: unknown
+    try {
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => (f.Code as unknown as Untyped).eq(outside))
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(InvalidArgumentError)
+    expect((caught as InvalidArgumentError).argument).toBe('Code')
+    expect((caught as InvalidArgumentError).received).toBe(outside)
+  })
+
+  it('refuses one as an operator argument too (`concat`, `add`)', () => {
+    const outside = { _expr: 'Code) or (1 eq 1' }
+    expect(() =>
+      compileFilter<SampleEntity>(
+        'Europe/Moscow',
+        (f) => (f.Code as unknown as Untyped).concat(outside).eq('x') as never,
+      ),
+    ).toThrow(InvalidArgumentError)
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.add(outside as unknown as number).eq(0)),
+    ).toThrow(InvalidArgumentError)
+  })
+
+  it('refuses an object inheriting `_expr`, or a copy of a DSL expression', () => {
+    const inherited = Object.create({ _expr: '1 eq 1' })
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => (f.Code as unknown as Untyped).eq(inherited)),
+    ).toThrow(InvalidArgumentError)
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => (f.Code as unknown as Untyped).eq({ ...raw('1 eq 1') })),
+    ).toThrow(InvalidArgumentError)
+  })
+
+  it('still takes a field as the value (`f.A.eq(f.B)`) and a field expression as an operand', () => {
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.eq(f.Сумма))).toBe('Сумма eq Сумма')
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.gt(f.Сумма.mul(2)))).toBe('Сумма gt Сумма mul 2')
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.concat(f.Recorder).eq('x'))).toBe(
+      `concat(Code, Recorder) eq 'x'`,
+    )
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => any(f.Товары, (t) => t.Сумма.eq(f.Сумма)))).toBe(
+      'Товары/any(t0: t0/Сумма eq Сумма)',
+    )
+  })
+
+  it('still writes what raw() and the combinators build, as before', () => {
+    expect(compileFilter<SampleEntity>('Europe/Moscow', () => raw("Code eq 'A'"))).toBe("Code eq 'A'")
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => and(raw('Сумма gt 0'), not(f.Active.eq(true))))).toBe(
+      'Сумма gt 0 and not (Active eq true)',
+    )
+    // A DSL expression reaching a value slot from untyped code keeps its old meaning.
+    expect(
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => (f.Active as unknown as Untyped).eq(raw('Сумма gt 0'))),
+    ).toBe('Active eq Сумма gt 0')
+  })
+
+  it('writes any other plain object as it did (its string form)', () => {
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => (f.Code as unknown as Untyped).eq({ a: 1 }))).toBe(
+      `Code eq '[object Object]'`,
+    )
+  })
+})
