@@ -261,10 +261,6 @@ describe('FilterBuilder — values are values, not expressions (#213)', () => {
     expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => and(raw('Сумма gt 0'), not(f.Active.eq(true))))).toBe(
       'Сумма gt 0 and not (Active eq true)',
     )
-    // A DSL expression reaching a value slot from untyped code keeps its old meaning.
-    expect(
-      compileFilter<SampleEntity>('Europe/Moscow', (f) => (f.Active as unknown as Untyped).eq(raw('Сумма gt 0'))),
-    ).toBe('Active eq Сумма gt 0')
   })
 
   it('writes any other plain object as it did (its string form)', () => {

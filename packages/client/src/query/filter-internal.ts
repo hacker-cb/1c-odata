@@ -88,10 +88,10 @@ export function makeFilter(expr: string): FilterExpression {
  */
 function formatLiteral(v: unknown, ctx: CompileContext, argument: string): string {
   if (v === null) return 'null'
+  if (typeof v === 'object' && dslExpressions.has(v)) return (v as { _expr: string })._expr
   const literal = formatScalarLiteral(v, ctx.serverTimezone, argument)
   if (literal !== undefined) return literal
   if (typeof v === 'object') {
-    if (dslExpressions.has(v)) return (v as { _expr: string })._expr
     if ('_expr' in v) {
       throw new InvalidArgumentError(
         `Filter value for "${argument}" is an object with an "_expr" field that the filter DSL did not build — ` +
