@@ -15,8 +15,8 @@ export interface RequestEvent {
    * a fresh one for each attempt a retry makes. It aborts when the attempt is
    * cut short: the timeout, over what it bounds (`ClientOptions.timeout`),
    * the caller's own signal
-   * (client- or call-level), or a hook's own error ending the call (its reason
-   * that error, with or without a timeout). Hand it to work a hook starts so
+   * (client- or call-level), or a hook's own error ending the call (with or
+   * without a timeout; its reason that error, where nothing aborted it first). Hand it to work a hook starts so
    * that work stops when the call is cut short; it is not aborted when the
    * call completes or fails otherwise. Optional only so a hand-built event
    * type-checks.

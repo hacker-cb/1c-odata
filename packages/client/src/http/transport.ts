@@ -115,9 +115,11 @@ async function prepareRequest(
       runHook(() => callOpts.hooks?.beforeRequest?.(reqEvent), trace),
       combined,
     )
-    // A replacement event keeps the call's signal: the fetch runs under it, and
-    // later hooks are promised it.
-    if (result) reqEvent = { ...result, signal: combined }
+    if (result) reqEvent = result
+    // The event keeps the call's signal — the fetch runs under it, and later
+    // hooks are promised it — whether the hook returned a replacement without
+    // one or dropped it from the event it was given.
+    reqEvent = withSignal(reqEvent, combined)
   } catch (e) {
     // The callers' `finally` that clears the timer is not reached from here.
     if (timeoutId) clearTimeout(timeoutId)
@@ -153,6 +155,16 @@ async function prepareRequest(
   }
 
   return { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs, callController }
+}
+
+/**
+ * `event` carrying `signal`: set in place where it lacks it, so the event a
+ * hook returned stays the one later hooks see (its prototype and identity
+ * intact); a copy only where the object refuses the write (frozen).
+ */
+function withSignal(event: RequestEvent, signal: AbortSignal): RequestEvent {
+  if (event.signal === signal || Reflect.set(event, 'signal', signal)) return event
+  return { ...event, signal }
 }
 
 /**
@@ -615,6 +627,8 @@ export async function requestStream(
       let body: string
       try {
         body = await response.text()
+        // The exchange with 1С is over: the timer stops here, as on a buffered call.
+        if (timeoutId) clearTimeout(timeoutId)
       } catch (e) {
         if (timeoutId) clearTimeout(timeoutId)
         return await translateAndFireError(

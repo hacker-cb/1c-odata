@@ -882,20 +882,80 @@ describe('transport — a hook error aborts req.signal without a timeout (#217)'
   })
 
   it('request: the timeout stops once the body is read — it never aborts req.signal under a slow afterResponse', async () => {
+    // fetch answers at once, so the deadline is past only while the hook runs.
+    const spy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response('{"value":[]}', { status: 200 }))
+    try {
+      let hookSignal: AbortSignal | undefined
+      const res = await request(target, {
+        timeout: 20,
+        hooks: {
+          afterResponse: async (req) => {
+            hookSignal = req.signal
+            await new Promise((r) => setTimeout(r, 60))
+            if (req.signal?.aborted) throw req.signal.reason
+          },
+        },
+      })
+      expect(res.status).toBe(200)
+      expect(hookSignal?.aborted).toBe(false)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('requestStream: the timeout stops once an error body is read — it never aborts req.signal under onError', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('down', { status: 503 }))
+    try {
+      let hookSignal: AbortSignal | undefined
+      const err = await requestStream(target, {
+        timeout: 20,
+        hooks: {
+          onError: async (req) => {
+            hookSignal = req.signal
+            await new Promise((r) => setTimeout(r, 60))
+          },
+        },
+      }).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(HTTPError)
+      expect(hookSignal?.aborted).toBe(false)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('a beforeRequest dropping req.signal from its event leaves it for the hooks after it; a returned event keeps its identity', async () => {
     ok()
-    let hookSignal: AbortSignal | undefined
-    const res = await request(target, {
-      timeout: 30,
+    let returned: RequestEvent | undefined
+    let after: RequestEvent | undefined
+    await request(target, {
       hooks: {
-        afterResponse: async (req) => {
-          hookSignal = req.signal
-          await new Promise((r) => setTimeout(r, 80))
-          if (req.signal?.aborted) throw req.signal.reason
+        beforeRequest: (req) => {
+          delete req.signal
+          returned = { method: req.method, url: req.url, headers: req.headers }
+          return returned
+        },
+        afterResponse: (req) => {
+          after = req
         },
       },
     })
-    expect(res.status).toBe(200)
-    expect(hookSignal?.aborted).toBe(false)
+    expect(after).toBe(returned)
+    expect(after?.signal).toBeInstanceOf(AbortSignal)
+
+    let mutated: RequestEvent | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: (req) => {
+          delete req.signal
+        },
+        afterResponse: (req) => {
+          mutated = req
+        },
+      },
+    })
+    expect(mutated?.signal).toBeInstanceOf(AbortSignal)
   })
 
   it('a caller signal aborted by a hook error is not the caller’s: their own signal stays unaborted', async () => {
