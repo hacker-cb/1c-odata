@@ -89,7 +89,7 @@ export function parseV3Collection<T>(body: string, opts: ParseOptions): Collecti
     odataMetadata: typeof obj['odata.metadata'] === 'string' ? (obj['odata.metadata'] as string) : '',
     value: value as T[],
   }
-  if (typeof obj['odata.count'] === 'string') result.count = Number.parseInt(obj['odata.count'] as string, 10)
+  if (typeof obj['odata.count'] === 'string') result.count = strictCount(obj['odata.count'] as string, 'odata.count')
   return result
 }
 
@@ -108,12 +108,22 @@ export function parseV3Single<T>(body: string, opts: ParseOptions): T {
 }
 
 /**
- * Parse a `/$count` response: BOM-prefixed plain integer.
+ * Parse a `/$count` response — the whole (BOM-stripped, trimmed) body a
+ * non-negative decimal integer within the safe range. `12oops`, `1.5`, `-1`,
+ * `1e3` or an empty body is a `ParseError` rather than a count read off its
+ * prefix: a proxy page or a truncated body starting with digits is no total.
+ * The one parser of a `/$count` body — `.count()`, register virtual tables.
  */
 export function parseV3Count(body: string): number {
-  const trimmed = body.replace(/^﻿/, '').trim()
-  const n = Number.parseInt(trimmed, 10)
-  if (Number.isNaN(n)) throw new ParseError(`Expected integer in /$count response, got: ${trimmed.slice(0, 50)}`)
+  return strictCount(body.replace(/^\uFEFF/, '').trim(), '/$count')
+}
+
+/** `text` as a row count — only `^\d+$` within the safe range — or a `ParseError` naming `source`. */
+function strictCount(text: string, source: string): number {
+  const n = Number(text)
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(n)) {
+    throw new ParseError(`Expected a non-negative integer row count in ${source}, got: ${text.slice(0, 50)}`)
+  }
   return n
 }
 

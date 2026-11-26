@@ -64,6 +64,19 @@ describe('ODataV3Client.query', () => {
     expect(n).toBe(10715)
   })
 
+  it('count() fails with a ParseError on a /$count body that only starts with digits (#218)', async () => {
+    server.use(
+      http.get(
+        `${base}/Catalog_X/$count`,
+        () => new HttpResponse('12<html>proxy</html>', { headers: { 'content-type': 'text/html' } }),
+      ),
+    )
+    await expect(client.query('Catalog_X').count()).rejects.toMatchObject({
+      name: 'ParseError',
+      message: expect.stringMatching(/non-negative integer row count in \/\$count/),
+    })
+  })
+
   it('entity(set, key).get() returns single entity', async () => {
     server.use(
       http.get(/Catalog_X\(guid'818ed18b-76c9-11e4-8918-003048663bbb'\)/, () =>
