@@ -5,7 +5,10 @@ import type { PoolEntry, ReadPool } from '../../src/connection-pool.js'
 import { DEFAULT_LIMITS } from '../../src/limits.js'
 import { registerDataTools } from '../../src/tools/data.js'
 
-type Handler = (args: Record<string, unknown>) => Promise<CallToolResult>
+type Handler = (args: Record<string, unknown>, extra: { signal: AbortSignal }) => Promise<CallToolResult>
+
+/** What the MCP SDK hands a tool handler beside its arguments — a request never cancelled. */
+const extra = { signal: new AbortController().signal }
 
 /** Register the data tools against a capturing server and a client whose query builder returns no rows. */
 function setup() {
@@ -35,10 +38,13 @@ describe('query: register virtual tables in the path (#181)', () => {
   it('a virtual-table entity set gets the segment-limit tip in its summary', async () => {
     const query = setup().get('query')
     if (query === undefined) throw new Error('query not registered')
-    const res = await query.handler({
-      connection: 'c',
-      entitySet: "AccountingRegister_X/Turnovers(AccountCondition='Account_Key eq guid''g1''')",
-    })
+    const res = await query.handler(
+      {
+        connection: 'c',
+        entitySet: "AccountingRegister_X/Turnovers(AccountCondition='Account_Key eq guid''g1''')",
+      },
+      extra,
+    )
     const text = (res.content[0] as { text: string }).text
     expect(text).toContain('register_query aggregates it server-side')
     expect(text).toContain('share one URL path segment, which IIS caps at 260 characters')
@@ -47,7 +53,7 @@ describe('query: register virtual tables in the path (#181)', () => {
   it('a virtual table without parameters in the path gets the plain tip, no segment claim', async () => {
     const query = setup().get('query')
     if (query === undefined) throw new Error('query not registered')
-    const res = await query.handler({ connection: 'c', entitySet: 'AccumulationRegister_X/Balance' })
+    const res = await query.handler({ connection: 'c', entitySet: 'AccumulationRegister_X/Balance' }, extra)
     const text = (res.content[0] as { text: string }).text
     expect(text).toContain('register_query aggregates it server-side.')
     expect(text).not.toContain('path segment')

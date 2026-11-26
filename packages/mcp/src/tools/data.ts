@@ -73,16 +73,19 @@ function applyQueryOptions(builder: V3QueryBuilder<UntypedEntity>, opts: QueryOp
  * One page of `q` and, with `count`, the total from the set's `/$count` (the
  * same `$filter`) in parallel — never `$inlinecount`, with which 1С by its
  * 8.3.27 documentation drops `$skip` / `$top` (#206). One failing aborts the
- * other rather than leave it loading what no one reads.
+ * other rather than leave it loading what no one reads; `signal` — the MCP
+ * request's own — aborts both.
  */
 async function pageAndCount(
   q: V3QueryBuilder<UntypedEntity>,
   count: boolean,
+  signal: AbortSignal,
 ): Promise<{ value: UntypedEntity[]; count?: number }> {
-  if (!count) return { value: (await q.get()).value }
+  if (!count) return { value: (await q.get({ signal })).value }
   const sibling = new AbortController()
+  const both = AbortSignal.any([signal, sibling.signal])
   try {
-    const [page, total] = await Promise.all([q.get({ signal: sibling.signal }), q.count({ signal: sibling.signal })])
+    const [page, total] = await Promise.all([q.get({ signal: both }), q.count({ signal: both })])
     return { value: page.value, count: total }
   } catch (err) {
     sibling.abort()
@@ -191,7 +194,15 @@ function registerHint(entitySet: string): string {
   return ''
 }
 
-/** Register the read-only data tools (queries, lookups, register virtual tables). */
+/**
+ * Register the read-only data tools (queries, lookups, register virtual tables).
+ * Each hands its MCP request's `signal` to every request it makes to 1С, so a
+ * request the MCP client cancels — or a transport that closes — aborts them
+ * rather than leave 1С computing what no one reads (#216). Resolving the
+ * connection (`pool.get`) is left out: its `$metadata` download is shared by
+ * every call waiting on the same connection, which one caller's cancel must
+ * not fail.
+ */
 export function registerDataTools(server: McpServer, pool: ReadPool, limits: Limits): void {
   server.registerTool(
     'query',
@@ -228,7 +239,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           ),
       },
     },
-    async ({ connection, entitySet, filter, select, expand, orderBy, top, skip, count, compact }) =>
+    async ({ connection, entitySet, filter, select, expand, orderBy, top, skip, count, compact }, { signal }) =>
       toolResult(async () => {
         const { client } = await pool.get(connection)
         const limit = clampTop(top, limits)
@@ -238,7 +249,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
         )
         if (offset > 0) q = q.skip(offset)
 
-        const page = await pageAndCount(q, count === true)
+        const page = await pageAndCount(q, count === true, signal)
         const total = page.count
         const { value, more, pageable, note: topNote } = queryPage(page.value, limit, offset, total)
         const fetched = value.length
@@ -291,10 +302,10 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           ),
       },
     },
-    async ({ connection, entitySet, key, compact }) =>
+    async ({ connection, entitySet, key, compact }, { signal }) =>
       toolResult(async () => {
         const { client } = await pool.get(connection)
-        const entity = await client.entity<UntypedEntity>(entitySet, key).get()
+        const entity = await client.entity<UntypedEntity>(entitySet, key).get({ signal })
         const cleaned = compact === true ? stripNoise(entity) : entity
         // Cap oversized string fields (e.g. a base64 ValueStorage) first.
         const shaped = capLongStrings(cleaned, limits.maxBytes)
@@ -322,11 +333,11 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
         filter: z.string().optional().describe('Raw OData $filter expression'),
       },
     },
-    async ({ connection, entitySet, filter }) =>
+    async ({ connection, entitySet, filter }, { signal }) =>
       toolResult(async () => {
         const { client } = await pool.get(connection)
         const q = applyQueryOptions(client.query<UntypedEntity>(entitySet), { filter })
-        const total = await q.count()
+        const total = await q.count({ signal })
         return { summary: `${total} row(s) in ${entitySet}.`, data: { connection, entitySet, count: total } }
       }),
   )
@@ -402,7 +413,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           ),
       },
     },
-    async (args) =>
+    async (args, { signal }) =>
       toolResult(async () => {
         const { client } = await pool.get(args.connection)
         // One page per call, paged by 1С itself ($skip/$top), with the exact
@@ -413,7 +424,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
         const page = await runRegisterTable(
           client.register(args.register),
           cleanRegisterArgs(args),
-          { ...readOptions(args), top: limit, ...(offset > 0 ? { skip: offset } : {}), count: true },
+          { ...readOptions(args), top: limit, ...(offset > 0 ? { skip: offset } : {}), count: true, signal },
           client.serverTimezone,
         )
         const total = page.count

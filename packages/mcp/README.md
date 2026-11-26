@@ -29,6 +29,11 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 | `set_label` | Set or clear a connection's display label (empty clears it → falls back to the name). |
 | `remove_connection` | Remove a connection and delete its stored password. |
 
+A call the MCP client cancels (or whose connection closes) aborts the requests to 1С it has in flight —
+`query`, `get_entity`, `count` and `register_query` hand the request's abort signal to each of them, the
+parallel `/$count` included. The first `$metadata` download of a connection is not aborted: every call
+waiting on that connection shares it.
+
 ## Quick start
 
 ### 1. Add a connection (in a terminal)
