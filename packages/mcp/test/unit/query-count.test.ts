@@ -194,11 +194,14 @@ describe('query with count: a parallel /$count, never $inlinecount (#206)', () =
     expect(JSON.stringify(summary)).toContain('page with count:true')
   })
 
-  it('without count offers no paging on past top even where the byte budget cut the page', async () => {
+  it('without count, a first page past top is placed (no $skip was sent) and pages on (#235)', async () => {
     const { run } = setup(10, { ...limits, maxBytes: 12 }, { ignoreTop: true, ignoreSkip: true })
     const { data } = await run({})
-    expect(data.pagination.truncated).toBe(true)
-    expect(data.pagination.hasMore).toBe(false)
+    expect(data.pagination).toMatchObject({ truncated: true, hasMore: true })
+    expect(data.pagination).not.toHaveProperty('ambiguous')
+    // The next page is at a skip: whether 1С kept to it is unknown, and the byte budget offers no paging on.
+    const next = await run({ skip: data.pagination.returned })
+    expect(next.data.pagination).toMatchObject({ hasMore: false, ambiguous: 'skipUnverified' })
   })
 
   it('within top too: as many rows as counted at a skip offers no paging on', async () => {

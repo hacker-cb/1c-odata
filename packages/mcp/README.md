@@ -190,13 +190,19 @@ one `ONEC_A_B_PASSWORD` — `add` rejects the colliding second name, so pick a d
 > re-hashes the keychain service and orphans keychain-stored secrets — the `credentials.json` file travels with
 > the dir and env passwords are independent, so both survive a move.
 
+## Paging
+
+`query` and `register_query` page with `skip` / `top`; page on while `pagination.hasMore` holds. A page 1С's answer
+leaves unplaced carries `pagination.ambiguous` (absent otherwise) and ends the paging: `"skipIgnoredOrCountShort"` — at a
+`skip`, 1С sent as many rows as it counted (or, ignoring `$top`, more), so it either ignored `$skip` or counts fewer rows
+than it has; `"skipUnverified"` (`query` only) — at a `skip`, 1С ignored `$top` and no count was asked for. Such a page is
+not to be joined to the pages before it: narrow the request instead.
+
 ## Output size
 
 Every read tool keeps its result within a byte budget so a large query can't overflow the model's context:
 row sets are truncated to a usable sample (the response carries `truncated` / `hasMore` and a hint to narrow
-the request; `query` and `register_query` add `pagination.ambiguous` — `"skipIgnoredOrCountShort"` or
-`"skipUnverified"` — only on a page 1С's answer leaves unplaced, which ends the paging and is not to be joined to the
-pages before it), and an oversized individual field (e.g. a base64 `ValueStorage`) is capped with a marker. One
+the request), and an oversized individual field (e.g. a base64 `ValueStorage`) is capped with a marker. One
 row is always returned even if it alone exceeds the budget, so you still see the shape (narrow with `select`
 or `compact`); `get_entity` instead refuses an over-budget entity and points you to `query` + `$select`. Tune
 it with env vars (all optional):
