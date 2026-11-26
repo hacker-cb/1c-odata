@@ -30,11 +30,16 @@ const TOP = { top: 50 }
 // The turnover virtual tables read the movement tables, and at times 1С stalls
 // on them past 30 s — on both bases at once, the cheap calls in the same window
 // unaffected, whatever the period (#238: run 45841318847, April 2026 already).
-// Their tests bound each call with the client's own timeout and retry: a stalled
-// attempt fails fast with a TimeoutError and the next one starts afresh. The
-// test timeout applies to each attempt and leaves room for two calls of one.
+// Each call in those tests carries a client timeout (20 s; they answer in about
+// a second), and vitest retries the test — on that TimeoutError alone, so any
+// other failure still shows at once — after a pause: a stalled attempt fails
+// fast and the next one starts afresh. The test timeout applies to each attempt
+// and leaves room for two calls of one.
 const STALL = { ...TOP, timeout: 20_000 }
-const STALL_TEST = { timeout: 90_000, retry: 2 }
+const STALL_TEST = {
+  timeout: 90_000,
+  retry: { count: 2, delay: 5_000, condition: /^Request timed out after \d+ms$/ },
+}
 
 for (const { fixture, profile } of activeFixtures()) {
   const reg = profile.register
