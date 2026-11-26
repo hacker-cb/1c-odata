@@ -263,6 +263,20 @@ describe('FilterBuilder — values are values, not expressions (#213)', () => {
     )
   })
 
+  it('refuses a value with no string form as InvalidArgumentError, not a TypeError', () => {
+    for (const v of [Object.create(null), JSON.parse('{"toString":"x"}')]) {
+      let caught: unknown
+      try {
+        compileFilter<SampleEntity>('Europe/Moscow', (f) => (f.Code as unknown as Untyped).eq(v))
+      } catch (e) {
+        caught = e
+      }
+      expect(caught).toBeInstanceOf(InvalidArgumentError)
+      expect((caught as InvalidArgumentError).argument).toBe('Code')
+      expect((caught as InvalidArgumentError).cause).toBeInstanceOf(TypeError)
+    }
+  })
+
   it('writes any other plain object as it did (its string form)', () => {
     expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => (f.Code as unknown as Untyped).eq({ a: 1 }))).toBe(
       `Code eq '[object Object]'`,

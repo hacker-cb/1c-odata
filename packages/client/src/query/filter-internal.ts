@@ -100,7 +100,24 @@ function formatLiteral(v: unknown, ctx: CompileContext, argument: string): strin
       )
     }
   }
-  return `'${String(v).replace(/'/g, "''")}'`
+  return `'${stringForm(v, argument).replace(/'/g, "''")}'`
+}
+
+/**
+ * `String(v)` for a value written as a string literal — a library error where
+ * it has none (no prototype, a `toString` that is not a function or throws)
+ * rather than the bare `TypeError` of the conversion.
+ */
+function stringForm(v: unknown, argument: string): string {
+  try {
+    return String(v)
+  } catch (cause) {
+    throw new InvalidArgumentError(`Filter value for "${argument}" cannot be converted to a string`, {
+      argument,
+      received: v,
+      cause,
+    })
+  }
 }
 
 /**
