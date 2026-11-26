@@ -10,6 +10,13 @@ export interface RequestEvent {
   url: string
   headers: Record<string, string>
   body?: string
+  /**
+   * The call's signal — set by the library on every request it makes. It
+   * aborts when the call ends early: the timeout, the caller's own signal
+   * (client- or call-level), or a hook's own error ending the call (with or
+   * without a timeout). Hand it to work a hook starts, so that work ends with
+   * the call. Optional only so a hand-built event type-checks.
+   */
   signal?: AbortSignal
 }
 
@@ -33,7 +40,8 @@ export interface ResponseEvent {
  * throws on a 401 to trigger a re-login gets its own error back. The one
  * exception: `onError` rethrowing the very error it was handed leaves it the
  * library's error, retried as its type and status say — so "log and rethrow"
- * keeps retry working:
+ * keeps retry working. A hook's own exception ends the call, and `req.signal`
+ * is aborted with it, so work the hook left running under that signal stops:
  *
  * ```ts
  * onError: (req, err) => {

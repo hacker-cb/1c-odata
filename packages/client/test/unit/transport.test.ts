@@ -715,3 +715,124 @@ describe('request — afterResponse is not bounded by the timeout (#204)', () =>
     expect(onError).not.toHaveBeenCalled()
   })
 })
+
+describe('transport — a hook error aborts req.signal without a timeout (#217)', () => {
+  const target = { method: 'GET' as const, url: `${base}/X`, headers: { Authorization: auth.header } }
+
+  function ok(status = 200) {
+    server.use(
+      http.get(`${base}/X`, () =>
+        status < 400 ? HttpResponse.json({ value: [] }) : new HttpResponse('upstream down', { status }),
+      ),
+    )
+  }
+
+  for (const [name, call] of [
+    ['request', request],
+    ['requestStream', requestStream],
+  ] as const) {
+    it(`${name}: req.signal is set with no timeout and no signal, and a normal call leaves it unaborted`, async () => {
+      ok()
+      let hookSignal: AbortSignal | undefined
+      const res = await call(target, {
+        hooks: {
+          beforeRequest: (req) => {
+            hookSignal = req.signal
+          },
+        },
+      })
+      if ('response' in res) void res.response.body?.cancel().catch(() => {})
+      expect(hookSignal).toBeInstanceOf(AbortSignal)
+      expect(hookSignal?.aborted).toBe(false)
+    })
+
+    it(`${name}: beforeRequest throwing aborts req.signal with no timeout`, async () => {
+      const hookErr = new Error('token fetch failed')
+      let hookSignal: AbortSignal | undefined
+      const err = await call(target, {
+        hooks: {
+          beforeRequest: (req) => {
+            hookSignal = req.signal
+            throw hookErr
+          },
+        },
+      }).catch((e: unknown) => e)
+      expect(err).toBe(hookErr)
+      expect(hookSignal?.aborted).toBe(true)
+    })
+
+    it(`${name}: afterResponse throwing aborts req.signal with no timeout`, async () => {
+      ok()
+      const hookErr = new Error('metrics down')
+      let hookSignal: AbortSignal | undefined
+      const err = await call(target, {
+        hooks: {
+          afterResponse: (req) => {
+            hookSignal = req.signal
+            throw hookErr
+          },
+        },
+      }).catch((e: unknown) => e)
+      expect(err).toBe(hookErr)
+      expect(hookSignal?.aborted).toBe(true)
+    })
+
+    it(`${name}: onError throwing its own error on an HTTP error aborts req.signal; rethrowing the one it was handed does not`, async () => {
+      ok(500)
+      const own = new Error('re-login failed')
+      let ownSignal: AbortSignal | undefined
+      const err = await call(target, {
+        hooks: {
+          onError: (req) => {
+            ownSignal = req.signal
+            throw own
+          },
+        },
+      }).catch((e: unknown) => e)
+      expect(err).toBe(own)
+      expect(ownSignal?.aborted).toBe(true)
+
+      let handedSignal: AbortSignal | undefined
+      const handed = await call(target, {
+        hooks: {
+          onError: (req, e) => {
+            handedSignal = req.signal
+            throw e
+          },
+        },
+      }).catch((e: unknown) => e)
+      expect(handed).toBeInstanceOf(HTTPError)
+      expect(handedSignal?.aborted).toBe(false)
+    })
+
+    it(`${name}: onError throwing its own error on a network failure aborts req.signal`, async () => {
+      server.use(http.get(`${base}/X`, () => HttpResponse.error()))
+      const own = new Error('alerting down')
+      let hookSignal: AbortSignal | undefined
+      const err = await call(target, {
+        hooks: {
+          onError: (req) => {
+            hookSignal = req.signal
+            throw own
+          },
+        },
+      }).catch((e: unknown) => e)
+      expect(err).toBe(own)
+      expect(hookSignal?.aborted).toBe(true)
+    })
+  }
+
+  it('a caller signal aborted by a hook error is not the caller’s: their own signal stays unaborted', async () => {
+    const caller = new AbortController()
+    const err = await request(target, {
+      signal: caller.signal,
+      hooks: {
+        beforeRequest: () => {
+          throw new Error('boom')
+        },
+      },
+    }).catch((e: unknown) => e)
+    expect((err as Error).message).toBe('boom')
+    expect(caller.signal.aborted).toBe(false)
+  })
+})
