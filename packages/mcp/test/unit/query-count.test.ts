@@ -12,7 +12,15 @@ const extra = { signal: new AbortController().signal }
 
 interface Result {
   count?: number
-  pagination: { skip: number; top: number; fetched: number; returned: number; truncated: boolean; hasMore: boolean }
+  pagination: {
+    skip: number
+    top: number
+    fetched: number
+    returned: number
+    truncated: boolean
+    hasMore: boolean
+    ambiguous?: string
+  }
   value: { n: number }[]
 }
 
@@ -186,11 +194,14 @@ describe('query with count: a parallel /$count, never $inlinecount (#206)', () =
     expect(JSON.stringify(summary)).toContain('page with count:true')
   })
 
-  it('without count offers no paging on past top even where the byte budget cut the page', async () => {
+  it('without count, a first page past top is placed (no $skip was sent) and pages on (#235)', async () => {
     const { run } = setup(10, { ...limits, maxBytes: 12 }, { ignoreTop: true, ignoreSkip: true })
     const { data } = await run({})
-    expect(data.pagination.truncated).toBe(true)
-    expect(data.pagination.hasMore).toBe(false)
+    expect(data.pagination).toMatchObject({ truncated: true, hasMore: true })
+    expect(data.pagination).not.toHaveProperty('ambiguous')
+    // The next page is at a skip: whether 1С kept to it is unknown, and the byte budget offers no paging on.
+    const next = await run({ skip: data.pagination.returned })
+    expect(next.data.pagination).toMatchObject({ hasMore: false, ambiguous: 'skipUnverified' })
   })
 
   it('within top too: as many rows as counted at a skip offers no paging on', async () => {
@@ -219,5 +230,38 @@ describe('query with count: a parallel /$count, never $inlinecount (#206)', () =
     const { run } = setup(10, limits)
     const { summary } = await run({ count: true })
     expect(JSON.stringify(summary)).not.toContain('$top')
+  })
+})
+
+describe('query marks a page it cannot place in pagination.ambiguous (#235)', () => {
+  const limits: Limits = { ...DEFAULT_LIMITS, defaultTop: 4, maxTop: 4 }
+
+  it('"skipIgnoredOrCountShort" at a skip with as many rows as counted', async () => {
+    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true })
+    const { data } = await run({ count: true, skip: 8 })
+    expect(data.pagination).toMatchObject({ hasMore: false, ambiguous: 'skipIgnoredOrCountShort' })
+  })
+
+  it('"skipIgnoredOrCountShort" within top too: a full page holding exactly the count', async () => {
+    const { run } = setup(4, limits, { ignoreSkip: true })
+    const { data } = await run({ count: true, skip: 4 })
+    expect(data.pagination).toMatchObject({ hasMore: false, ambiguous: 'skipIgnoredOrCountShort' })
+  })
+
+  it('"skipUnverified" past top without a count', async () => {
+    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true })
+    const { data } = await run({ skip: 4 })
+    expect(data.pagination).toMatchObject({ hasMore: false, ambiguous: 'skipUnverified' })
+  })
+
+  it.each([
+    ['a first page', {}, {}],
+    ['a last short page', { count: true, skip: 8 }, {}],
+    ['a page past top it could place', { count: true, skip: 2 }, { ignoreTop: true }],
+    ['a page past a short count', { count: true, skip: 8 }, { count: 6 }],
+  ])('absent on %s', async (_what, args, opts) => {
+    const { run } = setup(10, limits, opts)
+    const { data } = await run(args)
+    expect(data.pagination).not.toHaveProperty('ambiguous')
   })
 })
