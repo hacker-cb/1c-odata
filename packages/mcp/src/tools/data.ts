@@ -117,7 +117,8 @@ interface Page<T> {
  */
 function placePage<T>(rows: T[], limit: number, offset: number, total: number | undefined, narrow: string): Page<T> {
   const topIgnored = rows.length > limit
-  const counted = offset > 0 && total !== undefined && total > 0
+  // An empty page is never ambiguous; a non-empty one past a count of 0 is (the count missed them).
+  const counted = offset > 0 && total !== undefined && rows.length > 0
   const ambiguous = counted && (rows.length === total || (topIgnored && rows.length > total))
   if (!ambiguous && !topIgnored) {
     return { value: rows, more: moreAfter(offset, rows.length, limit, total), pageable: true, note: '' }
@@ -434,7 +435,16 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           more,
           pageable,
           note: pageNote,
-        } = placePage(page.value, limit, offset, total, 'narrow with condition, period, filter or select')
+        } = placePage(
+          page.value,
+          limit,
+          offset,
+          total,
+          // extDimensions takes no condition or period: only its system options narrow it.
+          args.table === 'extDimensions'
+            ? 'narrow with filter or select'
+            : 'narrow with condition, period, filter or select',
+        )
         // 1С may count a $select as rolled up while returning its rows un-rolled:
         // once a page's rows outrun the count it is no guide to whether more remain.
         const countNote =

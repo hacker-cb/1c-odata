@@ -48,7 +48,8 @@ function setup(
       return { value, count }
     },
   }
-  const client = { serverTimezone: 'Europe/Moscow', register: () => helper }
+  const register = { ...helper, extDimensions: (opts: ReadFiCountOptions) => helper.balance(undefined, opts) }
+  const client = { serverTimezone: 'Europe/Moscow', register: () => register }
   const pool = { get: async () => ({ client }) as unknown as PoolEntry } as unknown as ReadPool
   registerDataTools(server, pool, limits)
   const run = async (args: Record<string, unknown>) => {
@@ -136,6 +137,20 @@ describe('register_query pages on the 1С server (#192)', () => {
     // The count saw 12 rows, the page — read a moment later — none past skip 10.
     const { run } = setup(10, limits, { count: 12 })
     expect((await run({ skip: 10 })).data.pagination).toMatchObject({ returned: 0, hasMore: false })
+  })
+
+  it('takes rows past top at a skip against a count of 0 as ambiguous', async () => {
+    // The count saw an empty table; the page, read a moment later, ten rows past top.
+    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true, count: 0 })
+    const { data } = await run({ skip: 8 })
+    expect(data.rows.map((r) => r.n)).toEqual([0, 1, 2, 3])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
+  })
+
+  it('narrows extDimensions only by what it takes', async () => {
+    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true })
+    const { summary } = await run({ skip: 8, table: 'extDimensions' })
+    expect(JSON.stringify(summary)).toContain('Paging on stops here: narrow with filter or select')
   })
 
   it('claims no rows past the count on an empty page past it', async () => {
