@@ -74,6 +74,8 @@ export class ConnectionPool implements ReadPool {
   private readonly source: ConnectionSource
   private readonly fetchTimeout: number
   private readonly cache = new Map<string, Promise<PoolEntry>>()
+  /** Aborted by {@link close}: every `$metadata` download of the pool listens to it. */
+  private readonly closing = new AbortController()
 
   constructor(source: ConnectionSource, opts: ConnectionPoolOptions = {}) {
     this.source = source
@@ -153,6 +155,7 @@ export class ConnectionPool implements ReadPool {
       baseUrl: connection.baseUrl,
       auth: connectionAuth(connection),
       timeout: this.fetchTimeout,
+      signal: this.closing.signal,
     })
     const edmx = parseEdmx(xml)
     const index = buildMetadataIndex(edmx, stored.shape !== undefined ? { shape: stored.shape } : {})
@@ -164,5 +167,15 @@ export class ConnectionPool implements ReadPool {
   /** Drop a cached entry so the next {@link get} re-downloads `$metadata`. */
   refresh(name: string): void {
     this.cache.delete(name)
+  }
+
+  /**
+   * Abort every `$metadata` download in flight — no single call's cancel does,
+   * as a download is shared by every call waiting on its connection — and fail
+   * any later one at once. For a host shutting the pool down with its server;
+   * the entries already built stay usable.
+   */
+  close(): void {
+    this.closing.abort()
   }
 }

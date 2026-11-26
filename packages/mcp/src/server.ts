@@ -1,3 +1,4 @@
+import type { Readable, Writable } from 'node:stream'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ConnectionPool } from './connection-pool.js'
@@ -18,12 +19,8 @@ export interface CreateServerOptions {
   limits?: Limits
 }
 
-/**
- * Build the MCP server: one {@link ConnectionPool} shared by all tools.
- * Data access to 1С is read-only (schema + queries); the management tools
- * write only the MCP's own connection config (add/remove).
- */
-export function createMcpServer(opts: CreateServerOptions): McpServer {
+/** The server and the pool its tools share — {@link serveStdio} closes the pool with the server. */
+function buildServer(opts: CreateServerOptions): { server: McpServer; pool: ConnectionPool } {
   const insecure = opts.insecure ?? false
   const limits = opts.limits ?? resolveLimits()
   const version = opts.version ?? '0.0.0'
@@ -33,11 +30,53 @@ export function createMcpServer(opts: CreateServerOptions): McpServer {
   registerDataTools(server, pool, limits)
   registerManagementTools(server, pool, { dataDir: opts.dataDir, insecure })
   registerServerInfoTool(server, { version, dataDir: opts.dataDir })
-  return server
+  return { server, pool }
 }
 
-/** Create the server and serve it over stdio until the transport closes. */
+/**
+ * Build the MCP server: one {@link ConnectionPool} shared by all tools.
+ * Data access to 1С is read-only (schema + queries); the management tools
+ * write only the MCP's own connection config (add/remove).
+ */
+export function createMcpServer(opts: CreateServerOptions): McpServer {
+  return buildServer(opts).server
+}
+
+/**
+ * Create the server and serve it over stdio until the client closes its end of
+ * stdin; resolves once the server has closed.
+ */
 export async function runServe(opts: CreateServerOptions): Promise<void> {
-  const server = createMcpServer(opts)
-  await server.connect(new StdioServerTransport())
+  await serveStdio(opts, process.stdin, process.stdout)
+}
+
+/**
+ * {@link runServe} over the given streams. The end of `stdin` (EOF, or the
+ * stream closing) closes the server: the SDK aborts the signal of every tool
+ * call still running, which aborts its requests to 1С, and the pool aborts the
+ * `$metadata` downloads no call can still use — so nothing keeps loading 1С,
+ * or the process alive, for a client that has gone (#233).
+ *
+ * @internal Exported for tests.
+ */
+export async function serveStdio(opts: CreateServerOptions, stdin: Readable, stdout: Writable): Promise<void> {
+  const { server, pool } = buildServer(opts)
+  const closed = new Promise<void>((resolve) => {
+    server.server.onclose = resolve
+  })
+  const close = (): void => {
+    void server.close()
+  }
+  stdin.once('end', close)
+  stdin.once('close', close)
+  try {
+    await server.connect(new StdioServerTransport(stdin, stdout))
+    // A stdin already at its end before the listeners went on emits neither event again.
+    if (stdin.readableEnded || stdin.destroyed) close()
+    await closed
+  } finally {
+    stdin.off('end', close)
+    stdin.off('close', close)
+    pool.close()
+  }
 }
