@@ -235,6 +235,16 @@ describe('FilterBuilder — values are values, not expressions (#213)', () => {
     ).toThrow(InvalidArgumentError)
   })
 
+  it('keeps a field expression it registered as built: its text cannot be swapped', () => {
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => {
+        const a = f.Recorder
+        Object.assign(a, { _expr: '1 eq 1) or (1' })
+        return f.Code.eq(a)
+      }),
+    ).toThrow(TypeError)
+  })
+
   it('refuses an object inheriting `_expr`, or a copy of a DSL expression', () => {
     const inherited = Object.create({ _expr: '1 eq 1' })
     expect(() =>
@@ -263,8 +273,10 @@ describe('FilterBuilder — values are values, not expressions (#213)', () => {
     )
   })
 
-  it('refuses a value with no string form as InvalidArgumentError, not a TypeError', () => {
-    for (const v of [Object.create(null), JSON.parse('{"toString":"x"}')]) {
+  it('refuses a value that cannot be read as InvalidArgumentError, not a TypeError', () => {
+    const revoked = Proxy.revocable({}, {})
+    revoked.revoke()
+    for (const v of [Object.create(null), JSON.parse('{"toString":"x"}'), revoked.proxy]) {
       let caught: unknown
       try {
         compileFilter<SampleEntity>('Europe/Moscow', (f) => (f.Code as unknown as Untyped).eq(v))
@@ -286,6 +298,11 @@ describe('FilterBuilder — values are values, not expressions (#213)', () => {
 
 describe('FilterBuilder — date units (#213 review)', () => {
   it('writes each unit the signature lists', () => {
+    for (const unit of ['second', 'minute', 'hour', 'day', 'month', 'quarter', 'year'] as const) {
+      expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Date.dateadd(unit, 1).gt(f.Date))).toBe(
+        `dateadd(Date, '${unit}', 1) gt Date`,
+      )
+    }
     expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Date.dateadd('quarter', 1).gt(f.Date))).toBe(
       "dateadd(Date, 'quarter', 1) gt Date",
     )
