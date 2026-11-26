@@ -59,6 +59,12 @@ describe('V3 URL builder', () => {
     expect(buildV3CollectionUrl(base, new QueryBuilder('Catalog_X', 'Europe/Moscow').select('Code', ''))).toMatch(
       /%24select=Code(&|$)/,
     )
+    // An entry untyped code left undefined / null is blank, not a TypeError.
+    const holes = new QueryBuilder('Catalog_X', 'Europe/Moscow').select(undefined as unknown as string, 'Code')
+    expect(buildV3CollectionUrl(base, holes)).toMatch(/%24select=Code(&|$)/)
+    expect(
+      buildV3CountUrl(base, new QueryBuilder('Catalog_X', 'Europe/Moscow').expand(null as unknown as string)),
+    ).not.toContain('%24expand')
     // A later non-empty call still sends its fields.
     expect(buildV3CollectionUrl(base, q.select('Code'))).toContain('%24select=Code')
     expect(buildV3CountUrl(base, q.expand('Code'))).toContain('%24expand=Code')

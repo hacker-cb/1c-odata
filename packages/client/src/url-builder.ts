@@ -171,9 +171,13 @@ export function formatOrderBy(orderBy: readonly { field: string; dir?: 'asc' | '
   return orderBy.map((o) => `${o.field} ${o.dir ?? 'asc'}`).join(',')
 }
 
-/** The names of a `$select` / `$expand` list, trimmed, blank ones dropped. */
-function nonBlank(names: readonly string[] | undefined): string[] {
-  return (names ?? []).map((n) => n.trim()).filter((n) => n !== '')
+/**
+ * The names of a `$select` / `$expand` list, trimmed, blank ones dropped. An
+ * entry untyped code left `undefined` or `null` is blank too, as `join` wrote it.
+ */
+function nonBlank(names: readonly string[] | undefined): readonly string[] {
+  if (names === undefined || names.length === 0) return []
+  return names.map((n) => String(n ?? '').trim()).filter((n) => n !== '')
 }
 
 function buildQueryParams(q: QueryBuilder<unknown>, opts: { count?: boolean } = {}): string[] {
