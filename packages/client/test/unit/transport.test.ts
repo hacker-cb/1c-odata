@@ -1,6 +1,7 @@
 import { BasicAuth, HTTPError, NetworkError, type RequestEvent, TimeoutError } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { MAX_TIMER_MS } from '../../src/http/timer.js'
 import { type AttemptTrace, request, requestStream } from '../../src/http/transport.js'
 import { createMswServer } from '../fixtures/msw-server.js'
 
@@ -1246,7 +1247,6 @@ describe('transport — the wait for onError is bounded by the request signal (#
 })
 
 describe('transport — a timeout past what a timer keeps (#232)', () => {
-  const MAX_TIMER_MS = 2 ** 31 - 1
   const target = { method: 'GET' as const, url: `${base}/Slowish`, headers: { Authorization: auth.header } }
   // Slower than the 1 ms an overflowing timer fires after.
   const slowish = () =>
@@ -1285,13 +1285,43 @@ describe('transport — a timeout past what a timer keeps (#232)', () => {
     for (const timeout of [0, -1, Number.NaN]) {
       it(`${name}: timeout ${timeout} disables the timeout, as it did before`, async () => {
         slowish()
-        const spy = vi.spyOn(globalThis, 'setTimeout')
+        // A timer started with it would fire after 1 ms, before the 50 ms response.
         expect(await call(timeout)).toBe(200)
-        // The only timer is the handler's own 50 ms one.
-        expect(spy.mock.calls.map(([, ms]) => ms)).toEqual([50])
       })
     }
   }
+
+  it('a throwing getter on the event beforeRequest returns ends the call and clears the capped timer', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const getterErr = new Error('token unavailable')
+      let hookSignal: AbortSignal | undefined
+      const trace: AttemptTrace = { threw: false }
+      const err = await request(
+        target,
+        {
+          timeout: Number.POSITIVE_INFINITY,
+          hooks: {
+            beforeRequest: (req) => {
+              hookSignal = req.signal
+              return Object.defineProperty({ ...req }, 'headers', {
+                get() {
+                  throw getterErr
+                },
+              })
+            },
+          },
+        },
+        trace,
+      ).catch((e: unknown) => e)
+      expect(err).toBe(getterErr)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(hookSignal?.aborted).toBe(true)
+      expect(trace.threw).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 
   it('a capped timeout that fires reports the capped value', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })

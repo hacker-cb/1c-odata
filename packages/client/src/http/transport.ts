@@ -91,11 +91,12 @@ async function prepareRequest(
   let timeoutId: ReturnType<typeof setTimeout> | undefined
   let timeoutSignal: AbortController | undefined
   let timeoutMs: number | undefined
-  // Only a positive number starts the timer: 0, a negative or NaN disables it.
-  // One past what `setTimeout` keeps (Infinity included) is capped at that limit
-  // rather than firing at once, and the TimeoutError reports the capped value.
-  if (callOpts.timeout && callOpts.timeout > 0) {
-    timeoutMs = timerDelay(callOpts.timeout)
+  // Read once. Only a positive number starts the timer: 0, a negative or NaN
+  // disables it. One past what `setTimeout` keeps (Infinity included) is capped
+  // at that limit rather than firing at once; the TimeoutError reports the cap.
+  const timeout = callOpts.timeout
+  if (timeout && timeout > 0) {
+    timeoutMs = timerDelay(timeout)
     timeoutSignal = new AbortController()
     timeoutId = setTimeout(() => timeoutSignal?.abort(), timeoutMs)
     signals.push(timeoutSignal.signal)
@@ -113,6 +114,7 @@ async function prepareRequest(
 
   // beforeRequest hook may mutate headers, body, etc.
   // Read inside runHook, so even a throwing `hooks` getter counts as the hook's.
+  let fetchInit: RequestInit
   try {
     // Already aborted (a caller's abort before the call, or during a retry's
     // pause): end here, before the hook is called — the same path as an abort
@@ -127,6 +129,17 @@ async function prepareRequest(
     // hooks are promised it — whether the hook returned a replacement without
     // one or dropped it from the event it was given.
     reqEvent = withSignal(reqEvent, combined)
+    // Read once, still inside: the method the trace records is the method sent,
+    // and a throwing getter on the event the hook returned is the hook's own
+    // error — the call ends below, its timer cleared.
+    const method = reqEvent.method
+    if (trace) trace.method = method
+    fetchInit = {
+      method,
+      headers: reqEvent.headers,
+      signal: combined,
+      ...(reqEvent.body !== undefined ? { body: reqEvent.body } : {}),
+    }
   } catch (e) {
     // The callers' `finally` that clears the timer is not reached from here.
     if (timeoutId) clearTimeout(timeoutId)
@@ -145,20 +158,12 @@ async function prepareRequest(
         callController,
       )
     }
-    // The hook's own failure: the call ends here, and so does what the hook
-    // left running under req.signal — the hook's error its reason.
+    // The hook's own failure — thrown by it, or by the event it returned: the
+    // call ends here, never retried, and so does what the hook left running
+    // under req.signal — the hook's error its reason.
+    if (trace) trace.threw = true
     callController.abort(e)
     throw e
-  }
-  // Read once: the method the trace records is the method sent.
-  const method = reqEvent.method
-  if (trace) trace.method = method
-
-  const fetchInit: RequestInit = {
-    method,
-    headers: reqEvent.headers,
-    signal: combined,
-    ...(reqEvent.body !== undefined ? { body: reqEvent.body } : {}),
   }
 
   return { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs, callController, signal: combined }

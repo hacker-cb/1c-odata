@@ -10,6 +10,7 @@ import {
 import { HttpResponse, http } from 'msw'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { requestWithRetry } from '../../src/http/retry.js'
+import { MAX_TIMER_MS } from '../../src/http/timer.js'
 import { createMswServer } from '../fixtures/msw-server.js'
 
 const server = createMswServer()
@@ -484,19 +485,21 @@ describe('requestWithRetry — a pause past what a timer keeps (#232)', () => {
     )
     const spy = vi.spyOn(globalThis, 'setTimeout')
     const caller = new AbortController()
+    let pending: Promise<unknown> | undefined
     try {
-      const pending = requestWithRetry(
+      pending = requestWithRetry(
         { method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header }, signal: caller.signal },
         { retry: { ...retryPolicy, initialDelayMs: 3e9, maxDelayMs: 3e9 } },
       ).catch((e: unknown) => e)
-      await vi.waitFor(() => expect(spy).toHaveBeenCalledWith(expect.any(Function), 2 ** 31 - 1))
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_MS))
       // Fired at once, the pause would have let a second attempt through by now.
       await new Promise((r) => setTimeout(r, 30))
       expect(n).toBe(1)
-      caller.abort()
-      expect(await pending).toMatchObject({ name: 'AbortError' })
     } finally {
+      // Ends the pause whatever failed above: no 24.8-day timer outlives the test.
+      caller.abort()
       spy.mockRestore()
     }
+    expect(await pending).toMatchObject({ name: 'AbortError' })
   })
 })
