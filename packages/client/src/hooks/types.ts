@@ -39,8 +39,9 @@ export interface ResponseEvent {
 /**
  * Lifecycle hooks for logging, metrics, header injection. See spec §4.10.
  *
- * An exception a hook throws reaches the caller as is: it is not wrapped in a
- * library error, not passed to `onError`, and never retried — a hook that
+ * An exception a hook throws while the call waits for it reaches the caller
+ * as is: it is not wrapped in a library error, not passed to `onError`, and
+ * never retried — a hook that
  * throws on a 401 to trigger a re-login gets its own error back. The one
  * exception: `onError` rethrowing the very error it was handed leaves it the
  * library's error, retried as its type and status say — so "log and rethrow"
@@ -60,7 +61,7 @@ export interface ResponseEvent {
  * and a write 1С has made must not turn into an abort. The `timeout` ends it
  * only while it still bounds the exchange. A wait that ends early leaves the
  * hook to finish by itself, under an aborted `req.signal`, and what it throws
- * later is dropped. It is the promise a hook returns that is waited for: its
+ * later is dropped — it neither reaches the caller nor stops a retry. It is the promise a hook returns that is waited for: its
  * synchronous part runs before the call goes on either way.
  *
  * - `beforeRequest` — timeout and abort. The timeout: a `TimeoutError`
@@ -75,8 +76,12 @@ export interface ResponseEvent {
  * - `onError` with a `NetworkError` — what is left of the timeout, and abort.
  *   Past the deadline, that `NetworkError` — retried as one where a retry
  *   policy allows, the outrun hook still running. The abort: its reason.
- * - `onError` with an `HTTPError` (or a subclass) — abort only: the exchange
- *   is over and the timeout stopped with the body read. The abort: its reason.
+ * - `onError` with an `HTTPError` (or a subclass), or a `ParseError` from
+ *   mapping an error response — abort only: the exchange is over and the
+ *   timeout stopped with the body read. The abort: its reason. An abort that
+ *   came before the hook started (during a buffered `afterResponse`, which
+ *   does not hear it) leaves the error standing: the hook is called but not
+ *   waited for.
  *
  * With neither a `timeout` nor a signal, every hook is waited for in full.
  * @public

@@ -1185,6 +1185,55 @@ describe('transport — the wait for onError is bounded by the request signal (#
     expect(seen?.aborted).toBe(true)
   })
 
+  it('a caller’s abort during a buffered afterResponse leaves the HTTP error standing — with or without onError', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('stale', { status: 412 }))
+    try {
+      for (const onError of [
+        undefined,
+        vi.fn(() => never()),
+        vi.fn(() => {
+          throw new Error('own')
+        }),
+      ]) {
+        const ctrl = new AbortController()
+        const err = await request(target, {
+          signal: ctrl.signal,
+          hooks: {
+            afterResponse: () => {
+              ctrl.abort(new Error('user left'))
+            },
+            ...(onError ? { onError } : {}),
+          },
+        }).catch((e: unknown) => e)
+        expect(err).toBeInstanceOf(HTTPError)
+        expect((err as HTTPError).status).toBe(412)
+        if (onError) expect(onError).toHaveBeenCalledOnce()
+      }
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('an afterResponse dropping req.signal leaves it for onError', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('down', { status: 503 }))
+    try {
+      let seen: AbortSignal | undefined
+      await request(target, {
+        hooks: {
+          afterResponse: (req) => {
+            delete req.signal
+          },
+          onError: (req) => {
+            seen = req.signal
+          },
+        },
+      }).catch(() => {})
+      expect(seen).toBeInstanceOf(AbortSignal)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('a timeout during beforeRequest: onError is not waited for either', async () => {
     const onError = vi.fn(never)
     const err = await request(target, {
