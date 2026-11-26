@@ -83,7 +83,9 @@ describe('an MCP request cancelled by its client aborts the requests to 1С (#21
     try {
       const ctrl = new AbortController()
       const call = mcp.callTool({ name, arguments: args }, undefined, { signal: ctrl.signal }).catch((e: unknown) => e)
-      await arrived
+      // A call that ends before all its requests reach 1С fails here with what it answered.
+      const early = await Promise.race([arrived.then(() => undefined), call])
+      expect(early, `the call ended with ${hits.length} of ${expected} request(s) sent`).toBeUndefined()
       ctrl.abort(new Error('agent gave up'))
       // The MCP client rejects at once; the server hears the cancel a tick later.
       expect(await call).toBeInstanceOf(Error)

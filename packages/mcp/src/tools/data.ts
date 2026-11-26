@@ -197,8 +197,8 @@ function registerHint(entitySet: string): string {
 /**
  * Register the read-only data tools (queries, lookups, register virtual tables).
  * Each hands its MCP request's `signal` to every request it makes to 1С, so a
- * request the MCP client cancels — or a transport that closes — aborts them
- * rather than leave 1С computing what no one reads (#216). Resolving the
+ * request the MCP client cancels — or a server that closes — aborts them
+ * rather than wait out a reply no one reads (#216). Resolving the
  * connection (`pool.get`) is left out: its `$metadata` download is shared by
  * every call waiting on the same connection, which one caller's cancel must
  * not fail.
