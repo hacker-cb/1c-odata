@@ -441,3 +441,34 @@ describe('requestWithRetry — decides by the method actually sent (#189)', () =
     expect(n).toBe(3)
   })
 })
+
+describe('requestWithRetry — an outrun onError cannot stop the retry (#212)', () => {
+  it('onError rejecting on its aborted signal after the deadline leaves the NetworkError retried', async () => {
+    let calls = 0
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      calls++
+      if (calls === 1) throw new TypeError('fetch failed')
+      return new Response('{"value":[]}', { status: 200 })
+    })
+    try {
+      const res = await requestWithRetry(
+        { method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header } },
+        {
+          timeout: 30,
+          retry: retryPolicy,
+          hooks: {
+            // Rejects with its own error once its signal aborts — past the deadline.
+            onError: (req) =>
+              new Promise<void>((_, reject) => {
+                req.signal?.addEventListener('abort', () => reject(new Error('log write cancelled')), { once: true })
+              }),
+          },
+        },
+      )
+      expect(res.status).toBe(200)
+      expect(calls).toBe(2)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})

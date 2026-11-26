@@ -972,3 +972,275 @@ describe('transport — a hook error aborts req.signal without a timeout (#217)'
     expect(caller.signal.aborted).toBe(false)
   })
 })
+
+describe('transport — the wait for onError is bounded by the request signal (#212)', () => {
+  const target = { method: 'GET' as const, url: `${base}/X`, headers: { Authorization: auth.header } }
+  const never = () => new Promise<void>(() => {})
+
+  /** fetch that fails on the wire at once. */
+  function wireFails() {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      })
+    })
+  }
+
+  /** fetch that never answers, honouring its signal. */
+  function hangs() {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_url, init) =>
+        new Promise((_, reject) => {
+          const signal = init?.signal
+          signal?.addEventListener('abort', () => reject(signal.reason), { once: true })
+        }),
+    )
+  }
+
+  for (const [name, call] of [
+    ['request', request],
+    ['requestStream', requestStream],
+  ] as const) {
+    it(`${name}: on a timeout onError is called with the TimeoutError but not waited for`, async () => {
+      const spy = hangs()
+      try {
+        const onError = vi.fn((_req: RequestEvent, _err: unknown) => never())
+        const err = await call(target, { timeout: 20, hooks: { onError } }).catch((e: unknown) => e)
+        expect(err).toBeInstanceOf(TimeoutError)
+        expect(onError).toHaveBeenCalledOnce()
+        expect(onError.mock.calls[0]?.[1]).toBe(err)
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it(`${name}: on a timeout an onError rejecting later is handled, and the call stays a TimeoutError`, async () => {
+      const spy = hangs()
+      try {
+        const late = new Error('log sink down')
+        const err = await call(target, {
+          timeout: 20,
+          hooks: {
+            onError: async () => {
+              await new Promise((r) => setTimeout(r, 10))
+              throw late
+            },
+          },
+        }).catch((e: unknown) => e)
+        expect(err).toBeInstanceOf(TimeoutError)
+        // Let the hook reject: an unhandled rejection would fail the run.
+        await new Promise((r) => setTimeout(r, 30))
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it(`${name}: on a wire failure a hanging onError is cut by the deadline — the call keeps its NetworkError`, async () => {
+      const spy = wireFails()
+      try {
+        let hookSignal: AbortSignal | undefined
+        const onError = vi.fn((req: RequestEvent, _err: unknown) => {
+          hookSignal = req.signal
+          return never()
+        })
+        const err = await call(target, { timeout: 30, hooks: { onError } }).catch((e: unknown) => e)
+        expect(err).toBeInstanceOf(NetworkError)
+        expect(onError.mock.calls[0]?.[1]).toBe(err)
+        // The outrun hook's work under req.signal is cancelled.
+        expect(hookSignal?.aborted).toBe(true)
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it(`${name}: on a wire failure a caller's abort during onError fails the call with the abort's reason`, async () => {
+      const spy = wireFails()
+      try {
+        const ctrl = new AbortController()
+        const reason = new Error('user navigated away')
+        const err = await call(target, {
+          signal: ctrl.signal,
+          hooks: {
+            onError: () => {
+              setTimeout(() => ctrl.abort(reason), 10)
+              return never()
+            },
+          },
+        }).catch((e: unknown) => e)
+        expect(err).toBe(reason)
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it(`${name}: on a wire failure with no timeout and no signal onError is waited for, as before`, async () => {
+      const spy = wireFails()
+      try {
+        let done = false
+        const err = await call(target, {
+          hooks: {
+            onError: async () => {
+              await new Promise((r) => setTimeout(r, 30))
+              done = true
+            },
+          },
+        }).catch((e: unknown) => e)
+        expect(err).toBeInstanceOf(NetworkError)
+        expect(done).toBe(true)
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it(`${name}: on a wire failure an onError in time keeps its say — its own error, or the one it rethrows`, async () => {
+      const spy = wireFails()
+      try {
+        const own = new Error('alerting down')
+        let ownSignal: AbortSignal | undefined
+        const err = await call(target, {
+          timeout: 1000,
+          hooks: {
+            onError: (req) => {
+              ownSignal = req.signal
+              throw own
+            },
+          },
+        }).catch((e: unknown) => e)
+        expect(err).toBe(own)
+        expect(ownSignal?.aborted).toBe(true)
+
+        const rethrown = await call(target, {
+          timeout: 1000,
+          hooks: {
+            onError: (_req, e) => {
+              throw e
+            },
+          },
+        }).catch((e: unknown) => e)
+        expect(rethrown).toBeInstanceOf(NetworkError)
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it(`${name}: a caller's abort during onError on an HTTP error fails the call with the abort's reason`, async () => {
+      const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('down', { status: 503 }))
+      try {
+        const ctrl = new AbortController()
+        const reason = new Error('user navigated away')
+        let hookSignal: AbortSignal | undefined
+        const err = await call(target, {
+          signal: ctrl.signal,
+          hooks: {
+            onError: (req) => {
+              hookSignal = req.signal
+              setTimeout(() => ctrl.abort(reason), 10)
+              return never()
+            },
+          },
+        }).catch((e: unknown) => e)
+        expect(err).toBe(reason)
+        expect(hookSignal?.aborted).toBe(true)
+      } finally {
+        spy.mockRestore()
+      }
+    })
+
+    it(`${name}: onError on an HTTP error is not bounded by the timeout — the exchange is over`, async () => {
+      const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('down', { status: 503 }))
+      try {
+        let done = false
+        const err = await call(target, {
+          timeout: 20,
+          hooks: {
+            onError: async () => {
+              await new Promise((r) => setTimeout(r, 60))
+              done = true
+            },
+          },
+        }).catch((e: unknown) => e)
+        expect(err).toBeInstanceOf(HTTPError)
+        expect(done).toBe(true)
+      } finally {
+        spy.mockRestore()
+      }
+    })
+  }
+
+  it('a timeout during a beforeRequest that dropped req.signal: onError still gets the signal', async () => {
+    let seen: AbortSignal | undefined
+    const err = await request(target, {
+      timeout: 20,
+      hooks: {
+        beforeRequest: (req) => {
+          delete req.signal
+          return never()
+        },
+        onError: (req) => {
+          seen = req.signal
+        },
+      },
+    }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TimeoutError)
+    expect(seen?.aborted).toBe(true)
+  })
+
+  it('a caller’s abort during a buffered afterResponse leaves the HTTP error standing — with or without onError', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('stale', { status: 412 }))
+    try {
+      for (const onError of [
+        undefined,
+        vi.fn(() => never()),
+        vi.fn(() => {
+          throw new Error('own')
+        }),
+      ]) {
+        const ctrl = new AbortController()
+        const err = await request(target, {
+          signal: ctrl.signal,
+          hooks: {
+            afterResponse: () => {
+              ctrl.abort(new Error('user left'))
+            },
+            ...(onError ? { onError } : {}),
+          },
+        }).catch((e: unknown) => e)
+        expect(err).toBeInstanceOf(HTTPError)
+        expect((err as HTTPError).status).toBe(412)
+        if (onError) expect(onError).toHaveBeenCalledOnce()
+      }
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('an afterResponse dropping req.signal leaves it for onError', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('down', { status: 503 }))
+    try {
+      let seen: AbortSignal | undefined
+      await request(target, {
+        hooks: {
+          afterResponse: (req) => {
+            delete req.signal
+          },
+          onError: (req) => {
+            seen = req.signal
+          },
+        },
+      }).catch(() => {})
+      expect(seen).toBeInstanceOf(AbortSignal)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('a timeout during beforeRequest: onError is not waited for either', async () => {
+    const onError = vi.fn(never)
+    const err = await request(target, {
+      timeout: 20,
+      hooks: { beforeRequest: () => never(), onError },
+    }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TimeoutError)
+    expect(onError).toHaveBeenCalledOnce()
+  })
+})
