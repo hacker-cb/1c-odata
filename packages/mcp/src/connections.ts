@@ -30,6 +30,68 @@ function assertNoPasswordEnvCollision(connections: Record<string, StoredConnecti
   }
 }
 
+/** The `ONEC_<NAME>_PASSWORD` variable set (non-empty) for `name` — it outranks a stored password on read — or `undefined`. */
+function envPasswordVar(name: string): string | undefined {
+  const envVar = passwordEnvVar(name)
+  const value = process.env[envVar]
+  return value !== undefined && value !== '' ? envVar : undefined
+}
+
+/** A connection's auth target as stored: the base URL without userinfo, normalized, and the trimmed login. */
+function authTarget(baseUrl: string, login: string): { baseUrl: string; login: string } {
+  return { baseUrl: normalizeBaseUrl(stripUrlUserinfo(baseUrl.trim())), login: login.trim() }
+}
+
+/**
+ * Throw where overwriting `existing` would point it at another base URL or
+ * login while its password comes from `ONEC_<NAME>_PASSWORD`: the stored
+ * password is cleared on such a change, but the env one outranks it on read,
+ * so it would go to the new server — which the caller (an agent through
+ * `add_connection`) chose.
+ */
+function assertEnvPasswordStaysPut(
+  name: string,
+  existing: StoredConnection | undefined,
+  next: { baseUrl: string; login: string },
+): void {
+  if (existing === undefined || (existing.baseUrl === next.baseUrl && existing.login === next.login)) return
+  const envVar = envPasswordVar(name)
+  if (envVar === undefined) return
+  throw new InvalidArgumentError(
+    `The password of connection "${name}" comes from ${envVar}; pointing the connection at another server or login would send that password there. Unset ${envVar} first, or add the new target under another connection name.`,
+    { argument: 'baseUrl' },
+  )
+}
+
+/**
+ * Preflight for an overwrite, BEFORE its credentials are verified: throw where
+ * it would point an existing connection whose password comes from
+ * `ONEC_<NAME>_PASSWORD` at another base URL or login. {@link upsertConnection}
+ * re-checks under the config lock.
+ */
+export function assertEnvPasswordNotRetargeted(
+  dataDir: string,
+  name: string,
+  next: { baseUrl: string; login: string },
+): void {
+  assertEnvPasswordStaysPut(name, loadConfig(dataDir).connections[name], authTarget(next.baseUrl, next.login))
+}
+
+/**
+ * Throw where `name`'s password comes from `ONEC_<NAME>_PASSWORD`: that
+ * outranks a stored password on read, so a credential change would neither be
+ * used nor — verified against the new pair — be what the reads send. Checked
+ * before verifying and again by {@link updateConnectionCredentials}.
+ */
+export function assertNoEnvPassword(name: string): void {
+  const envVar = envPasswordVar(name)
+  if (envVar === undefined) return
+  throw new InvalidArgumentError(
+    `The password of connection "${name}" comes from ${envVar}, which outranks a stored one: reads would keep sending it whatever is changed here. Change or unset ${envVar} instead.`,
+    { argument: 'connection' },
+  )
+}
+
 /**
  * Cheap preflight for the add path: reject an invalid name, a duplicate (without
  * `overwrite`), or a password-env-var collision BEFORE the caller verifies
@@ -166,8 +228,9 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
       throw new InvalidArgumentError(`Connection "${input.name}" already exists`, { argument: 'name' })
     }
 
-    // Authoritative (under the lock) re-check of the env-var collision guard.
+    // Authoritative (under the lock) re-checks of the env-var guards.
     assertNoPasswordEnvCollision(config.connections, input.name)
+    assertEnvPasswordStaysPut(input.name, existing, { baseUrl, login })
 
     // Mutate the secret store BEFORE persisting config: if a secret write/remove
     // throws, config.json is left untouched, so it can never end up pointing at a
@@ -355,6 +418,7 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
     if (existing === undefined) {
       throw new InvalidArgumentError(`No connection named "${input.name}"`, { argument: 'connection' })
     }
+    assertNoEnvPassword(input.name)
     // Write the secret BEFORE the config so a login change is never persisted
     // while its matching password write is still pending or has failed.
     const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })

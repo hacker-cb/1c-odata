@@ -1,7 +1,12 @@
 import { join } from 'node:path'
 import { InvalidArgumentError } from '@1c-odata/client'
 import { loadConfig, type StoredConnection } from '../config.js'
-import { type UpdateCredentialsResult, updateConnectionCredentials, verifyConnectivity } from '../connections.js'
+import {
+  assertNoEnvPassword,
+  type UpdateCredentialsResult,
+  updateConnectionCredentials,
+  verifyConnectivity,
+} from '../connections.js'
 import { errorText } from '../redact.js'
 import { SecretStore } from '../secret-store.js'
 import { promptConfirm, promptHidden, readPasswordStdin } from './_prompt.js'
@@ -104,6 +109,7 @@ export async function runSetCredentials(opts: SetCredentialsOptions): Promise<vo
   if (existing === undefined) {
     throw new InvalidArgumentError(`No connection named "${opts.name}"`, { argument: 'name' })
   }
+  assertNoEnvPassword(opts.name)
   const newLogin = opts.login?.trim()
   const hasLogin = newLogin !== undefined && newLogin !== ''
   if (opts.login !== undefined && !hasLogin) {

@@ -5,6 +5,8 @@ import { loadConfig, type StoredConnection } from '../config.js'
 import type { ConnectionPool } from '../connection-pool.js'
 import {
   assertAddable,
+  assertEnvPasswordNotRetargeted,
+  assertNoEnvPassword,
   removeConnection,
   setConnectionLabel,
   type UpdateCredentialsResult,
@@ -57,6 +59,7 @@ async function addConnection(
   // Preflight the duplicate check BEFORE verifying, so a password is never sent
   // to baseUrl only to be rejected as "already exists" afterwards.
   assertAddable(opts.dataDir, connection, overwrite === true)
+  assertEnvPasswordNotRetargeted(opts.dataDir, connection, { baseUrl, login })
   // Verify before persisting when a password is available. The password is used
   // verbatim here so verify matches exactly what gets stored/used.
   if (hasPassword) {
@@ -162,6 +165,8 @@ async function applyCredentialChange(
   if (existing === undefined) {
     throw new InvalidArgumentError(`No connection named "${connection}"`, { argument: 'connection' })
   }
+  // Before verifying: the new pair must not be checked, and reported verified, when reads would not use it.
+  assertNoEnvPassword(connection)
   const verified = await verifyCredentialChange(opts, existing, connection, change)
   const result = await updateConnectionCredentials({
     dataDir: opts.dataDir,
