@@ -390,59 +390,94 @@ export type FieldExprMap<T> = { [K in keyof T]-?: ChainedFieldExpr<T[K]> }
  * intersections so e.g. `string` exposes `startsWith` while `number` exposes
  * `add`/`gt` and so on. Always includes `BaseOps<V>` (eq/ne).
  *
+ * The surface is read off `NonNullable<V>` as a whole, not distributed over
+ * its union: a generated nullable field (`Сумма?: number | null`) has the
+ * operators of `number`, a `Date | null` those of `Date`. A field expression
+ * passed as an operand may be nullable too (`f.A.gt(f.Сумма)`). Numeric fields
+ * — `number`, an `Edm.Int64` read as `bigint`, or either — share one family:
+ * operands `number | bigint` or a numeric expression; arithmetic keeps the
+ * field's own type (`bigint` for a `bigint` field) and its `null`.
+ *
  * @public
  */
 export type FieldExprFor<V> = BaseOps<V> &
-  (V extends string ? StringOps : object) &
-  (V extends number | bigint ? NumberOps : object) &
-  (V extends Date ? DateOps : object) &
-  (V extends boolean ? BooleanOps : object) &
-  (V extends string ? RefOps : object)
+  (IsOf<V, string> extends true ? StringOps & RefOps : object) &
+  (IsOf<V, number | bigint> extends true ? NumberOps<NumericOf<V> | Extract<V, null>> : object) &
+  (IsOf<V, Date> extends true ? DateOps : object) &
+  (IsOf<V, boolean> extends true ? BooleanOps : object)
+
+/**
+ * Whether every non-null value of `V` is a `T` — `false` for a field that
+ * holds nothing but `null` / `undefined`. Not distributive: `number | null`
+ * reads as `number`, a mixed `string | number` as neither.
+ */
+type IsOf<V, T> = [NonNullable<V>] extends [never] ? false : [NonNullable<V>] extends [T] ? true : false
+
+/** The numeric type arithmetic on a field of `V` yields: `bigint`, `number`, or — a field typed both — either. */
+type NumericOf<V> = IsOf<V, bigint> extends true ? bigint : IsOf<V, number> extends true ? number : number | bigint
+
+/** A field expression of type `T` as an operand — a nullable field included. */
+type ExprOf<T> = FieldExpr<T | null | undefined>
+
+/** An operand of a numeric operator: a `number` or `bigint`, or a numeric expression. */
+type NumericOperand = number | bigint | ExprOf<number | bigint>
 
 interface BaseOps<V> {
   /**
    * `<field> eq <v>`. `null` compares with a null field; `undefined` is no
    * value — an `InvalidArgumentError` (check a value that may be missing, a
-   * field left out of `$select`, before the filter).
+   * field left out of `$select`, before the filter). A numeric field takes
+   * any numeric operand (`number`, `bigint`, a numeric expression).
    */
-  eq(v: V | FieldExpr<V>): FilterExpression
+  eq(v: V | ExprOf<V> | NumericExtra<V>): FilterExpression
   /**
    * `<field> ne <v>`. `null` compares with a null field; `undefined` is no
-   * value — an `InvalidArgumentError`.
+   * value — an `InvalidArgumentError`. A numeric field takes any numeric
+   * operand.
    */
-  ne(v: V | FieldExpr<V>): FilterExpression
+  ne(v: V | ExprOf<V> | NumericExtra<V>): FilterExpression
 }
 
-interface NumberOps {
-  gt(v: number | FieldExpr<number>): FilterExpression
-  ge(v: number | FieldExpr<number>): FilterExpression
-  lt(v: number | FieldExpr<number>): FilterExpression
-  le(v: number | FieldExpr<number>): FilterExpression
-  add(v: number | FieldExpr<number>): ChainedFieldExpr<number>
-  sub(v: number | FieldExpr<number>): ChainedFieldExpr<number>
-  mul(v: number | FieldExpr<number>): ChainedFieldExpr<number>
-  div(v: number | FieldExpr<number>): ChainedFieldExpr<number>
-  round(): ChainedFieldExpr<number>
+/** What a numeric field compares with beyond its own type. */
+type NumericExtra<V> = IsOf<V, number | bigint> extends true ? NumericOperand : never
+
+/** The `null` a field-expression operand brings into an arithmetic result. */
+type NullOf<O> = O extends FieldExpr<infer C> ? Extract<C, null> : never
+
+/**
+ * Numeric operators; `R` is what arithmetic yields — the field's numeric type
+ * and its `null`, plus the `null` of a nullable field-expression operand.
+ */
+interface NumberOps<R> {
+  gt(v: NumericOperand): FilterExpression
+  ge(v: NumericOperand): FilterExpression
+  lt(v: NumericOperand): FilterExpression
+  le(v: NumericOperand): FilterExpression
+  add<O extends NumericOperand>(v: O): ChainedFieldExpr<R | NullOf<O>>
+  sub<O extends NumericOperand>(v: O): ChainedFieldExpr<R | NullOf<O>>
+  mul<O extends NumericOperand>(v: O): ChainedFieldExpr<R | NullOf<O>>
+  div<O extends NumericOperand>(v: O): ChainedFieldExpr<R | NullOf<O>>
+  round(): ChainedFieldExpr<R>
 }
 
 interface StringOps {
-  gt(v: string | FieldExpr<string>): FilterExpression
-  ge(v: string | FieldExpr<string>): FilterExpression
-  lt(v: string | FieldExpr<string>): FilterExpression
-  le(v: string | FieldExpr<string>): FilterExpression
+  gt(v: string | ExprOf<string>): FilterExpression
+  ge(v: string | ExprOf<string>): FilterExpression
+  lt(v: string | ExprOf<string>): FilterExpression
+  le(v: string | ExprOf<string>): FilterExpression
   startsWith(v: string): FilterExpression
   endsWith(v: string): FilterExpression
   substringof(v: string): FilterExpression
   like(pattern: string): FilterExpression
-  concat(other: string | FieldExpr<string>): ChainedFieldExpr<string>
+  concat(other: string | ExprOf<string>): ChainedFieldExpr<string>
   substring(start: number, length?: number): ChainedFieldExpr<string>
 }
 
 interface DateOps {
-  gt(v: Date | FieldExpr<Date>): FilterExpression
-  ge(v: Date | FieldExpr<Date>): FilterExpression
-  lt(v: Date | FieldExpr<Date>): FilterExpression
-  le(v: Date | FieldExpr<Date>): FilterExpression
+  gt(v: Date | ExprOf<Date>): FilterExpression
+  ge(v: Date | ExprOf<Date>): FilterExpression
+  lt(v: Date | ExprOf<Date>): FilterExpression
+  le(v: Date | ExprOf<Date>): FilterExpression
   year(): ChainedFieldExpr<number>
   month(): ChainedFieldExpr<number>
   day(): ChainedFieldExpr<number>
@@ -457,7 +492,7 @@ interface DateOps {
     amount: number,
   ): ChainedFieldExpr<Date>
   datedifference(
-    other: Date | FieldExpr<Date>,
+    other: Date | ExprOf<Date>,
     unit: 'second' | 'minute' | 'hour' | 'day' | 'month' | 'quarter' | 'year',
   ): ChainedFieldExpr<number>
 }
