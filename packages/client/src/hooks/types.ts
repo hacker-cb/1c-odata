@@ -14,19 +14,22 @@ export interface RequestEvent {
    * The signal of this attempt — set by the library on every request it makes,
    * a fresh one for each attempt a retry makes. It aborts only when the attempt
    * is cut short:
-   * - the timeout, over what it bounds (`ClientOptions.timeout`);
-   * - the caller's own signal (client- or call-level) — whenever it aborts,
-   *   even once the call is over;
+   * - the timeout, over what it bounds (`ClientOptions.timeout`) — on a network
+   *   error that includes the wait for `onError`, so a slow `onError` can see it
+   *   abort;
+   * - the call's signal — the caller's own (client- or call-level), whenever it
+   *   aborts, even once the call is over; or one the library adds where a call
+   *   is made of several requests: a register read with `count: true` aborts
+   *   the other request when one fails;
    * - a hook's own error ending the call, with or without a timeout — its
    *   reason that error, where nothing aborted it first.
    *
-   * It is not aborted when the attempt ends otherwise: on success, on an error
-   * from 1С or the network, or when a retry replaces it with the next attempt
-   * — work a hook started under an earlier attempt's signal is not cancelled by
-   * the retry. Hand it to work a hook starts so that work stops when the call is
-   * cut short; work that must end with the call, the hook awaits or bounds with
-   * a signal of its own (`RequestHooks`, "What `req.signal` ends"). Optional
-   * only so a hand-built event type-checks.
+   * Nothing else aborts it: not a response, not an error from 1С or the network
+   * by itself, and not a retry replacing the attempt with the next one — work a
+   * hook started under an earlier attempt's signal runs on through the retry.
+   * Hand it to work a hook starts so that work stops when the call is cut short.
+   * Work that must not outlive the call: `RequestHooks`, "What `req.signal`
+   * ends". Optional only so a hand-built event type-checks.
    */
   signal?: AbortSignal
 }
@@ -92,23 +95,17 @@ export interface ResponseEvent {
  *
  * With neither a `timeout` nor a signal, every hook is waited for in full.
  *
- * **What `req.signal` ends.** It aborts only when its attempt is cut short —
- * the timeout, the caller's abort, a hook's own error (`RequestEvent.signal`).
- * An attempt that ends otherwise — a response, an HTTP or network error, an
- * attempt a retry replaces — leaves it unaborted, so work a hook started
- * without awaiting it runs on past the attempt and the call: a log write
- * `onError` fires and forgets is not cut off by the retry or by the call
- * returning. Only the caller's own signal still ends it. Work that must not
- * outlive the call, the hook awaits — the call waits for it as listed above —
- * or bounds itself:
- *
- * ```ts
- * onError: (req, err) => {
- *   // Ends with the call cut short, or after 5 s whatever happens to the call.
- *   const signal = AbortSignal.any([AbortSignal.timeout(5_000), ...(req.signal ? [req.signal] : [])])
- *   void shipLog({ url: req.url, err }, { signal })
- * }
- * ```
+ * **What `req.signal` ends.** Only an attempt cut short — the list is
+ * `RequestEvent.signal`'s. An attempt that ends otherwise, a retried one
+ * included, leaves its signal unaborted, so work a hook starts without awaiting
+ * it runs on past the attempt and past the call: a log write `onError` fires
+ * and forgets is cut off neither by the retry nor by the call returning. Work
+ * that must not outlive the call, the hook bounds with a signal of its own
+ * (`AbortSignal.timeout`, combined with `req.signal` through `AbortSignal.any`).
+ * Awaiting it holds the call only as long as the call waits for that hook,
+ * listed above; past that the work runs on as well. `onError` handed a
+ * `TimeoutError` gets a `req.signal` already aborted: work it starts under that
+ * signal stops at once.
  * @public
  */
 export interface RequestHooks {
