@@ -515,15 +515,19 @@ describe('requestWithRetry — maxDelayMs caps the first pause too', () => {
       }),
     )
     const spy = vi.spyOn(globalThis, 'setTimeout')
+    const caller = new AbortController()
     try {
-      await requestWithRetry(
-        { method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header } },
+      const pending = requestWithRetry(
+        { method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header }, signal: caller.signal },
         { retry: { ...retryPolicy, initialDelayMs: 30_000, maxDelayMs: 5 } },
       )
-      expect(n).toBe(2)
+      await vi.waitFor(() => expect(n).toBe(2))
+      await pending
       expect(spy).toHaveBeenCalledWith(expect.any(Function), 5)
       expect(spy).not.toHaveBeenCalledWith(expect.any(Function), 30_000)
     } finally {
+      // Ends an uncapped 30 s pause at once, should the cap ever break.
+      caller.abort()
       spy.mockRestore()
     }
   })

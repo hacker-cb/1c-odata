@@ -134,11 +134,12 @@ async function prepareRequest(
     // error — the call ends below, its timer cleared.
     const method = reqEvent.method
     if (trace) trace.method = method
+    const body = reqEvent.body
     fetchInit = {
       method,
       headers: reqEvent.headers,
       signal: combined,
-      ...(reqEvent.body !== undefined ? { body: reqEvent.body } : {}),
+      ...(body !== undefined ? { body } : {}),
     }
   } catch (e) {
     // The callers' `finally` that clears the timer is not reached from here.
