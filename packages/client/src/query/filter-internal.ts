@@ -109,10 +109,12 @@ const dslFilters = new WeakSet<object>()
  * The OData literal of a comparison or operator argument: a scalar by its JS
  * type, or an expression the DSL built (a field as the value, `f.A.eq(f.B)`)
  * as its own text. Any other object with an `_expr` field is refused — taken
- * as an expression, a value from outside would rewrite the filter. Reading a
- * value that is not the DSL's can fail on its own (no prototype, a `toString`
- * that is not a function, a revoked `Proxy`): that is an
- * `InvalidArgumentError` naming the field too, the failure its `cause`.
+ * as an expression, a value from outside would rewrite the filter. `undefined`
+ * is refused too — a missing variable or property, not a value: `null` is how
+ * to compare with an empty one. Reading a value that is not the DSL's can fail
+ * on its own (no prototype, a `toString` that is not a function, a revoked
+ * `Proxy`): that is an `InvalidArgumentError` naming the field too, the
+ * failure its `cause`.
  */
 function formatLiteral(v: unknown, ctx: CompileContext, argument: string): string {
   if (v === null) return 'null'
@@ -121,6 +123,12 @@ function formatLiteral(v: unknown, ctx: CompileContext, argument: string): strin
       `guid() for "${argument}" is a value to compare a GUID field with (eq/ne/gt/ge/lt/le) — ` +
         'not an operand of a string, date or arithmetic function',
       { argument, received: (v as { _expr: string })._expr },
+    )
+  }
+  if (v === undefined) {
+    throw new InvalidArgumentError(
+      `Filter value for "${argument}" is undefined — pass null to compare with an empty value`,
+      { argument, received: v },
     )
   }
   if (typeof v === 'object' && dslExpressions.has(v)) {

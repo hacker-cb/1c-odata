@@ -47,6 +47,17 @@ describe('V3 URL builder', () => {
     )
   })
 
+  it('sends no $select / $expand for an empty list (#237) — get() and count() alike', () => {
+    const q = new QueryBuilder<{ Code: string }>('Catalog_X', 'Europe/Moscow').select(...([] as 'Code'[])).expand()
+    for (const url of [buildV3CollectionUrl(base, q), buildV3CountUrl(base, q)]) {
+      expect(url).not.toContain('%24select')
+      expect(url).not.toContain('%24expand')
+    }
+    // A later non-empty call still sends its fields.
+    expect(buildV3CollectionUrl(base, q.select('Code'))).toContain('%24select=Code')
+    expect(buildV3CountUrl(base, q.expand('Code'))).toContain('%24expand=Code')
+  })
+
   it('appends $inlinecount=allpages', () => {
     const q = new QueryBuilder('Catalog_X', 'Europe/Moscow').withCount()
     const url = buildV3CollectionUrl(base, q)

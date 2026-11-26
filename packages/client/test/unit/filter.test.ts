@@ -386,3 +386,54 @@ describe('FilterBuilder — arithmetic keeps the order of the calls', () => {
     expect(c((f) => any(f.Товары, (t) => t.Сумма.mul(2).gt(10)))).toBe('Товары/any(t0: (t0/Сумма mul 2) gt 10)')
   })
 })
+
+describe('FilterBuilder — undefined is no value (#229)', () => {
+  // Untyped callers (JS, `any`, a property missing from a row) reach a value slot with `undefined`.
+  type Untyped = Record<
+    string,
+    (...v: unknown[]) => { eq(v: unknown): ReturnType<typeof raw> } & ReturnType<typeof raw>
+  >
+  const c = (fn: (f: FieldExprMap<SampleEntity>) => unknown) =>
+    compileFilter<SampleEntity>('UTC', fn as (f: FieldExprMap<SampleEntity>) => ReturnType<typeof raw>)
+  const u = (e: unknown) => e as Untyped
+
+  it('a comparison with undefined is an InvalidArgumentError naming the field', () => {
+    for (const op of ['eq', 'ne', 'gt', 'ge', 'lt', 'le']) {
+      let caught: unknown
+      try {
+        c((f) => u(f.Сумма)[op]?.(undefined))
+      } catch (e) {
+        caught = e
+      }
+      expect(caught).toBeInstanceOf(InvalidArgumentError)
+      expect(caught).toMatchObject({ argument: 'Сумма', received: undefined })
+    }
+  })
+
+  it('an operator argument too — arithmetic, string and date functions, isof/cast', () => {
+    expect(() => c((f) => u(f.Сумма).add?.(undefined).eq(1))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Code).concat?.(undefined).eq('x'))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Code).startsWith?.(undefined))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Code).like?.(undefined))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Date).datedifference?.(undefined, 'day').eq(1))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Recorder).isof?.(undefined))).toThrow(InvalidArgumentError)
+  })
+
+  it('in a lambda the error names the row path', () => {
+    let caught: unknown
+    try {
+      c((f) => any(f.Товары, (t) => u(t.Сумма).gt?.(undefined) as ReturnType<typeof raw>))
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toMatchObject({ argument: 't0/Сумма' })
+  })
+
+  it('null still compares with an empty value', () => {
+    expect(c((f) => u(f.Сумма).eq?.(null))).toBe('Сумма eq null')
+  })
+
+  it("substring's length left out is not a value — it still means 'to the end'", () => {
+    expect(c((f) => f.Code.substring(2).eq('x'))).toBe(`substring(Code, 2) eq 'x'`)
+  })
+})

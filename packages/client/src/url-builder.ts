@@ -175,8 +175,9 @@ function buildQueryParams(q: QueryBuilder<unknown>, opts: { count?: boolean } = 
   const s = q.state
   const params: string[] = []
   if (s.filter) params.push(qp('$filter', s.filter._expr))
-  if (s.select) params.push(qp('$select', s.select.join(',')))
-  if (s.expand) params.push(qp('$expand', s.expand.join(',')))
+  // An empty list sends no option: 1С reads `$select=` / `$expand=` as their absence anyway.
+  if (s.select !== undefined && s.select.length > 0) params.push(qp('$select', s.select.join(',')))
+  if (s.expand !== undefined && s.expand.length > 0) params.push(qp('$expand', s.expand.join(',')))
   if (!opts.count) {
     if (s.orderBy) params.push(qp('$orderby', formatOrderBy(s.orderBy)))
     if (s.top !== undefined) params.push(qp('$top', String(s.top)))
