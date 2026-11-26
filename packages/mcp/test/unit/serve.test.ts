@@ -133,7 +133,7 @@ describe('serve closes on the end of stdin (#233)', () => {
     const s = serve()
     await vi.waitFor(() => expect(s.replies).toHaveLength(1))
     s.stdout.destroy(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
-    await s.done
+    await expect(s.done).rejects.toThrow('write EPIPE')
   })
 
   it('aborts the page request to 1С of a call still running', async () => {
@@ -163,7 +163,7 @@ describe('serve closes on the end of stdin (#233)', () => {
   })
 })
 
-describe('createMcpServer closes its pool with the server (#233)', () => {
+describe('createMcpServer aborts its pool downloads when a transport closes (#233)', () => {
   it('aborts the $metadata download a call is waiting on, over any transport', async () => {
     const { arrived } = oneC('hang')
     const server = createMcpServer({ dataDir: dir, insecure: true })
@@ -173,7 +173,33 @@ describe('createMcpServer closes its pool with the server (#233)', () => {
     void mcp.callTool({ name: 'query', arguments: { connection: 'c', entitySet: 'Catalog_Валюты' } }).catch(() => {})
     const hit = await arrived
     expect(hit.url).toMatch(/\/\$metadata$/)
+    // A host's own handler on the server does not displace the pool's.
+    let hostSaw = false
+    server.server.onclose = () => {
+      hostSaw = true
+    }
     await server.close()
     await vi.waitFor(() => expect(hit.aborted).toBe(true))
+    expect(hostSaw).toBe(true)
+  })
+
+  it('downloads $metadata anew for a transport connected after a close', async () => {
+    oneC('answer')
+    const server = createMcpServer({ dataDir: dir, insecure: true })
+    const connect = async () => {
+      const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
+      const mcp = new Client({ name: 't', version: '0' })
+      await Promise.all([server.connect(serverSide), mcp.connect(clientSide)])
+      return mcp
+    }
+    await connect()
+    await server.close()
+    const mcp = await connect()
+    const res = await mcp.callTool({
+      name: 'describe_entity',
+      arguments: { connection: 'c', entity: 'Catalog_Валюты' },
+    })
+    expect(res.isError).not.toBe(true)
+    await server.close()
   })
 })
