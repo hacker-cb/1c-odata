@@ -150,6 +150,14 @@ describe('query with count: a parallel /$count, never $inlinecount (#206)', () =
     expect(data.pagination.hasMore).toBe(false)
   })
 
+  it('never loops on the first rows when 1С ignored $top and $skip and counts short (#214)', async () => {
+    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true, count: 6 })
+    const { data, summary } = await run({ count: true, skip: 4 })
+    expect(data.value.map((r) => r.n)).toEqual([0, 1, 2, 3])
+    expect(data.pagination.hasMore).toBe(false)
+    expect(JSON.stringify(summary)).toContain('more than it counted')
+  })
+
   it('without count cuts a page past top to top, and offers no paging on (1С may ignore $skip too)', async () => {
     const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true })
     const { data, summary } = await run({ skip: 4 })

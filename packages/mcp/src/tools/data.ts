@@ -93,8 +93,8 @@ async function pageAndCount(
   }
 }
 
-/** A `query` page as returned: its rows, whether 1С has more past them, and a summary note. */
-interface QueryPage<T> {
+/** A page as `query` and `register_query` return it: its rows, whether 1С has more past them, and a summary note. */
+interface Page<T> {
   value: T[]
   /** Whether rows remain past this page — the byte budget aside. */
   more: boolean
@@ -104,25 +104,29 @@ interface QueryPage<T> {
 }
 
 /**
- * The page `query` returns from the `rows` 1С sent for `limit` at `offset`,
- * never more than `limit` rows, and never rows dropped on a guess. A page past
- * `limit` (a publication ignoring `$top`) is cut back to `limit` from its
- * start. Where `skip` is set and 1С sent exactly as many rows as it counted,
- * the page is ambiguous — 1С either ignored `$skip` (these are the set's first
- * rows) or counted fewer rows than it has (a `$select` rolling a register
- * virtual table up) — and so is a page past `limit` without a count: such a
- * page offers no paging on, and the note says why.
+ * The page `query` and `register_query` return from the `rows` 1С sent for
+ * `limit` at `offset`, never more than `limit` rows, and never rows dropped on
+ * a guess (#209, #214). A page past `limit` (a publication ignoring `$top`) is
+ * cut back to `limit` from its start. Where `skip` is set and 1С sent exactly
+ * as many rows as it counted — or, ignoring `$top`, more — the page is
+ * ambiguous: 1С either ignored `$skip` (these are the set's first rows) or
+ * counted fewer rows than it has (a `$select` rolling a register virtual table
+ * up). So is a page past `limit` without a count. Such a page offers no paging
+ * on, and the note says why and how to `narrow` instead. Within `limit`, rows
+ * outrunning the count are taken as a short count: a full page goes on.
  */
-function queryPage<T>(rows: T[], limit: number, offset: number, total: number | undefined): QueryPage<T> {
-  const ambiguous = offset > 0 && total !== undefined && total > 0 && rows.length === total
+function placePage<T>(rows: T[], limit: number, offset: number, total: number | undefined, narrow: string): Page<T> {
   const topIgnored = rows.length > limit
+  const counted = offset > 0 && total !== undefined && total > 0
+  const ambiguous = counted && (rows.length === total || (topIgnored && rows.length > total))
   if (!ambiguous && !topIgnored) {
     return { value: rows, more: moreAfter(offset, rows.length, limit, total), pageable: true, note: '' }
   }
   const value = rows.slice(0, limit)
   const cut = topIgnored ? `; the page was cut to ${limit} of them` : ''
   if (ambiguous) {
-    const note = ` ⚠ 1С returned ${rows.length} rows at skip ${offset} — exactly as many as it counted: it either ignored $skip (these are the set's first rows) or counts fewer rows than it has (a $select rolling a register virtual table up)${cut}, taken as starting at skip. Paging on stops here: narrow with filter, or use register_query for a register.`
+    const as = rows.length === total ? 'exactly as many as' : 'more than'
+    const note = ` ⚠ 1С returned ${rows.length} rows at skip ${offset} — ${as} it counted: it either ignored $skip (these are the set's first rows) or counts fewer rows than it has (a $select rolling a register virtual table up)${cut}, taken as starting at skip. Paging on stops here: ${narrow}.`
     return { value, more: false, pageable: false, note }
   }
   const sent = ` ⚠ 1С returned ${rows.length} rows for top ${limit} — it ignored $top here${cut}, taken as starting at skip.`
@@ -148,47 +152,6 @@ function moreAfter(offset: number, fetched: number, limit: number, total: number
   if (fetched === 0) return false
   if (total !== undefined && offset + fetched <= total) return offset + fetched < total
   return fetched === limit
-}
-
-/** A `register_query` page as returned: its rows, whether 1С has more past them, and a summary note. */
-interface RegisterPage<T> {
-  value: T[]
-  /** Whether rows remain past this page — the byte budget aside. */
-  more: boolean
-  /** Whether paging on by `skip` reaches the rows left — false where 1С may ignore `$skip`. */
-  pageable: boolean
-  note: string
-}
-
-/**
- * The page `register_query` returns from the `rows` 1С sent for `limit` at
- * `offset`, with the table's `total` beside them — never more than `limit`
- * rows, and never rows dropped on a guess (#214), as `query`'s pages
- * ({@link queryPage}). A page past `limit` (a publication ignoring `$top`) is
- * cut back to `limit` from its start. Where `skip` is set and such a page holds
- * exactly as many rows as 1С counted, it is ambiguous — 1С either ignored
- * `$skip` too (these are the table's first rows) or counts fewer rows than it
- * returns (a `$select` it counts rolled up and returns un-rolled, #192) — and
- * offers no paging on. A page within `limit` pages on as `query`'s does
- * ({@link moreAfter}): an empty page ends it — whatever the parallel count says
- * — and rows outrunning the count make it no guide, a full page going on.
- */
-function registerPage<T>(rows: T[], limit: number, offset: number, total: number): RegisterPage<T> {
-  if (rows.length <= limit) {
-    const countShort = offset + rows.length > total
-    const note = countShort
-      ? ` ⚠ 1С counted ${total} row(s) but returned rows past that — with this select its count is not the number of rows; page on while hasMore is true.`
-      : ''
-    return { value: rows, more: moreAfter(offset, rows.length, limit, total), pageable: true, note }
-  }
-  const value = rows.slice(0, limit)
-  const sent = ` ⚠ 1С returned ${rows.length} rows for top ${limit} — it ignored $top here; the page was cut to ${limit} of them, taken as starting at skip`
-  if (offset > 0 && rows.length === total) {
-    const note = `${sent}. They are exactly as many as it counted: it either ignored $skip too (these are the table's first rows) or counts fewer rows than it returns (a select it counts rolled up). Paging on stops here: narrow with condition, period, filter or select.`
-    return { value, more: false, pageable: false, note }
-  }
-  // Every row from where 1С started is in hand, and more of them than the page.
-  return { value, more: true, pageable: true, note: `${sent}.` }
 }
 
 /**
@@ -284,7 +247,12 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
 
         const page = await pageAndCount(q, count === true, signal)
         const total = page.count
-        const { value, more, pageable, note: topNote } = queryPage(page.value, limit, offset, total)
+        const {
+          value,
+          more,
+          pageable,
+          note: topNote,
+        } = placePage(page.value, limit, offset, total, 'narrow with filter, or use register_query for a register')
         const fetched = value.length
         const { rows, truncated } = shapeRows(value, compact, limits)
         const note = truncationNote(
@@ -292,7 +260,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           rows.length,
           fetched,
           limits,
-          'narrow with select, set compact:true, or page with skip',
+          `narrow with select${pageable ? ', set compact:true, or page with skip' : ' or set compact:true'}`,
         )
         return {
           summary: `${rows.length} row(s)${total !== undefined ? ` of ${total} total` : ''} from ${entitySet}.${note}${topNote}${registerHint(entitySet)}`,
@@ -461,17 +429,28 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           client.serverTimezone,
         )
         const total = page.count
-        const { value, more, pageable, note: pageNote } = registerPage(page.value, limit, offset, total)
+        const {
+          value,
+          more,
+          pageable,
+          note: pageNote,
+        } = placePage(page.value, limit, offset, total, 'narrow with condition, period, filter or select')
+        // 1С may count a $select as rolled up while returning its rows un-rolled:
+        // once a page's rows outrun the count it is no guide to whether more remain.
+        const countNote =
+          pageable && value.length > 0 && page.value.length <= limit && offset + value.length > total
+            ? ` ⚠ 1С counted ${total} row(s) but returned rows past that — with this select its count is not the number of rows; page on while hasMore is true.`
+            : ''
         const { rows, truncated } = shapeRows(value, args.compact, limits)
         const note = truncationNote(
           truncated,
           rows.length,
           value.length,
           limits,
-          'narrow with select/condition/filter, set compact:true, or page with skip',
+          `narrow with select/condition/filter${pageable ? ', set compact:true, or page with skip' : ' or set compact:true'}`,
         )
         return {
-          summary: `${rows.length} row(s) of ${total} total from ${args.register}.${args.table}.${note}${pageNote}`,
+          summary: `${rows.length} row(s) of ${total} total from ${args.register}.${args.table}.${note}${pageNote}${countNote}`,
           data: {
             connection: args.connection,
             register: args.register,

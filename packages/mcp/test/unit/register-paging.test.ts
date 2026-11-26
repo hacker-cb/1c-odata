@@ -107,9 +107,9 @@ describe('register_query pages on the 1С server (#192)', () => {
     expect(data.rows.map((r) => r.n)).toEqual([0, 1, 2, 3])
     expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
     const text = JSON.stringify(summary)
-    expect(text).toContain('ignored $skip too')
-    expect(text).toContain('counts fewer rows than it returns')
-    expect(text).toContain('Paging on stops here')
+    expect(text).toContain('ignored $skip (these are the set')
+    expect(text).toContain('counts fewer rows than it has')
+    expect(text).toContain('Paging on stops here: narrow with condition, period, filter or select')
   })
 
   it('keeps the rows asked for when $top is ignored and a short count equals them (#214)', async () => {
@@ -121,14 +121,15 @@ describe('register_query pages on the 1С server (#192)', () => {
     expect(JSON.stringify(summary)).toContain('Paging on stops here')
   })
 
-  it('stops on an ambiguous page even when the byte budget cut it (#214)', async () => {
+  it('stops on an ambiguous page even when the byte budget cut it, and offers no skip (#214)', async () => {
     const { run } = setup(
       10,
       { ...limits, maxBytes: 1024 },
       { ignoreTop: true, ignoreSkip: true, pad: 'x'.repeat(600) },
     )
-    const { data } = await run({ skip: 8 })
+    const { data, summary } = await run({ skip: 8 })
     expect(data.pagination).toMatchObject({ returned: 1, truncated: true, hasMore: false })
+    expect(JSON.stringify(summary)).not.toContain('page with skip')
   })
 
   it('ends the paging on an empty page, whatever the parallel count says', async () => {
@@ -137,12 +138,37 @@ describe('register_query pages on the 1С server (#192)', () => {
     expect((await run({ skip: 10 })).data.pagination).toMatchObject({ returned: 0, hasMore: false })
   })
 
-  it('keeps paging from the rows in hand when 1С ignored $top and the count is short', async () => {
-    // 1С honoured $skip but not $top and counted 3 of 10 rows: rows 4–9 came back.
+  it('claims no rows past the count on an empty page past it', async () => {
+    const { run } = setup(10, limits)
+    const { data, summary } = await run({ skip: 20 })
+    expect(data.pagination).toMatchObject({ returned: 0, hasMore: false })
+    expect(JSON.stringify(summary)).not.toContain('returned rows past that')
+  })
+
+  it('stops paging when 1С ignored $top and sent more rows than it counted at a skip (#214)', async () => {
+    // 1С honoured $skip but not $top and counted 3 of 10 rows: rows 4–9 came back — but with
+    // $skip ignored too it would send rows 0–9, just as many past a count that short: no paging on.
     const { run } = setup(10, limits, { ignoreTop: true, count: 3 })
-    const { data } = await run({ skip: 4 })
+    const { data, summary } = await run({ skip: 4 })
     expect(data.rows.map((r) => r.n)).toEqual([4, 5, 6, 7])
-    expect(data.pagination).toMatchObject({ returned: 4, hasMore: true })
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
+    expect(JSON.stringify(summary)).toContain('more than it counted')
+  })
+
+  it('never loops on the first rows when 1С ignored $top and $skip and counts short (#214)', async () => {
+    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true, count: 6 })
+    const { data } = await run({ skip: 4 })
+    expect(data.rows.map((r) => r.n)).toEqual([0, 1, 2, 3])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
+  })
+
+  it('within top too: as many rows as counted at a skip offers no paging on (#214)', async () => {
+    // 1С kept to $top but ignored $skip: the table's 4 rows again, at skip 4.
+    const { run } = setup(4, limits, { ignoreSkip: true })
+    const { data, summary } = await run({ skip: 4 })
+    expect(data.rows.map((r) => r.n)).toEqual([0, 1, 2, 3])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
+    expect(JSON.stringify(summary)).toContain('exactly as many as it counted')
   })
 
   it('pages on by full pages once the rows outrun a short count (ungrouped $select)', async () => {
