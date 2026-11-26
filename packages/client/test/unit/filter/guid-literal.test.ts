@@ -171,11 +171,20 @@ describe('filter DSL — a GUID string for a GUID field (#228)', () => {
   })
 
   describe('guid()', () => {
-    it('writes guid for any field — the schema-less Edm.Guid attribute, a cast result', () => {
+    it('writes guid for any field — the schema-less Edm.Guid attribute, a navigation path', () => {
       expect(noIndex((f) => f.Идентификатор.eq(guid(G)))).toBe(`Идентификатор eq guid'${G}'`)
-      expect(noIndex((f) => f.Recorder.cast('StandardODATA.Document_X').eq(guid(G)))).toBe(
-        `cast(Recorder, 'StandardODATA.Document_X') eq guid'${G}'`,
+      const nav = compileFilter<Record<string, string>>(
+        'UTC',
+        (f) => f['Ответственный/ИдентификаторПользователяИБ']?.eq(guid(G)) as FilterExpression,
       )
+      expect(nav).toBe(`Ответственный/ИдентификаторПользователяИБ eq guid'${G}'`)
+    })
+
+    it('every comparison operator takes it — ordering ones too', () => {
+      expect(noIndex((f) => f.Идентификатор.gt(guid(G)))).toBe(`Идентификатор gt guid'${G}'`)
+      expect(noIndex((f) => f.Идентификатор.ge(guid(G)))).toBe(`Идентификатор ge guid'${G}'`)
+      expect(noIndex((f) => f.Идентификатор.lt(guid(G)))).toBe(`Идентификатор lt guid'${G}'`)
+      expect(noIndex((f) => f.Идентификатор.le(guid(G)))).toBe(`Идентификатор le guid'${G}'`)
     })
 
     it('passes through a GUID field unchanged — no double wrapping', () => {
@@ -195,6 +204,33 @@ describe('filter DSL — a GUID string for a GUID field (#228)', () => {
     it('writes a *_Key field as guid', () => {
       const q = new QueryBuilder<Row>('InformationRegister_X', 'UTC').filter((f) => f.Ref_Key.eq(G))
       expect(toFilterString(q.state.filter as FilterExpression)).toBe(`Ref_Key eq guid'${G}'`)
+    })
+  })
+
+  describe('an index naming an inherited key is no schema', () => {
+    it('a set mapped to "constructor" falls back to the *_Key rule instead of a TypeError', () => {
+      const odd: MetadataIndex = {
+        schemaNamespace: 'StandardODATA',
+        schemas: {},
+        entitySetToType: { Catalog_X: 'constructor' },
+      }
+      const q = client(odd)
+        .query<Row>('Catalog_X')
+        .filter((f) => f.Ref_Key.eq(G))
+      expect(toFilterString(q.state.filter as FilterExpression)).toBe(`Ref_Key eq guid'${G}'`)
+      const proto = client(metadataIndex)
+        .query<Row>('constructor')
+        .filter((f) => f.Ref_Key.eq(G))
+      expect(toFilterString(proto.state.filter as FilterExpression)).toBe(`Ref_Key eq guid'${G}'`)
+    })
+  })
+
+  describe('a virtual-table path has no schema of its own — the *_Key rule', () => {
+    it('writes a *_Key field as guid and leaves another GUID field to guid()', () => {
+      expect(withIndex('InformationRegister_X/SliceLast()', (f) => f.Ref_Key.eq(G))).toBe(`Ref_Key eq guid'${G}'`)
+      expect(withIndex('InformationRegister_X/SliceLast()', (f) => f.Идентификатор.eq(guid(G)))).toBe(
+        `Идентификатор eq guid'${G}'`,
+      )
     })
   })
 })

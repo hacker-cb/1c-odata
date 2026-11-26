@@ -147,7 +147,9 @@ function formatLiteral(v: unknown, ctx: CompileContext, argument: string): strin
  * matches nothing, silently, and against another `Edm.Guid` field fails. The
  * schema decides where it has the field (`propType`); otherwise the 1С naming
  * rule does — a reference is `<X>_Key` (every `*_Key` property of the 1С bases
- * checked is `Edm.Guid`), read on the last segment of the path.
+ * checked is `Edm.Guid`), read on the last segment of the path. A path through
+ * a navigation property (`'Ответственный/Идентификатор'`) is not in the
+ * entity's schema, so it too goes by the name.
  */
 function isGuidField(path: string, propType: string | undefined): boolean {
   if (propType !== undefined) return propType === 'Edm.Guid'
@@ -176,8 +178,8 @@ function formatGuidComparand(v: unknown, ctx: CompileContext, argument: string):
 /**
  * A GUID literal for a filter value: `guid'…'`, as a field expression the DSL
  * built, so any comparison takes it as is. For a field the DSL cannot tell is
- * an `Edm.Guid` — no schema and not named `*_Key` (`Идентификатор`), or the
- * result of `cast()`.
+ * an `Edm.Guid` — one the schema does not list and not named `*_Key`
+ * (`Идентификатор` queried schema-less, or through a navigation path).
  *
  * @throws InvalidArgumentError — `value` is not a GUID in the 8-4-4-4-12 hex form.
  * @internal
@@ -263,10 +265,10 @@ interface NumberOps {
 }
 
 interface StringOps {
-  gt(v: string): FilterExpression
-  ge(v: string): FilterExpression
-  lt(v: string): FilterExpression
-  le(v: string): FilterExpression
+  gt(v: string | FieldExpr<string>): FilterExpression
+  ge(v: string | FieldExpr<string>): FilterExpression
+  lt(v: string | FieldExpr<string>): FilterExpression
+  le(v: string | FieldExpr<string>): FilterExpression
   startsWith(v: string): FilterExpression
   endsWith(v: string): FilterExpression
   substringof(v: string): FilterExpression
@@ -452,12 +454,8 @@ function wrapField<V>(
  *
  * @internal
  */
-export function compileFilter<T>(
-  serverTimezone: string,
-  fn: (f: FieldExprMap<T>) => FilterExpression,
-  schema?: { metadataIndex: MetadataIndex; entity: EntitySchema },
-): string {
-  const ctx: CompileContext = { serverTimezone, lambdaCounter: { value: 0 }, metadataIndex: schema?.metadataIndex }
-  const f = makeFieldProxy<T>('', ctx, schema?.entity)
+export function compileFilter<T>(serverTimezone: string, fn: (f: FieldExprMap<T>) => FilterExpression): string {
+  const ctx: CompileContext = { serverTimezone, lambdaCounter: { value: 0 } }
+  const f = makeFieldProxy<T>('', ctx)
   return fn(f)._expr
 }

@@ -176,13 +176,15 @@ if (row) {
 }
 ```
 
-In the filter DSL a string compared with a GUID field is written `guid'…'` — 1С matches no rows for a reference compared with a plain `'…'`. The field type comes from the `MetadataIndex` (`Edm.Guid`); without one, a 1С reference named `*_Key` counts. Such a string must be a GUID (`InvalidArgumentError` otherwise). For any other GUID field schema-less, wrap the value in `guid()`:
+In the filter DSL a string compared with a GUID field is written `guid'…'` — 1С matches no rows for a reference compared with a plain `'…'`. The field type comes from the `MetadataIndex` (`Edm.Guid`, tabular rows in `any()` / `all()` included); without one — or for a field it does not list: a navigation path (`'Ответственный/…'`), a virtual table (`Register_X/SliceLast()`) — a 1С reference named `*_Key` counts. Such a string must be a GUID (`InvalidArgumentError` otherwise). For any other GUID field, wrap the value in `guid()`:
 
 ```ts
 import { guid } from '@1c-odata/client/filter'
 
-client.query<UntypedEntity>('Catalog_Валюты').filter((f) => f.Ref_Key.eq(id)) // Ref_Key eq guid'…'
-client.query<UntypedEntity>('InformationRegister_ОбработчикиОбновления').filter((f) => f.Идентификатор.eq(guid(id)))
+client.query<{ Ref_Key: string }>('Catalog_Валюты').filter((f) => f.Ref_Key.eq(id)) // Ref_Key eq guid'…'
+client
+  .query<{ Идентификатор: string }>('InformationRegister_ОбработчикиОбновления')
+  .filter((f) => f.Идентификатор.eq(guid(id))) // Идентификатор eq guid'…'
 ```
 
 Recipes: opt out of all date handling with `shape: { dateMode: 'string' }` and convert manually via `parseInZone` / `formatInZone`. With a runtime index (previous section) you can also introspect the base: `Object.keys(client.metadataIndex?.entitySetToType ?? {})` lists every entity set.

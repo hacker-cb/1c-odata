@@ -18,15 +18,19 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
 
   /**
    * The entity set's schema in the client's `MetadataIndex`, for `filter()`'s
-   * field types — `undefined` without an index or for a set it does not list.
+   * field types — `undefined` without an index or for a set it does not list
+   * (a virtual-table path such as `Register_X/SliceLast()` among them). Own
+   * keys only: an inherited name (`constructor`) is no set and no schema.
    *
    * @internal
    */
   protected override filterSchema(): { metadataIndex: MetadataIndex; entity: EntitySchema } | undefined {
     const metadataIndex = this.client.metadataIndex
-    const typeName = metadataIndex?.entitySetToType[this.entitySet]
-    const entity = typeName !== undefined ? metadataIndex?.schemas[typeName] : undefined
-    return metadataIndex !== undefined && entity !== undefined ? { metadataIndex, entity } : undefined
+    if (metadataIndex === undefined || !Object.hasOwn(metadataIndex.entitySetToType, this.entitySet)) return undefined
+    const typeName = metadataIndex.entitySetToType[this.entitySet]
+    if (typeName === undefined || !Object.hasOwn(metadataIndex.schemas, typeName)) return undefined
+    const entity = metadataIndex.schemas[typeName]
+    return entity !== undefined ? { metadataIndex, entity } : undefined
   }
 
   /** Execute the query and return parsed `{ value, count?, odataMetadata }`. */

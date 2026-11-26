@@ -76,15 +76,18 @@ export function all<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => Filter
 /**
  * A GUID literal — `guid'…'` — to compare a field with. A comparison on a
  * field the DSL knows holds a GUID writes a GUID string so by itself: an
- * `Edm.Guid` field of the query's schema (a `MetadataIndex`), or, without one,
- * a 1С reference named `*_Key` (`Ref_Key`, `Контрагент_Key`). `guid()` is for
- * the rest — an `Edm.Guid` attribute queried without a schema
- * (`f.Идентификатор.eq(guid(id))`), or a `cast()` result. 1С matches no rows
- * for a GUID written as a plain string `'…'` against a reference, and fails
- * the request against another `Edm.Guid` field.
+ * `Edm.Guid` field of the query's schema (a `MetadataIndex`), or, for a field
+ * the schema does not list or with no schema at all, a 1С reference named
+ * `*_Key` (`Ref_Key`, `Контрагент_Key`). `guid()` is for the rest — an
+ * `Edm.Guid` attribute queried without a schema, through a navigation path,
+ * or on a virtual table (`Register_X/SliceLast()`). 1С matches no rows for a
+ * GUID written as a plain string `'…'` against a reference, and fails the
+ * request against another `Edm.Guid` field.
  *
  * @example
- *   client.query('InformationRegister_ОбработчикиОбновления').filter((f) => f.Идентификатор.eq(guid(id)))
+ *   client
+ *     .query<{ Идентификатор: string }>('InformationRegister_ОбработчикиОбновления')
+ *     .filter((f) => f.Идентификатор.eq(guid(id)))
  *
  * @throws InvalidArgumentError — `value` is not a GUID in the 8-4-4-4-12 hex form.
  * @public
