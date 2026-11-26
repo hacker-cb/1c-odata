@@ -116,7 +116,9 @@ export function asCondition(v: unknown, argument: string): FilterExpression {
       { argument, received: v },
     )
   }
-  return v as FilterExpression
+  // The DSL's own expressions are frozen; anything else is read once, here, and
+  // its text kept — a getter cannot hand the renderer other text later.
+  return dslExpressions.has(v as object) ? (v as FilterExpression) : makeFilter(text)
 }
 
 /**
@@ -126,15 +128,40 @@ export function asCondition(v: unknown, argument: string): FilterExpression {
  *
  * @internal
  */
-export function lambdaContext(field: unknown, argument: string): CompileContext {
-  const ctx = typeof field === 'object' && field !== null ? (field as { _ctx?: CompileContext })._ctx : undefined
-  if (ctx === undefined) {
+export function lambdaContext(field: unknown, argument: string): { ctx: CompileContext; expr: string } {
+  let ctx: unknown
+  let expr: unknown
+  try {
+    if (typeof field === 'object' && field !== null) {
+      ctx = (field as { _ctx?: unknown })._ctx
+      expr = (field as { _expr?: unknown })._expr
+    }
+  } catch (cause) {
+    throw new InvalidArgumentError(`${argument} cannot be read as a field of the filter`, {
+      argument,
+      received: field,
+      cause,
+    })
+  }
+  if (!isCompileContext(ctx) || typeof expr !== 'string') {
     throw new InvalidArgumentError(`${argument} must be a collection field of the filter (f.<Field>)`, {
       argument,
       received: field,
     })
   }
-  return ctx
+  return { ctx, expr }
+}
+
+/** Whether `v` has the shape of a `CompileContext` the field proxy made. */
+function isCompileContext(v: unknown): v is CompileContext {
+  if (typeof v !== 'object' || v === null) return false
+  const c = v as { serverTimezone?: unknown; lambdaCounter?: { value?: unknown } | null }
+  return (
+    typeof c.serverTimezone === 'string' &&
+    typeof c.lambdaCounter === 'object' &&
+    c.lambdaCounter !== null &&
+    typeof c.lambdaCounter.value === 'number'
+  )
 }
 
 /** Register `expr` as built by the DSL and return it. */

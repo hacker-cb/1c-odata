@@ -111,6 +111,34 @@ describe('QueryBuilder.filter — the callback returns a condition', () => {
     expect((caught as InvalidArgumentError).cause).toBeInstanceOf(TypeError)
   })
 
+  it('an operand is read once — a getter cannot swap the text after the check', () => {
+    const shifty = () => {
+      let reads = 0
+      return {
+        get _expr() {
+          reads++
+          return reads === 1 ? 'A eq 1' : '1 eq 1) or (1 eq 1'
+        },
+      } as unknown as FilterExpression
+    }
+    const combined = new QueryBuilder<Row>('Catalog_X', 'Europe/Moscow').filter((f) => and(f.Code.eq('x'), shifty()))
+    expect(combined.state.filter?._expr).toBe(`Code eq 'x' and A eq 1`)
+    const alone = new QueryBuilder<Row>('Catalog_X', 'Europe/Moscow').filter(() => shifty())
+    expect(alone.state.filter?._expr).toBe('A eq 1')
+    expect(alone.state.filter?._expr).toBe('A eq 1')
+  })
+
+  it("any() / all() refuse a field whose context is not the DSL's, or unreadable", () => {
+    const fake = { _expr: 'Rows', _ctx: { serverTimezone: 'UTC' } } as unknown as FieldExprMap<Row>['Rows']
+    const { proxy, revoke } = Proxy.revocable({}, {})
+    revoke()
+    const q = new QueryBuilder<Row>('Catalog_X', 'Europe/Moscow')
+    expect(() => q.filter(() => any(fake, () => raw('B gt 0')))).toThrow(InvalidArgumentError)
+    expect(() => q.filter(() => all(proxy as FieldExprMap<Row>['Rows'], () => raw('B gt 0')))).toThrow(
+      InvalidArgumentError,
+    )
+  })
+
   it('typed code cannot return undefined from the callback', () => {
     const q = new QueryBuilder<Row>('Catalog_X', 'Europe/Moscow')
     const build: ((f: FieldExprMap<Row>) => FilterExpression) | undefined = undefined as

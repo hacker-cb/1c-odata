@@ -60,20 +60,20 @@ export function not(e: FilterExpression): FilterExpression {
 
 /** Lambda — at least one row matches. @public */
 export function any<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression {
-  const ctx = lambdaContext(field, 'any() collection')
+  const { ctx, expr } = lambdaContext(field, 'any() collection')
   const id = `t${ctx.lambdaCounter.value++}`
   const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
   const body = asCondition(fn(inner), 'any() lambda result')
-  return makeFilter(`${field._expr}/any(${id}: ${body._expr})`)
+  return makeFilter(`${expr}/any(${id}: ${body._expr})`)
 }
 
 /** Lambda — all rows match. @public */
 export function all<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression {
-  const ctx = lambdaContext(field, 'all() collection')
+  const { ctx, expr } = lambdaContext(field, 'all() collection')
   const id = `t${ctx.lambdaCounter.value++}`
   const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
   const body = asCondition(fn(inner), 'all() lambda result')
-  return makeFilter(`${field._expr}/all(${id}: ${body._expr})`)
+  return makeFilter(`${expr}/all(${id}: ${body._expr})`)
 }
 
 /**
