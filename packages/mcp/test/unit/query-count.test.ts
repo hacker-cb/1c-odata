@@ -126,7 +126,8 @@ describe('query with count: a parallel /$count, never $inlinecount (#206)', () =
     const { run } = setup(12, limits, { count: 8 })
     const seen: number[] = []
     let skip = 0
-    for (;;) {
+    // Bounded: a regression answering hasMore on an empty page must fail, not hang.
+    for (let page = 0; page < 10; page++) {
       const { data } = await run({ count: true, skip })
       seen.push(...data.value.map((r) => r.n))
       if (!data.pagination.hasMore) break

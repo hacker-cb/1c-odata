@@ -99,7 +99,8 @@ describe('register_query pages on the 1С server (#192)', () => {
     const { run } = setup(12, limits, { count: 8 })
     const seen: number[] = []
     let skip = 0
-    for (;;) {
+    // Bounded: a regression answering hasMore on an empty page must fail, not hang.
+    for (let page = 0; page < 10; page++) {
       const { data } = await run({ skip })
       seen.push(...data.rows.map((r) => r.n))
       if (!data.pagination.hasMore) break
