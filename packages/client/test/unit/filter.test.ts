@@ -100,7 +100,7 @@ describe('FilterBuilder — date ops', () => {
 
 describe('FilterBuilder — number ops', () => {
   it('add then gt', () => {
-    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.add(5).gt(10))).toBe('Сумма add 5 gt 10')
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.add(5).gt(10))).toBe('(Сумма add 5) gt 10')
   })
 })
 
@@ -257,7 +257,9 @@ describe('FilterBuilder — values are values, not expressions (#213)', () => {
 
   it('still takes a field as the value (`f.A.eq(f.B)`) and a field expression as an operand', () => {
     expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.eq(f.Сумма))).toBe('Сумма eq Сумма')
-    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.gt(f.Сумма.mul(2)))).toBe('Сумма gt Сумма mul 2')
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Сумма.gt(f.Сумма.mul(2)))).toBe(
+      'Сумма gt (Сумма mul 2)',
+    )
     expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.concat(f.Recorder).eq('x'))).toBe(
       `concat(Code, Recorder) eq 'x'`,
     )
@@ -342,5 +344,45 @@ describe('FilterBuilder — integer arguments (#213 review)', () => {
     expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.substring(0, 2).eq('x'))).toBe(
       "substring(Code, 0, 2) eq 'x'",
     )
+  })
+})
+
+describe('FilterBuilder — arithmetic keeps the order of the calls', () => {
+  const c = (fn: (f: FieldExprMap<SampleEntity>) => ReturnType<typeof raw>) => compileFilter<SampleEntity>('UTC', fn)
+
+  it('wraps each single operation — the meaning of a lone one is unchanged', () => {
+    expect(c((f) => f.Сумма.add(1).eq(2))).toBe('(Сумма add 1) eq 2')
+    expect(c((f) => f.Сумма.sub(1).eq(2))).toBe('(Сумма sub 1) eq 2')
+    expect(c((f) => f.Сумма.mul(2).eq(2))).toBe('(Сумма mul 2) eq 2')
+    expect(c((f) => f.Сумма.div(2).eq(2))).toBe('(Сумма div 2) eq 2')
+  })
+
+  it('chains compute left to right, as called — not by OData precedence', () => {
+    expect(c((f) => f.Сумма.add(1).mul(2).eq(10))).toBe('((Сумма add 1) mul 2) eq 10')
+    expect(c((f) => f.Сумма.sub(1).div(2).eq(3))).toBe('((Сумма sub 1) div 2) eq 3')
+    expect(c((f) => f.Сумма.mul(2).add(1).sub(3).eq(0))).toBe('(((Сумма mul 2) add 1) sub 3) eq 0')
+  })
+
+  it('an expression as the operand keeps its own grouping', () => {
+    expect(c((f) => f.Сумма.mul(f.Сумма.add(2)).eq(12))).toBe('(Сумма mul (Сумма add 2)) eq 12')
+    expect(c((f) => f.Сумма.div(f.Сумма.sub(1)).gt(0))).toBe('(Сумма div (Сумма sub 1)) gt 0')
+  })
+
+  it('a filter landing in a value slot from untyped code keeps its grouping', () => {
+    type Untyped = {
+      mul(v: unknown): { eq(v: unknown): ReturnType<typeof raw> }
+      eq(v: unknown): ReturnType<typeof raw>
+    }
+    expect(c((f) => (f.Сумма as unknown as Untyped).mul(raw('Сумма add 2')).eq(10))).toBe(
+      '(Сумма mul (Сумма add 2)) eq 10',
+    )
+    expect(c((f) => (f.Active as unknown as Untyped).eq(or(raw('A eq 1'), raw('B eq 2'))))).toBe(
+      'Active eq ((A eq 1) or (B eq 2))',
+    )
+  })
+
+  it('functions over an operation and lambdas take the grouped text', () => {
+    expect(c((f) => f.Сумма.add(0.5).round().eq(3))).toBe('round((Сумма add 0.5)) eq 3')
+    expect(c((f) => any(f.Товары, (t) => t.Сумма.mul(2).gt(10)))).toBe('Товары/any(t0: (t0/Сумма mul 2) gt 10)')
   })
 })
