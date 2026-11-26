@@ -283,3 +283,27 @@ describe('FilterBuilder — values are values, not expressions (#213)', () => {
     )
   })
 })
+
+describe('FilterBuilder — date units (#213 review)', () => {
+  it('writes each unit the signature lists', () => {
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Date.dateadd('quarter', 1).gt(f.Date))).toBe(
+      "dateadd(Date, 'quarter', 1) gt Date",
+    )
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Date.datedifference(f.Date, 'day').eq(0))).toBe(
+      "datedifference(Date, Date, 'day') eq 0",
+    )
+  })
+
+  it('refuses any other unit from untyped code instead of writing it into $filter', () => {
+    const outside = "day', 1) or (1 eq 1"
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Date.dateadd(outside as 'day', 1).gt(new Date(0))),
+    ).toThrow(InvalidArgumentError)
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Date.datedifference(f.Date, outside as 'day').eq(0)),
+    ).toThrow(InvalidArgumentError)
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Date.dateadd(undefined as unknown as 'day', 1).gt(f.Date)),
+    ).toThrow(InvalidArgumentError)
+  })
+})

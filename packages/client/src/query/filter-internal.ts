@@ -233,6 +233,24 @@ interface RefOps {
   cast(typeName: string): ChainedFieldExpr<string>
 }
 
+/** The units `dateadd` / `datedifference` take — the `DateOps` signature's list. */
+const DATE_UNITS: ReadonlySet<unknown> = new Set(['second', 'minute', 'hour', 'day', 'month', 'quarter', 'year'])
+
+/**
+ * A `dateadd` / `datedifference` unit, written into the filter as is — so one
+ * of `DATE_UNITS` only: the type admits no other, and untyped code passing
+ * anything else gets an `InvalidArgumentError` rather than its text in `$filter`.
+ */
+function dateUnit(unit: unknown, argument: string): string {
+  if (!DATE_UNITS.has(unit)) {
+    throw new InvalidArgumentError(
+      `Date unit for "${argument}" must be one of ${[...DATE_UNITS].join(', ')}; received ${typeof unit === 'string' ? `'${unit}'` : typeof unit}`,
+      { argument, received: unit },
+    )
+  }
+  return unit as string
+}
+
 /**
  * Build a FieldExpr-typed proxy. Every property access returns a wrapped
  * field expression with all method surfaces; TS narrowing via FieldExprFor<V>
@@ -288,9 +306,15 @@ function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & Fiel
     dayofyear: () => wrapField<number>(`dayofyear(${expr})`, ctx),
     quarter: () => wrapField<number>(`quarter(${expr})`, ctx),
     dateadd: (unit: string, amount: number) =>
-      wrapField<Date>(`dateadd(${expr}, '${unit}', ${formatNumberLiteral(amount, `${expr}:dateadd.amount`)})`, ctx),
+      wrapField<Date>(
+        `dateadd(${expr}, '${dateUnit(unit, `${expr}:dateadd.unit`)}', ${formatNumberLiteral(amount, `${expr}:dateadd.amount`)})`,
+        ctx,
+      ),
     datedifference: (other: unknown, unit: string) =>
-      wrapField<number>(`datedifference(${expr}, ${formatLiteral(other, ctx, expr)}, '${unit}')`, ctx),
+      wrapField<number>(
+        `datedifference(${expr}, ${formatLiteral(other, ctx, expr)}, '${dateUnit(unit, `${expr}:datedifference.unit`)}')`,
+        ctx,
+      ),
     isof: (typeName: string) => makeFilter(`isof(${expr}, ${formatLiteral(typeName, ctx, expr)})`),
     cast: (typeName: string) => wrapField<string>(`cast(${expr}, ${formatLiteral(typeName, ctx, expr)})`, ctx),
   })
