@@ -36,8 +36,11 @@ class PooledMcpServer extends McpServer {
   override async connect(transport: Transport): Promise<void> {
     const own = transport.onclose
     transport.onclose = () => {
-      own?.()
-      this.pool.abortDownloads()
+      try {
+        own?.()
+      } finally {
+        this.pool.abortDownloads()
+      }
     }
     await super.connect(transport)
   }

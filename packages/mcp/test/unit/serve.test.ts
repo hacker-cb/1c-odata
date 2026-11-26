@@ -183,6 +183,21 @@ describe('createMcpServer aborts its pool downloads when a transport closes (#23
     expect(hostSaw).toBe(true)
   })
 
+  it("aborts them even where the transport's own onclose throws", async () => {
+    const { arrived } = oneC('hang')
+    const server = createMcpServer({ dataDir: dir, insecure: true })
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
+    serverSide.onclose = () => {
+      throw new Error('host handler failed')
+    }
+    const mcp = new Client({ name: 't', version: '0' })
+    await Promise.all([server.connect(serverSide), mcp.connect(clientSide)])
+    void mcp.callTool({ name: 'query', arguments: { connection: 'c', entitySet: 'Catalog_Валюты' } }).catch(() => {})
+    const hit = await arrived
+    await server.close().catch(() => {})
+    await vi.waitFor(() => expect(hit.aborted).toBe(true))
+  })
+
   it('downloads $metadata anew for a transport connected after a close', async () => {
     oneC('answer')
     const server = createMcpServer({ dataDir: dir, insecure: true })
