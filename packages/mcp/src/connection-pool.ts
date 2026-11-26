@@ -122,6 +122,8 @@ export class ConnectionPool implements ReadPool {
   }
 
   private async build(name: string): Promise<PoolEntry> {
+    // A closed pool fails at once, before reading the source.
+    this.closing.signal.throwIfAborted()
     const stored = await this.source.getBase(name)
     if (stored === undefined) {
       throw new InvalidArgumentError(`No connection named "${name}"`, { argument: 'connection' })

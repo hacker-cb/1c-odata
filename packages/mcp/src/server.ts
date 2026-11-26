@@ -19,8 +19,15 @@ export interface CreateServerOptions {
   limits?: Limits
 }
 
-/** The server and the pool its tools share — {@link serveStdio} closes the pool with the server. */
-function buildServer(opts: CreateServerOptions): { server: McpServer; pool: ConnectionPool } {
+/**
+ * Build the MCP server: one {@link ConnectionPool} shared by all tools.
+ * Data access to 1С is read-only (schema + queries); the management tools
+ * write only the MCP's own connection config (add/remove). Closing the server
+ * closes its pool: the `$metadata` downloads in flight are aborted, which no
+ * single call's cancel does, a download being shared by every call waiting on
+ * its connection (#233).
+ */
+export function createMcpServer(opts: CreateServerOptions): McpServer {
   const insecure = opts.insecure ?? false
   const limits = opts.limits ?? resolveLimits()
   const version = opts.version ?? '0.0.0'
@@ -30,16 +37,8 @@ function buildServer(opts: CreateServerOptions): { server: McpServer; pool: Conn
   registerDataTools(server, pool, limits)
   registerManagementTools(server, pool, { dataDir: opts.dataDir, insecure })
   registerServerInfoTool(server, { version, dataDir: opts.dataDir })
-  return { server, pool }
-}
-
-/**
- * Build the MCP server: one {@link ConnectionPool} shared by all tools.
- * Data access to 1С is read-only (schema + queries); the management tools
- * write only the MCP's own connection config (add/remove).
- */
-export function createMcpServer(opts: CreateServerOptions): McpServer {
-  return buildServer(opts).server
+  server.server.onclose = () => pool.close()
+  return server
 }
 
 /**
@@ -52,31 +51,36 @@ export async function runServe(opts: CreateServerOptions): Promise<void> {
 
 /**
  * {@link runServe} over the given streams. The end of `stdin` (EOF, or the
- * stream closing) closes the server: the SDK aborts the signal of every tool
- * call still running, which aborts its requests to 1С, and the pool aborts the
- * `$metadata` downloads no call can still use — so nothing keeps loading 1С,
- * or the process alive, for a client that has gone (#233).
+ * stream closing) closes the server — the MCP stdio transport's shutdown
+ * signal — and so does an error on either stream (the client gone mid-write):
+ * the SDK aborts the signal of every tool call still running, which aborts its
+ * requests to 1С, and the pool its `$metadata` downloads — so nothing keeps
+ * loading 1С, or the process alive, for a client that has gone (#233).
  *
  * @internal Exported for tests.
  */
 export async function serveStdio(opts: CreateServerOptions, stdin: Readable, stdout: Writable): Promise<void> {
-  const { server, pool } = buildServer(opts)
+  const server = createMcpServer(opts)
+  const transport = new StdioServerTransport(stdin, stdout)
+  // The SDK chains a transport's own onclose, set before connect, ahead of its own.
   const closed = new Promise<void>((resolve) => {
-    server.server.onclose = resolve
+    transport.onclose = resolve
   })
   const close = (): void => {
     void server.close()
   }
   stdin.once('end', close)
   stdin.once('close', close)
+  // Kept past the close: a stream error with no listener left would crash the process.
+  stdin.on('error', close)
+  stdout.on('error', close)
   try {
-    await server.connect(new StdioServerTransport(stdin, stdout))
+    await server.connect(transport)
     // A stdin already at its end before the listeners went on emits neither event again.
     if (stdin.readableEnded || stdin.destroyed) close()
     await closed
   } finally {
     stdin.off('end', close)
     stdin.off('close', close)
-    pool.close()
   }
 }

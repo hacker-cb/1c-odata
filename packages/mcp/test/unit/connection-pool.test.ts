@@ -124,6 +124,16 @@ describe('ConnectionPool.close (#233)', () => {
     await expect(p.get('other')).rejects.toThrow()
     await expect(p.get('trade')).resolves.toBe(built)
   })
+
+  it('fails a get on a closed pool before reading the source', async () => {
+    const source = new FileConnectionSource({ dataDir: dir, insecure: true })
+    const getBase = vi.spyOn(source, 'getBase')
+    const p = new ConnectionPool(source)
+    p.close()
+    await expect(p.get('trade')).rejects.toThrow()
+    expect(getBase).not.toHaveBeenCalled()
+    expect(vi.mocked(fetchMetadataXml)).not.toHaveBeenCalled()
+  })
 })
 
 describe('ConnectionPool.list', () => {

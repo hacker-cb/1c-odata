@@ -2,8 +2,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { serveStdio } from '../../src/server.js'
+import { createMcpServer, serveStdio } from '../../src/server.js'
 
 const EDMX = `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
@@ -100,7 +102,7 @@ function serve() {
     params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } },
   })
   send({ method: 'notifications/initialized' })
-  return { stdin, send, done, replies, isEnded: () => ended }
+  return { stdin, stdout, send, done, replies, isEnded: () => ended }
 }
 
 const QUERY = {
@@ -113,6 +115,8 @@ describe('serve closes on the end of stdin (#233)', () => {
   it('resolves once stdin ends, with no call in flight', async () => {
     const s = serve()
     await vi.waitFor(() => expect(s.replies).toHaveLength(1)) // initialize answered
+    await new Promise((r) => setTimeout(r, 20))
+    expect(s.isEnded()).toBe(false) // serving until stdin ends
     s.stdin.end()
     await s.done
     expect(s.isEnded()).toBe(true)
@@ -122,6 +126,13 @@ describe('serve closes on the end of stdin (#233)', () => {
     const s = serve()
     await vi.waitFor(() => expect(s.replies).toHaveLength(1))
     s.stdin.destroy()
+    await s.done
+  })
+
+  it('closes on an error writing to stdout (the client gone mid-write)', async () => {
+    const s = serve()
+    await vi.waitFor(() => expect(s.replies).toHaveLength(1))
+    s.stdout.destroy(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
     await s.done
   })
 
@@ -135,7 +146,8 @@ describe('serve closes on the end of stdin (#233)', () => {
     await s.done
     await vi.waitFor(() => expect(hit.aborted).toBe(true))
     expect(hits.filter((h) => !h.url.endsWith('/$metadata')).every((h) => h.aborted)).toBe(true)
-    // The cancelled call answers nothing on a closed connection.
+    // The cancelled call answers nothing on a closed connection — not even once its handler has settled.
+    await new Promise((r) => setTimeout(r, 50))
     expect(s.replies.some((r) => (r as { id?: number }).id === 1)).toBe(false)
   })
 
@@ -147,6 +159,21 @@ describe('serve closes on the end of stdin (#233)', () => {
     expect(hit.url).toMatch(/\/\$metadata$/)
     s.stdin.end()
     await s.done
+    await vi.waitFor(() => expect(hit.aborted).toBe(true))
+  })
+})
+
+describe('createMcpServer closes its pool with the server (#233)', () => {
+  it('aborts the $metadata download a call is waiting on, over any transport', async () => {
+    const { arrived } = oneC('hang')
+    const server = createMcpServer({ dataDir: dir, insecure: true })
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
+    const mcp = new Client({ name: 't', version: '0' })
+    await Promise.all([server.connect(serverSide), mcp.connect(clientSide)])
+    void mcp.callTool({ name: 'query', arguments: { connection: 'c', entitySet: 'Catalog_Валюты' } }).catch(() => {})
+    const hit = await arrived
+    expect(hit.url).toMatch(/\/\$metadata$/)
+    await server.close()
     await vi.waitFor(() => expect(hit.aborted).toBe(true))
   })
 })
