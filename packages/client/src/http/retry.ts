@@ -1,5 +1,6 @@
 import type { RequestOptions, RetryPolicy } from '../client/options.js'
 import { BusinessError, HTTPError, NetworkError, TimeoutError } from '../errors.js'
+import { timerDelay } from './timer.js'
 import {
   type AttemptTrace,
   type RawResponse,
@@ -79,9 +80,6 @@ function callerSignals(config: RequestConfig, callOpts: RetryWrapperOpts): Abort
   return signals
 }
 
-/** The longest delay `setTimeout` keeps: past it Node fires after 1 ms. */
-const MAX_TIMER_MS = 2 ** 31 - 1
-
 /**
  * Wait `ms`, or reject with the abort's reason the moment one of `signals`
  * aborts — at once where one already has. Heard through one signal derived by
@@ -93,7 +91,7 @@ async function sleep(ms: number, signals: AbortSignal[]): Promise<void> {
   try {
     await settleWithin(
       new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, Math.min(ms, MAX_TIMER_MS))
+        timer = setTimeout(resolve, timerDelay(ms))
       }),
       signals.length > 0 ? AbortSignal.any(signals) : undefined,
     )

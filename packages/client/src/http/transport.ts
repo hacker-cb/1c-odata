@@ -2,6 +2,7 @@ import type { RequestOptions } from '../client/options.js'
 import { NetworkError, type ODataError, type RequestContext, TimeoutError } from '../errors.js'
 import type { RequestEvent, RequestHooks, ResponseEvent } from '../hooks/types.js'
 import { mapResponseToError } from './error-mapping.js'
+import { timerDelay } from './timer.js'
 
 /**
  * Result of a successful request — parsed body left to caller.
@@ -89,8 +90,12 @@ async function prepareRequest(
   if (config.signal) signals.push(config.signal)
   let timeoutId: ReturnType<typeof setTimeout> | undefined
   let timeoutSignal: AbortController | undefined
-  const timeoutMs = callOpts.timeout
-  if (timeoutMs && timeoutMs > 0) {
+  let timeoutMs: number | undefined
+  // Only a positive number starts the timer: 0, a negative or NaN disables it.
+  // One past what `setTimeout` keeps (Infinity included) is capped at that limit
+  // rather than firing at once, and the TimeoutError reports the capped value.
+  if (callOpts.timeout && callOpts.timeout > 0) {
+    timeoutMs = timerDelay(callOpts.timeout)
     timeoutSignal = new AbortController()
     timeoutId = setTimeout(() => timeoutSignal?.abort(), timeoutMs)
     signals.push(timeoutSignal.signal)

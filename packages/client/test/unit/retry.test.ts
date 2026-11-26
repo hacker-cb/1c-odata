@@ -472,3 +472,31 @@ describe('requestWithRetry — an outrun onError cannot stop the retry (#212)', 
     }
   })
 })
+
+describe('requestWithRetry — a pause past what a timer keeps (#232)', () => {
+  it('a delay above 2³¹−1 ms is capped at it, not fired at once', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        return new HttpResponse(null, { status: 503 })
+      }),
+    )
+    const spy = vi.spyOn(globalThis, 'setTimeout')
+    const caller = new AbortController()
+    try {
+      const pending = requestWithRetry(
+        { method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header }, signal: caller.signal },
+        { retry: { ...retryPolicy, initialDelayMs: 3e9, maxDelayMs: 3e9 } },
+      ).catch((e: unknown) => e)
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledWith(expect.any(Function), 2 ** 31 - 1))
+      // Fired at once, the pause would have let a second attempt through by now.
+      await new Promise((r) => setTimeout(r, 30))
+      expect(n).toBe(1)
+      caller.abort()
+      expect(await pending).toMatchObject({ name: 'AbortError' })
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})

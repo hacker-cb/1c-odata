@@ -1244,3 +1244,69 @@ describe('transport — the wait for onError is bounded by the request signal (#
     expect(onError).toHaveBeenCalledOnce()
   })
 })
+
+describe('transport — a timeout past what a timer keeps (#232)', () => {
+  const MAX_TIMER_MS = 2 ** 31 - 1
+  const target = { method: 'GET' as const, url: `${base}/Slowish`, headers: { Authorization: auth.header } }
+  // Slower than the 1 ms an overflowing timer fires after.
+  const slowish = () =>
+    server.use(
+      http.get(`${base}/Slowish`, async () => {
+        await new Promise((r) => setTimeout(r, 50))
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+  const calls = [
+    ['request', async (timeout: number) => (await request(target, { timeout })).status],
+    [
+      'requestStream',
+      async (timeout: number) => {
+        const { response } = await requestStream(target, { timeout })
+        await response.text()
+        return response.status
+      },
+    ],
+  ] as const
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  for (const [name, call] of calls) {
+    for (const timeout of [MAX_TIMER_MS + 1, 3e9, Number.POSITIVE_INFINITY]) {
+      it(`${name}: timeout ${timeout} is capped at 2³¹−1 ms rather than firing at once`, async () => {
+        slowish()
+        const spy = vi.spyOn(globalThis, 'setTimeout')
+        expect(await call(timeout)).toBe(200)
+        expect(spy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_MS)
+      })
+    }
+
+    for (const timeout of [0, -1, Number.NaN]) {
+      it(`${name}: timeout ${timeout} disables the timeout, as it did before`, async () => {
+        slowish()
+        const spy = vi.spyOn(globalThis, 'setTimeout')
+        expect(await call(timeout)).toBe(200)
+        // The only timer is the handler's own 50 ms one.
+        expect(spy.mock.calls.map(([, ms]) => ms)).toEqual([50])
+      })
+    }
+  }
+
+  it('a capped timeout that fires reports the capped value', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const pending = request(target, {
+        timeout: Number.POSITIVE_INFINITY,
+        hooks: { beforeRequest: () => new Promise<void>(() => {}) },
+      }).catch((e: unknown) => e)
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_MS)
+      const err = await pending
+      expect(err).toBeInstanceOf(TimeoutError)
+      expect((err as TimeoutError).timeoutMs).toBe(MAX_TIMER_MS)
+      expect((err as TimeoutError).message).toBe(`Request timed out after ${MAX_TIMER_MS}ms`)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
