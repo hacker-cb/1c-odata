@@ -27,6 +27,21 @@ const from = new Date('2026-04-01T00:00:00+03:00')
 const to = new Date('2026-04-30T23:59:59+03:00')
 const TOP = { top: 50 }
 
+// The turnover virtual tables read the movement tables, and at times 1С stalls
+// on them past 30 s — on both bases at once, the cheap calls in the same window
+// unaffected, whatever the period (#238: run 45841318847, April 2026 already).
+// Each call in those tests carries a client timeout (20 s; they answer in about
+// a second), and vitest retries the test — on that TimeoutError alone, so any
+// other failure still shows at once — after a pause: a stalled attempt fails
+// fast and the next one starts afresh. Stalls have outlasted 70 s (run
+// 45845392446), so the retries span about 2.5 minutes. The test timeout applies
+// to each attempt: room for the two calls of one.
+const STALL = { ...TOP, timeout: 20_000 }
+const STALL_TEST = {
+  timeout: 60_000,
+  retry: { count: 3, delay: 20_000, condition: /^Request timed out after \d+ms$/ },
+}
+
 for (const { fixture, profile } of activeFixtures()) {
   const reg = profile.register
   if (!reg) continue
@@ -55,10 +70,14 @@ for (const { fixture, profile } of activeFixtures()) {
 
     if (reg.turnoverSet) {
       const turnoverSet = reg.turnoverSet
-      it(`turnovers({ Period: { from, to } }) on a turnovers-only register (${turnoverSet}) resolves`, async () => {
-        const rows = await client.register(turnoverSet).turnovers({ Period: { from, to } }, TOP)
-        expect(Array.isArray(rows)).toBe(true)
-      }, 30_000)
+      it(
+        `turnovers({ Period: { from, to } }) on a turnovers-only register (${turnoverSet}) resolves`,
+        STALL_TEST,
+        async () => {
+          const rows = await client.register(turnoverSet).turnovers({ Period: { from, to } }, STALL)
+          expect(Array.isArray(rows)).toBe(true)
+        },
+      )
     }
 
     // ── InformationRegister ───────────────────────────────────────────────
@@ -78,10 +97,10 @@ for (const { fixture, profile } of activeFixtures()) {
     // ── AccountingRegister ────────────────────────────────────────────────
     if (reg.accountingSet) {
       const acc = reg.accountingSet
-      it(`drCrTurnovers({ Period: { from, to } }) on ${acc} resolves (StartPeriod/EndPeriod)`, async () => {
-        const rows = await client.register(acc).drCrTurnovers({ Period: { from, to } }, TOP)
+      it(`drCrTurnovers({ Period: { from, to } }) on ${acc} resolves (StartPeriod/EndPeriod)`, STALL_TEST, async () => {
+        const rows = await client.register(acc).drCrTurnovers({ Period: { from, to } }, STALL)
         expect(Array.isArray(rows)).toBe(true)
-      }, 30_000)
+      })
 
       it(`count() of ${acc}/Turnovers with a select counts the rows get() returns (#215)`, async () => {
         // On БП 3.0 a $select rolls the virtual table up by account, and /$count with it counts
@@ -103,10 +122,10 @@ for (const { fixture, profile } of activeFixtures()) {
         expect(Array.isArray(rows)).toBe(true)
       }, 30_000)
 
-      it(`balance/turnovers on the accounting register ${acc} resolve`, async () => {
-        expect(Array.isArray(await client.register(acc).balance({ Period: to }, TOP))).toBe(true)
-        expect(Array.isArray(await client.register(acc).turnovers({ Period: { from, to } }, TOP))).toBe(true)
-      }, 30_000)
+      it(`balance/turnovers on the accounting register ${acc} resolve`, STALL_TEST, async () => {
+        expect(Array.isArray(await client.register(acc).balance({ Period: to }, STALL))).toBe(true)
+        expect(Array.isArray(await client.register(acc).turnovers({ Period: { from, to } }, STALL))).toBe(true)
+      })
     }
   })
 }
