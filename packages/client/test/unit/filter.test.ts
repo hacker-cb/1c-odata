@@ -439,6 +439,11 @@ describe('FilterBuilder — undefined is no value (#229)', () => {
     expect(() => gen((f) => f.Сумма.eq(missing.Сумма))).toThrow(InvalidArgumentError)
   })
 
+  it('a GUID field too — undefined is refused before the GUID check (#228)', () => {
+    const k = compileFilter<{ Ref_Key: string }>
+    expect(() => k('UTC', (f) => f.Ref_Key.eq(undefined as unknown as string))).toThrow(InvalidArgumentError)
+  })
+
   it('in a lambda the error names the row path', () => {
     let caught: unknown
     try {
