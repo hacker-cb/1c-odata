@@ -1,5 +1,6 @@
 import { InvalidArgumentError } from '../errors.js'
-import { type FieldExprMap, type FilterExpression, makeFieldProxy } from './filter-internal.js'
+import type { EntitySchema, MetadataIndex } from '../validate.js'
+import { type CompileContext, type FieldExprMap, type FilterExpression, makeFieldProxy } from './filter-internal.js'
 
 /**
  * Internal accumulated state of a query. Public for inspection by V3 url-builder
@@ -83,12 +84,33 @@ export class QueryBuilder<T = Record<string, unknown>> {
    * result, no runtime error. Provide a precise `<T>` generic (e.g. an entity
    * type emitted by codegen) to get IDE autocomplete and compile-time
    * checks on field names.
+   *
+   * A string compared with a field holding a GUID is written `guid'…'`, as 1С
+   * needs it: an `Edm.Guid` field by the client's `MetadataIndex`, or — without
+   * one, or for a field it does not list — a reference named `*_Key`. Such a
+   * string must have the GUID form (`InvalidArgumentError` otherwise); for any
+   * other GUID field use `guid()` from `@1c-odata/client/filter`.
    */
   filter(fn: (f: FieldExprMap<T>) => FilterExpression): this {
-    const ctx = { serverTimezone: this.serverTimezone, lambdaCounter: { value: 0 } }
-    const f = makeFieldProxy<T>('', ctx)
+    const schema = this.filterSchema()
+    const ctx: CompileContext = {
+      serverTimezone: this.serverTimezone,
+      lambdaCounter: { value: 0 },
+      metadataIndex: schema?.metadataIndex,
+    }
+    const f = makeFieldProxy<T>('', ctx, schema?.entity)
     this.state.filter = fn(f)
     return this
+  }
+
+  /**
+   * The schema `filter()` reads field types from — the entity set's in the
+   * client's `MetadataIndex`. None here; the V3 builder supplies it.
+   *
+   * @internal
+   */
+  protected filterSchema(): { metadataIndex: MetadataIndex; entity: EntitySchema } | undefined {
+    return undefined
   }
 
   /**

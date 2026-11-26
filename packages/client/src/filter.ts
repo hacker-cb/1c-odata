@@ -1,6 +1,13 @@
 import { InvalidArgumentError } from './errors.js'
 import type { ChainedFieldExpr, FieldExpr, FieldExprMap, FilterExpression } from './query/filter-internal.js'
-import { type CompileContext, makeFieldProxy, makeFilter } from './query/filter-internal.js'
+import {
+  type CompileContext,
+  makeFieldProxy,
+  makeFilter,
+  makeGuidLiteral,
+  rowSchemaOf,
+} from './query/filter-internal.js'
+import type { Guid } from './types/core.js'
 
 // OData V3 precedence: `not > and > or`. `or` is loosest, so an `or`-joined
 // sub-expression must be parenthesized when it's an `and` operand — otherwise
@@ -52,7 +59,7 @@ export function not(e: FilterExpression): FilterExpression {
 export function any<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression {
   const ctx = (field as unknown as { _ctx: CompileContext })._ctx
   const id = `t${ctx.lambdaCounter.value++}`
-  const inner = makeFieldProxy<V>(`${id}/`, ctx)
+  const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
   const body = fn(inner)
   return makeFilter(`${field._expr}/any(${id}: ${body._expr})`)
 }
@@ -61,9 +68,29 @@ export function any<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => Filter
 export function all<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression {
   const ctx = (field as unknown as { _ctx: CompileContext })._ctx
   const id = `t${ctx.lambdaCounter.value++}`
-  const inner = makeFieldProxy<V>(`${id}/`, ctx)
+  const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
   const body = fn(inner)
   return makeFilter(`${field._expr}/all(${id}: ${body._expr})`)
+}
+
+/**
+ * A GUID literal — `guid'…'` — to compare a field with. A comparison on a
+ * field the DSL knows holds a GUID writes a GUID string so by itself: an
+ * `Edm.Guid` field of the query's schema (a `MetadataIndex`), or, without one,
+ * a 1С reference named `*_Key` (`Ref_Key`, `Контрагент_Key`). `guid()` is for
+ * the rest — an `Edm.Guid` attribute queried without a schema
+ * (`f.Идентификатор.eq(guid(id))`), or a `cast()` result. 1С matches no rows
+ * for a GUID written as a plain string `'…'` against a reference, and fails
+ * the request against another `Edm.Guid` field.
+ *
+ * @example
+ *   client.query('InformationRegister_ОбработчикиОбновления').filter((f) => f.Идентификатор.eq(guid(id)))
+ *
+ * @throws InvalidArgumentError — `value` is not a GUID in the 8-4-4-4-12 hex form.
+ * @public
+ */
+export function guid(value: string): FieldExpr<Guid> {
+  return makeGuidLiteral(value)
 }
 
 /** Escape hatch — caller assembles the expression string. @public */

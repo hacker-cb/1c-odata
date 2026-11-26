@@ -1,7 +1,9 @@
 // packages/client/src/query/filter-internal.ts
 import { InvalidArgumentError, ODataError } from '../errors.js'
 import { formatNumberLiteral } from '../format-number.js'
-import { formatScalarLiteral } from '../url-builder.js'
+import type { Guid } from '../types/core.js'
+import { formatScalarLiteral, GUID_RE } from '../url-builder.js'
+import type { EntitySchema, MetadataIndex } from '../validate.js'
 
 declare const filterExpressionBrand: unique symbol
 declare const fieldExprBrand: unique symbol
@@ -49,12 +51,24 @@ export interface InternalFieldExpr<V> extends FieldExpr<V> {
   readonly _ctx: CompileContext
 }
 
-/** @internal — per-compileFilter mutable state (timezone + lambda counter). */
+/** @internal — per-compileFilter mutable state (timezone + lambda counter + schema index). */
 export interface CompileContext {
   readonly serverTimezone: string
   /** Mutable lambda counter — incremented per `any()`/`all()` use. */
   lambdaCounter: { value: number }
+  /**
+   * The index the filtered entity's schema came from, where the query has one:
+   * `any()`/`all()` resolve a tabular part's row type through it.
+   */
+  readonly metadataIndex?: MetadataIndex | undefined
 }
+
+/**
+ * The declared EDM type of each field expression the proxy built from a schema
+ * property (`Edm.Guid`, `Collection(<ns>.<Row>)`, …). Kept beside the frozen
+ * expression rather than on it, so no internal key shadows a 1С field name.
+ */
+const fieldTypes = new WeakMap<object, string>()
 
 /**
  * Every expression the DSL itself built — filters and field expressions alike.
@@ -125,6 +139,76 @@ function formatLiteral(v: unknown, ctx: CompileContext, argument: string): strin
       cause,
     })
   }
+}
+
+/**
+ * Whether the field at `path` holds a GUID — its comparisons then write a
+ * GUID string as `guid'…'`, which 1С needs: a quoted `'…'` against a reference
+ * matches nothing, silently, and against another `Edm.Guid` field fails. The
+ * schema decides where it has the field (`propType`); otherwise the 1С naming
+ * rule does — a reference is `<X>_Key` (every `*_Key` property of the 1С bases
+ * checked is `Edm.Guid`), read on the last segment of the path.
+ */
+function isGuidField(path: string, propType: string | undefined): boolean {
+  if (propType !== undefined) return propType === 'Edm.Guid'
+  return path.slice(path.lastIndexOf('/') + 1).endsWith('_Key')
+}
+
+/**
+ * The operand of a comparison on a GUID field: a string is written
+ * `guid'…'`, and must have the GUID form — any other string is an
+ * `InvalidArgumentError` rather than a filter 1С answers with no rows or a
+ * 400. Anything else (`null`, a field expression, `guid()`) as `formatLiteral`
+ * writes it.
+ */
+function formatGuidComparand(v: unknown, ctx: CompileContext, argument: string): string {
+  if (typeof v !== 'string') return formatLiteral(v, ctx, argument)
+  if (!GUID_RE.test(v)) {
+    throw new InvalidArgumentError(
+      `Filter value for "${argument}" must be a GUID (8-4-4-4-12 hex form): the field is an Edm.Guid ` +
+        '(by the schema, or a 1С reference named *_Key)',
+      { argument, received: v },
+    )
+  }
+  return `guid'${v}'`
+}
+
+/**
+ * A GUID literal for a filter value: `guid'…'`, as a field expression the DSL
+ * built, so any comparison takes it as is. For a field the DSL cannot tell is
+ * an `Edm.Guid` — no schema and not named `*_Key` (`Идентификатор`), or the
+ * result of `cast()`.
+ *
+ * @throws InvalidArgumentError — `value` is not a GUID in the 8-4-4-4-12 hex form.
+ * @internal
+ */
+export function makeGuidLiteral(value: string): FieldExpr<Guid> {
+  if (typeof value !== 'string' || !GUID_RE.test(value)) {
+    throw new InvalidArgumentError('guid() takes a GUID in the 8-4-4-4-12 hex form', {
+      argument: 'guid',
+      received: value,
+    })
+  }
+  return dslExpression(Object.freeze({ _expr: `guid'${value}'` })) as unknown as FieldExpr<Guid>
+}
+
+/**
+ * The row schema of a tabular part `field` — what `any()`/`all()` give their
+ * lambda's fields — resolved from its declared `Collection(<ns>.<Row>)` type
+ * through the context's index (as `parser.ts` resolves a nested value's type).
+ * `undefined` without an index, for a field the proxy built with no schema, or
+ * for a row type the index does not hold.
+ *
+ * @internal
+ */
+export function rowSchemaOf(field: object, ctx: CompileContext): EntitySchema | undefined {
+  const index = ctx.metadataIndex
+  let t = fieldTypes.get(field)
+  if (index === undefined || t === undefined) return undefined
+  if (t.startsWith('Collection(') && t.endsWith(')')) t = t.slice('Collection('.length, -1)
+  const prefix = `${index.schemaNamespace}.`
+  const local = t.startsWith(prefix) ? t.slice(prefix.length) : t
+  return Object.hasOwn(index.schemas, local) ? index.schemas[local] : undefined
 }
 
 /**
@@ -274,21 +358,34 @@ function dateUnit(unit: unknown, argument: string): string {
 /**
  * Build a FieldExpr-typed proxy. Every property access returns a wrapped
  * field expression with all method surfaces; TS narrowing via FieldExprFor<V>
- * controls which methods are visible at the type level.
+ * controls which methods are visible at the type level. `schema` — the
+ * entity's (or a tabular row's) where the query has one — gives each field its
+ * declared type: whether its comparisons write a GUID string as `guid'…'`.
  *
  * @internal
  */
-export function makeFieldProxy<T>(prefix: string, ctx: CompileContext): FieldExprMap<T> {
+export function makeFieldProxy<T>(prefix: string, ctx: CompileContext, schema?: EntitySchema): FieldExprMap<T> {
   return new Proxy({} as FieldExprMap<T>, {
     get(_, key) {
       if (typeof key !== 'string') return undefined
       if (key === '_expr' || key === '_phantom' || key === '_ctx') return undefined
-      return wrapField<unknown>(prefix + key, ctx)
+      const propType =
+        schema !== undefined && Object.hasOwn(schema.properties, key) ? schema.properties[key]?.type : undefined
+      const field = wrapField<unknown>(prefix + key, ctx, isGuidField(prefix + key, propType))
+      if (propType !== undefined) fieldTypes.set(field, propType)
+      return field
     },
   })
 }
 
-function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & FieldExpr<V> & { _ctx: CompileContext } {
+function wrapField<V>(
+  expr: string,
+  ctx: CompileContext,
+  guid = false,
+): FieldExprFor<V> & FieldExpr<V> & { _ctx: CompileContext } {
+  // A field holding a GUID writes a string operand as `guid'…'`; a computed
+  // expression (`cast()`, arithmetic, functions) never does.
+  const comparand = (v: unknown) => (guid ? formatGuidComparand(v, ctx, expr) : formatLiteral(v, ctx, expr))
   // Each arithmetic operation in its own parentheses: OData binds mul/div
   // tighter than add/sub, so a chain written bare — `A add 1 mul 2` — would not
   // compute what the calls say, `(A add 1) mul 2`.
@@ -299,12 +396,12 @@ function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & Fiel
     Object.freeze({
       _expr: expr,
       _ctx: ctx,
-      eq: (v: unknown) => makeFilter(`${expr} eq ${formatLiteral(v, ctx, expr)}`),
-      ne: (v: unknown) => makeFilter(`${expr} ne ${formatLiteral(v, ctx, expr)}`),
-      gt: (v: unknown) => makeFilter(`${expr} gt ${formatLiteral(v, ctx, expr)}`),
-      ge: (v: unknown) => makeFilter(`${expr} ge ${formatLiteral(v, ctx, expr)}`),
-      lt: (v: unknown) => makeFilter(`${expr} lt ${formatLiteral(v, ctx, expr)}`),
-      le: (v: unknown) => makeFilter(`${expr} le ${formatLiteral(v, ctx, expr)}`),
+      eq: (v: unknown) => makeFilter(`${expr} eq ${comparand(v)}`),
+      ne: (v: unknown) => makeFilter(`${expr} ne ${comparand(v)}`),
+      gt: (v: unknown) => makeFilter(`${expr} gt ${comparand(v)}`),
+      ge: (v: unknown) => makeFilter(`${expr} ge ${comparand(v)}`),
+      lt: (v: unknown) => makeFilter(`${expr} lt ${comparand(v)}`),
+      le: (v: unknown) => makeFilter(`${expr} le ${comparand(v)}`),
       startsWith: (v: string) => makeFilter(`startswith(${expr}, ${formatLiteral(v, ctx, expr)})`),
       endsWith: (v: string) => makeFilter(`endswith(${expr}, ${formatLiteral(v, ctx, expr)})`),
       substringof: (v: string) => makeFilter(`substringof(${formatLiteral(v, ctx, expr)}, ${expr})`),
@@ -355,8 +452,12 @@ function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & Fiel
  *
  * @internal
  */
-export function compileFilter<T>(serverTimezone: string, fn: (f: FieldExprMap<T>) => FilterExpression): string {
-  const ctx: CompileContext = { serverTimezone, lambdaCounter: { value: 0 } }
-  const f = makeFieldProxy<T>('', ctx)
+export function compileFilter<T>(
+  serverTimezone: string,
+  fn: (f: FieldExprMap<T>) => FilterExpression,
+  schema?: { metadataIndex: MetadataIndex; entity: EntitySchema },
+): string {
+  const ctx: CompileContext = { serverTimezone, lambdaCounter: { value: 0 }, metadataIndex: schema?.metadataIndex }
+  const f = makeFieldProxy<T>('', ctx, schema?.entity)
   return fn(f)._expr
 }
