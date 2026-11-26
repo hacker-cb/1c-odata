@@ -67,6 +67,17 @@ export interface RequestHooks {
    * unread body is cancelled.
    */
   afterResponse?: (req: RequestEvent, res: ResponseEvent) => void | Promise<void>
-  /** When an error (network/timeout/HTTP) is about to be thrown. */
+  /**
+   * When an error (network/timeout/HTTP) is about to be thrown. Its wait is
+   * bounded like the request: on a `TimeoutError` it is called but not
+   * awaited — the call fails at once, and what it throws or rejects with later
+   * is dropped. On a `NetworkError` it is awaited until what is left of the
+   * timeout, or the caller's abort: the call then fails with that
+   * `NetworkError`, or with the abort's reason, and the hook goes on by itself
+   * under an aborted `req.signal`. With neither a timeout nor a signal, and on
+   * an `HTTPError` (the exchange is over), it is awaited in full. To be sure a
+   * side effect of it finished — a log flushed — await that in your own code,
+   * not through the call's rejection.
+   */
   onError?: (req: RequestEvent, err: ODataError) => void | Promise<void>
 }

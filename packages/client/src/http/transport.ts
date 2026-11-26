@@ -435,9 +435,11 @@ async function translateAndFireError(
  * and error mapping. NO retry — that's a layer above (`http/retry.ts`).
  *
  * @throws {TimeoutError} when `callOpts.timeout` elapses before the response
- *   is received — `beforeRequest` included. `afterResponse` is not bounded by
- *   it: it runs once the body is read, and the response stands however long
- *   the hook takes.
+ *   is received — `beforeRequest` included; `onError` is then called but not
+ *   awaited. `afterResponse` is not bounded by it: it runs once the body is
+ *   read, and the response stands however long the hook takes.
+ * @throws {NetworkError} as well when `onError` on a network failure outlasts
+ *   what is left of the timeout — the error it was handed.
  * @throws {NetworkError} on transport-level failure (DNS, connection reset,
  *   TLS handshake, etc.). Wraps the underlying cause in `.cause`.
  * @throws {HTTPError} (and its subclasses `BusinessError`, `ConcurrencyError`,
@@ -553,7 +555,7 @@ export async function request(
  * request from scratch).
  *
  * @throws {TimeoutError} when `callOpts.timeout` elapses before headers arrive
- *   and `afterResponse` settles.
+ *   and `afterResponse` settles; `onError` is then called but not awaited.
  * @throws {NetworkError} on transport-level failure (DNS, connection reset,
  *   TLS handshake, etc.).
  * @throws {HTTPError} (and subclasses) when the server returns HTTP ≥ 400.
