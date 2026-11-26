@@ -171,12 +171,25 @@ export function formatOrderBy(orderBy: readonly { field: string; dir?: 'asc' | '
   return orderBy.map((o) => `${o.field} ${o.dir ?? 'asc'}`).join(',')
 }
 
+/**
+ * The names of a `$select` / `$expand` list, trimmed, blank ones dropped. An
+ * entry untyped code left `undefined` or `null` is blank too, as `join` wrote it.
+ */
+function nonBlank(names: readonly string[] | undefined): readonly string[] {
+  if (names === undefined || names.length === 0) return []
+  return names.map((n) => String(n ?? '').trim()).filter((n) => n !== '')
+}
+
 function buildQueryParams(q: QueryBuilder<unknown>, opts: { count?: boolean } = {}): string[] {
   const s = q.state
   const params: string[] = []
   if (s.filter) params.push(qp('$filter', s.filter._expr))
-  if (s.select) params.push(qp('$select', s.select.join(',')))
-  if (s.expand) params.push(qp('$expand', s.expand.join(',')))
+  // An empty list — or one of blank names only — sends no option: 1С reads
+  // `$select=` / `$expand=` as their absence anyway (as `ReadFiOptions.select`).
+  const select = nonBlank(s.select)
+  const expand = nonBlank(s.expand)
+  if (select.length > 0) params.push(qp('$select', select.join(',')))
+  if (expand.length > 0) params.push(qp('$expand', expand.join(',')))
   if (!opts.count) {
     if (s.orderBy) params.push(qp('$orderby', formatOrderBy(s.orderBy)))
     if (s.top !== undefined) params.push(qp('$top', String(s.top)))

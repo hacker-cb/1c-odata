@@ -386,3 +386,79 @@ describe('FilterBuilder — arithmetic keeps the order of the calls', () => {
     expect(c((f) => any(f.Товары, (t) => t.Сумма.mul(2).gt(10)))).toBe('Товары/any(t0: (t0/Сумма mul 2) gt 10)')
   })
 })
+
+describe('FilterBuilder — undefined is no value (#229)', () => {
+  // Untyped callers (JS, `any`, a property missing from a row) reach a value slot with `undefined`.
+  type Untyped = Record<
+    string,
+    (...v: unknown[]) => { eq(v: unknown): ReturnType<typeof raw> } & ReturnType<typeof raw>
+  >
+  const c = (fn: (f: FieldExprMap<SampleEntity>) => unknown) =>
+    compileFilter<SampleEntity>('UTC', fn as (f: FieldExprMap<SampleEntity>) => ReturnType<typeof raw>)
+  const u = (e: unknown) => e as Untyped
+
+  it('a comparison with undefined is an InvalidArgumentError naming the field', () => {
+    for (const op of ['eq', 'ne', 'gt', 'ge', 'lt', 'le']) {
+      let caught: unknown
+      try {
+        c((f) => u(f.Сумма)[op]?.(undefined))
+      } catch (e) {
+        caught = e
+      }
+      expect(caught).toBeInstanceOf(InvalidArgumentError)
+      expect(caught).toMatchObject({ argument: 'Сумма', received: undefined })
+    }
+  })
+
+  it('an operator argument too — arithmetic, string and date functions, isof/cast', () => {
+    expect(() => c((f) => u(f.Сумма).add?.(undefined).eq(1))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Code).concat?.(undefined).eq('x'))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Code).startsWith?.(undefined))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Code).like?.(undefined))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Date).datedifference?.(undefined, 'day').eq(1))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Recorder).isof?.(undefined))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Recorder).cast?.(undefined).eq('x'))).toThrow(InvalidArgumentError)
+  })
+
+  it('a function or a symbol is no value either — an uncalled method, a symbol', () => {
+    expect(() => c((f) => u(f.Сумма).eq?.(f.Date.year))).toThrow(InvalidArgumentError)
+    expect(() => c((f) => u(f.Code).eq?.(Symbol('x')))).toThrow(InvalidArgumentError)
+  })
+
+  it('the types keep taking a value that may be undefined — the run time refuses an actual undefined', () => {
+    type Gen = { Артикул?: string | null; Сумма: number | undefined }
+    const gen = (fn: (f: FieldExprMap<Gen>) => ReturnType<typeof raw>) => compileFilter<Gen>('UTC', fn)
+    const present: Gen = { Артикул: 'A-1', Сумма: 5 }
+    const missing: Gen = { Сумма: undefined }
+    // A generated optional field compared with a value read from a row compiles, as before.
+    expect(gen((f) => f.Артикул.eq(present.Артикул))).toBe(`Артикул eq 'A-1'`)
+    expect(gen((f) => f.Сумма.ne(present.Сумма))).toBe('Сумма ne 5')
+    expect(gen((f) => f.Артикул.eq(null))).toBe('Артикул eq null')
+    // The value actually missing is the old bug: an error now, not `'undefined'`.
+    expect(() => gen((f) => f.Артикул.eq(missing.Артикул))).toThrow(InvalidArgumentError)
+    expect(() => gen((f) => f.Сумма.eq(missing.Сумма))).toThrow(InvalidArgumentError)
+  })
+
+  it('a GUID field too — undefined is refused before the GUID check (#228)', () => {
+    const k = compileFilter<{ Ref_Key: string }>
+    expect(() => k('UTC', (f) => f.Ref_Key.eq(undefined as unknown as string))).toThrow(InvalidArgumentError)
+  })
+
+  it('in a lambda the error names the row path', () => {
+    let caught: unknown
+    try {
+      c((f) => any(f.Товары, (t) => u(t.Сумма).gt?.(undefined) as ReturnType<typeof raw>))
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toMatchObject({ argument: 't0/Сумма' })
+  })
+
+  it('null still compares with an empty value', () => {
+    expect(c((f) => u(f.Сумма).eq?.(null))).toBe('Сумма eq null')
+  })
+
+  it("substring's length left out is not a value — it still means 'to the end'", () => {
+    expect(c((f) => f.Code.substring(2).eq('x'))).toBe(`substring(Code, 2) eq 'x'`)
+  })
+})
