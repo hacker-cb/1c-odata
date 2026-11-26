@@ -368,6 +368,19 @@ describe('FilterBuilder — arithmetic keeps the order of the calls', () => {
     expect(c((f) => f.Сумма.div(f.Сумма.sub(1)).gt(0))).toBe('(Сумма div (Сумма sub 1)) gt 0')
   })
 
+  it('a filter landing in a value slot from untyped code keeps its grouping', () => {
+    type Untyped = {
+      mul(v: unknown): { eq(v: unknown): ReturnType<typeof raw> }
+      eq(v: unknown): ReturnType<typeof raw>
+    }
+    expect(c((f) => (f.Сумма as unknown as Untyped).mul(raw('Сумма add 2')).eq(10))).toBe(
+      '(Сумма mul (Сумма add 2)) eq 10',
+    )
+    expect(c((f) => (f.Active as unknown as Untyped).eq(or(raw('A eq 1'), raw('B eq 2'))))).toBe(
+      'Active eq ((A eq 1) or (B eq 2))',
+    )
+  })
+
   it('functions over an operation and lambdas take the grouped text', () => {
     expect(c((f) => f.Сумма.add(0.5).round().eq(3))).toBe('round((Сумма add 0.5)) eq 3')
     expect(c((f) => any(f.Товары, (t) => t.Сумма.mul(2).gt(10)))).toBe('Товары/any(t0: (t0/Сумма mul 2) gt 10)')

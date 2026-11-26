@@ -77,8 +77,19 @@ function dslExpression<T extends object>(expr: T): T {
  * @internal
  */
 export function makeFilter(expr: string): FilterExpression {
-  return dslExpression(Object.freeze({ _expr: expr })) as unknown as FilterExpression
+  const filter = dslExpression(Object.freeze({ _expr: expr }))
+  dslFilters.add(filter)
+  return filter as unknown as FilterExpression
 }
+
+/**
+ * The filters among `dslExpressions` — what `makeFilter` built (comparisons,
+ * `raw`, `and`/`or`/`not`, `any`/`all`), as against field expressions. Such
+ * text carries its own operators, so where it lands in a value slot (untyped
+ * code: the types take only field expressions there) it is written in
+ * parentheses, keeping its grouping.
+ */
+const dslFilters = new WeakSet<object>()
 
 /**
  * The OData literal of a comparison or operator argument: a scalar by its JS
@@ -91,7 +102,10 @@ export function makeFilter(expr: string): FilterExpression {
  */
 function formatLiteral(v: unknown, ctx: CompileContext, argument: string): string {
   if (v === null) return 'null'
-  if (typeof v === 'object' && dslExpressions.has(v)) return (v as { _expr: string })._expr
+  if (typeof v === 'object' && dslExpressions.has(v)) {
+    const text = (v as { _expr: string })._expr
+    return dslFilters.has(v) ? `(${text})` : text
+  }
   try {
     const literal = formatScalarLiteral(v, ctx.serverTimezone, argument)
     if (literal !== undefined) return literal
@@ -275,6 +289,11 @@ export function makeFieldProxy<T>(prefix: string, ctx: CompileContext): FieldExp
 }
 
 function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & FieldExpr<V> & { _ctx: CompileContext } {
+  // Each arithmetic operation in its own parentheses: OData binds mul/div
+  // tighter than add/sub, so a chain written bare — `A add 1 mul 2` — would not
+  // compute what the calls say, `(A add 1) mul 2`.
+  const arithmetic = (op: 'add' | 'sub' | 'mul' | 'div', v: unknown) =>
+    wrapField<number>(`(${expr} ${op} ${formatLiteral(v, ctx, expr)})`, ctx)
   // Frozen: a registered expression's text cannot be swapped after the fact.
   const f = dslExpression(
     Object.freeze({
@@ -299,13 +318,10 @@ function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & Fiel
             : `substring(${expr}, ${s})`
         return wrapField<string>(inner, ctx)
       },
-      // Each arithmetic operation in its own parentheses: OData binds mul/div
-      // tighter than add/sub, so a chain written bare — `A add 1 mul 2` — would
-      // not compute what the calls say, `(A add 1) mul 2`.
-      add: (v: unknown) => wrapField<number>(`(${expr} add ${formatLiteral(v, ctx, expr)})`, ctx),
-      sub: (v: unknown) => wrapField<number>(`(${expr} sub ${formatLiteral(v, ctx, expr)})`, ctx),
-      mul: (v: unknown) => wrapField<number>(`(${expr} mul ${formatLiteral(v, ctx, expr)})`, ctx),
-      div: (v: unknown) => wrapField<number>(`(${expr} div ${formatLiteral(v, ctx, expr)})`, ctx),
+      add: (v: unknown) => arithmetic('add', v),
+      sub: (v: unknown) => arithmetic('sub', v),
+      mul: (v: unknown) => arithmetic('mul', v),
+      div: (v: unknown) => arithmetic('div', v),
       round: () => wrapField<number>(`round(${expr})`, ctx),
       year: () => wrapField<number>(`year(${expr})`, ctx),
       month: () => wrapField<number>(`month(${expr})`, ctx),
