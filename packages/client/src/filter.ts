@@ -2,7 +2,7 @@ import { InvalidArgumentError } from './errors.js'
 import type { ChainedFieldExpr, FieldExpr, FieldExprMap, FilterExpression } from './query/filter-internal.js'
 import {
   asCondition,
-  type CompileContext,
+  lambdaContext,
   makeFieldProxy,
   makeFilter,
   makeGuidLiteral,
@@ -60,7 +60,7 @@ export function not(e: FilterExpression): FilterExpression {
 
 /** Lambda — at least one row matches. @public */
 export function any<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression {
-  const ctx = (field as unknown as { _ctx: CompileContext })._ctx
+  const ctx = lambdaContext(field, 'any() collection')
   const id = `t${ctx.lambdaCounter.value++}`
   const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
   const body = asCondition(fn(inner), 'any() lambda result')
@@ -69,7 +69,7 @@ export function any<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => Filter
 
 /** Lambda — all rows match. @public */
 export function all<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression {
-  const ctx = (field as unknown as { _ctx: CompileContext })._ctx
+  const ctx = lambdaContext(field, 'all() collection')
   const id = `t${ctx.lambdaCounter.value++}`
   const inner = makeFieldProxy<V>(`${id}/`, ctx, rowSchemaOf(field, ctx))
   const body = asCondition(fn(inner), 'all() lambda result')

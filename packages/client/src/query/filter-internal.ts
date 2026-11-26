@@ -96,15 +96,45 @@ export function asCondition(v: unknown, argument: string): FilterExpression {
       { argument, received: (v as { _expr: string })._expr },
     )
   }
-  if (typeof v !== 'object' || v === null || typeof (v as { _expr?: unknown })._expr !== 'string') {
+  const holder = (typeof v === 'object' && v !== null) || typeof v === 'function'
+  let text: unknown
+  try {
+    text = holder ? (v as { _expr?: unknown })._expr : undefined
+  } catch (cause) {
+    // A revoked Proxy, a throwing getter: unreadable is no condition either.
+    throw new InvalidArgumentError(`${argument} cannot be read as a filter expression`, {
+      argument,
+      received: v,
+      cause,
+    })
+  }
+  if (typeof text !== 'string') {
     throw new InvalidArgumentError(
       `${argument} must be a filter expression (f.<Field>.eq(…), and(…), raw(…)); received ${
-        v === null ? 'null' : typeof v === 'object' ? 'an object without _expr text' : typeof v
+        v === null ? 'null' : holder ? 'an object without _expr text' : typeof v
       }`,
       { argument, received: v },
     )
   }
   return v as FilterExpression
+}
+
+/**
+ * The compile context of `any()` / `all()`'s collection operand — an
+ * `InvalidArgumentError` where untyped code passed no field the DSL built
+ * (`undefined`, a plain object), rather than a `TypeError` reading it.
+ *
+ * @internal
+ */
+export function lambdaContext(field: unknown, argument: string): CompileContext {
+  const ctx = typeof field === 'object' && field !== null ? (field as { _ctx?: CompileContext })._ctx : undefined
+  if (ctx === undefined) {
+    throw new InvalidArgumentError(`${argument} must be a collection field of the filter (f.<Field>)`, {
+      argument,
+      received: field,
+    })
+  }
+  return ctx
 }
 
 /** Register `expr` as built by the DSL and return it. */
