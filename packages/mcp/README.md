@@ -192,7 +192,8 @@ one `ONEC_A_B_PASSWORD` — `add` rejects the colliding second name, so pick a d
 
 ## Paging
 
-`query` and `register_query` page with `skip` / `top`; page on while `pagination.hasMore` holds. A page 1С's answer
+`query` and `register_query` page with `skip` / `top`; page on while `pagination.hasMore` holds, the next `skip` being
+`pagination.skip + pagination.returned` (the byte budget may return fewer rows than `top`). A page 1С's answer
 leaves unplaced carries `pagination.ambiguous` (absent otherwise) and ends the paging: `"skipIgnoredOrCountShort"` — at a
 `skip`, 1С sent as many rows as it counted (or, ignoring `$top`, more), so it either ignored `$skip` or counts fewer rows
 than it has; `"skipUnverified"` (`query` only) — at a `skip`, 1С ignored `$top` and no count was asked for. Such a page is
