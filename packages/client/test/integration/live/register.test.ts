@@ -14,8 +14,17 @@ import { activeFixtures, makeClient } from '../helpers.js'
 //
 // `{ top }` bounds the result — big registers (e.g. AccountingRegister) return
 // enormous collections; this keeps the call fast and the test honest.
-const from = new Date('2020-01-01T00:00:00Z')
-const to = new Date('2035-01-01T00:00:00Z')
+//
+// The period is one closed past month, not a span of years: `top` caps the rows
+// returned, not the work — 1С builds the whole virtual table over the period
+// first. Over 2020–2035 `turnovers` / `drCrTurnovers` took 3–8 s and at times
+// passed 30 s on CI (#238); over a month they take well under a second. The
+// URL shape under test (StartPeriod / EndPeriod, a point Period) is the same.
+// April 2026: every call that returned rows over 2020–2035 still returns rows
+// here (the one movement of bp's AccumulationRegister_ВозвратыТоваров falls
+// in it). Bounds in the server's time (`makeClient`: Europe/Moscow).
+const from = new Date('2026-04-01T00:00:00+03:00')
+const to = new Date('2026-04-30T23:59:59+03:00')
 const TOP = { top: 50 }
 
 for (const { fixture, profile } of activeFixtures()) {
