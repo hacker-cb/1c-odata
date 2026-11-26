@@ -226,6 +226,19 @@ interface RefOps {
   cast(typeName: string): ChainedFieldExpr<string>
 }
 
+/**
+ * An integer argument of a DSL function — `substring`'s start and length,
+ * `dateadd`'s amount, which 1С takes as integers only: a fraction, a non-finite
+ * or a non-number value is an `InvalidArgumentError` here rather than a 400
+ * from the server.
+ */
+function intLiteral(v: number, argument: string): string {
+  if (!Number.isSafeInteger(v)) {
+    throw new InvalidArgumentError(`"${argument}" must be an integer; received ${String(v)}`, { argument, received: v })
+  }
+  return formatNumberLiteral(v, argument)
+}
+
 /** The units `dateadd` / `datedifference` take — the `DateOps` signature's list. */
 const DATE_UNITS: ReadonlySet<unknown> = new Set(['second', 'minute', 'hour', 'day', 'month', 'quarter', 'year'])
 
@@ -279,10 +292,10 @@ function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & Fiel
       like: (pat: string) => makeFilter(`like(${expr}, ${formatLiteral(pat, ctx, expr)})`),
       concat: (other: unknown) => wrapField<string>(`concat(${expr}, ${formatLiteral(other, ctx, expr)})`, ctx),
       substring: (start: number, length?: number) => {
-        const s = formatNumberLiteral(start, `${expr}:substring.start`)
+        const s = intLiteral(start, `${expr}:substring.start`)
         const inner =
           length !== undefined
-            ? `substring(${expr}, ${s}, ${formatNumberLiteral(length, `${expr}:substring.length`)})`
+            ? `substring(${expr}, ${s}, ${intLiteral(length, `${expr}:substring.length`)})`
             : `substring(${expr}, ${s})`
         return wrapField<string>(inner, ctx)
       },
@@ -302,7 +315,7 @@ function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & Fiel
       quarter: () => wrapField<number>(`quarter(${expr})`, ctx),
       dateadd: (unit: string, amount: number) =>
         wrapField<Date>(
-          `dateadd(${expr}, '${dateUnit(unit, `${expr}:dateadd.unit`)}', ${formatNumberLiteral(amount, `${expr}:dateadd.amount`)})`,
+          `dateadd(${expr}, '${dateUnit(unit, `${expr}:dateadd.unit`)}', ${intLiteral(amount, `${expr}:dateadd.amount`)})`,
           ctx,
         ),
       datedifference: (other: unknown, unit: string) =>

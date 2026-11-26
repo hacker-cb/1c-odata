@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { InvalidArgumentError } from '../../src/errors.js'
 import { all, and, any, not, or, raw } from '../../src/filter.js'
-import { compileFilter } from '../../src/query/filter-internal.js'
+import { compileFilter, type FieldExprMap } from '../../src/query/filter-internal.js'
 
 interface SampleEntity {
   Code: string
@@ -322,5 +322,25 @@ describe('FilterBuilder — date units (#213 review)', () => {
     expect(() =>
       compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Date.dateadd(undefined as unknown as 'day', 1).gt(f.Date)),
     ).toThrow(InvalidArgumentError)
+  })
+})
+
+describe('FilterBuilder — integer arguments (#213 review)', () => {
+  it.each([
+    ['dateadd amount', (f: FieldExprMap<SampleEntity>) => f.Date.dateadd('day', 0.5).gt(f.Date)],
+    ['substring start', (f: FieldExprMap<SampleEntity>) => f.Code.substring(1.5).eq('x')],
+    ['substring length', (f: FieldExprMap<SampleEntity>) => f.Code.substring(0, 2.5).eq('x')],
+    ['a string amount', (f: FieldExprMap<SampleEntity>) => f.Date.dateadd('day', '1' as unknown as number).gt(f.Date)],
+  ])('refuses a non-integer %s with InvalidArgumentError', (_name, fn) => {
+    expect(() => compileFilter<SampleEntity>('Europe/Moscow', fn)).toThrow(InvalidArgumentError)
+  })
+
+  it('writes integer arguments, negative ones included', () => {
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Date.dateadd('day', -3).gt(f.Date))).toBe(
+      "dateadd(Date, 'day', -3) gt Date",
+    )
+    expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.substring(0, 2).eq('x'))).toBe(
+      "substring(Code, 0, 2) eq 'x'",
+    )
   })
 })
