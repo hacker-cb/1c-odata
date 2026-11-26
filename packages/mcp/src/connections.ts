@@ -136,7 +136,7 @@ export function assertNoEnvPassword(name: string): void {
 export function assertAddable(dataDir: string, name: string, overwrite: boolean): void {
   assertValidConnectionName(name)
   const { connections } = loadConfig(dataDir)
-  if (!overwrite && connections[name] !== undefined) {
+  if (!overwrite && storedConnection(connections, name) !== undefined) {
     throw new InvalidArgumentError(`Connection "${name}" already exists`, { argument: 'name' })
   }
   assertNoPasswordEnvCollision(connections, name)

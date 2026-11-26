@@ -264,6 +264,19 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       await runAdd({ dataDir: dir, insecure: true, name: 'constructor', url: NEW, login: 'u', force: true })
       expect(loadConfig(dir).connections.constructor).toMatchObject({ baseUrl: NEW })
     })
+
+    it('a name the config object inherits is no duplicate on a plain create, without --force', async () => {
+      rmSync(join(dir, 'config.json'))
+      await runAdd({ dataDir: dir, insecure: true, name: 'constructor', url: NEW, login: 'u' })
+      expect(loadConfig(dir).connections.constructor).toMatchObject({ baseUrl: NEW })
+    })
+
+    it('an env var the environment object only inherits is no env password', async () => {
+      const { SecretStore: Store } = await import('../../src/secret-store.js')
+      const env = Object.create({ ONEC_C_PASSWORD: 'inherited' }) as NodeJS.ProcessEnv
+      const store = new Store({ dataDir: dir, insecure: true, env })
+      expect(await store.source('c')).toBe('file')
+    })
   })
 
   describe('set_credentials', () => {

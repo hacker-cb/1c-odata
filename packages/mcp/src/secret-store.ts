@@ -84,7 +84,9 @@ export function passwordEnvVar(name: string): string {
  * the one rule {@link SecretStore} reads by and the connection guards check.
  */
 export function envPassword(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const value = env[passwordEnvVar(name)]
+  const key = passwordEnvVar(name)
+  // An own key only: an injected env is a plain object, whose prototype answers for names it never set.
+  const value = Object.hasOwn(env, key) ? env[key] : undefined
   return value !== undefined && value !== '' ? value : undefined
 }
 
