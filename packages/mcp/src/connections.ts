@@ -182,6 +182,12 @@ export interface UpsertConnectionInput {
    * `add_connection` — so the env password never goes where it did (#233 batch).
    */
   createUnderEnvPassword?: boolean
+  /**
+   * Aborted by the time the write's turn comes, nothing is written (#236). A
+   * write once begun completes: the secret and the config are never left to
+   * disagree.
+   */
+  signal?: AbortSignal
 }
 
 export interface UpsertConnectionResult {
@@ -261,6 +267,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
   })
 
   return withConfigLock(async () => {
+    input.signal?.throwIfAborted()
     const config = loadConfig(input.dataDir)
     const existing = storedConnection(config.connections, input.name)
     const existed = existing !== undefined
@@ -318,11 +325,14 @@ export async function verifyConnectivity(input: {
   login: string
   password: string
   timeout?: number
+  /** Aborts the `$metadata` download — an MCP call's own signal, so a cancel stops it (#236). */
+  signal?: AbortSignal
 }): Promise<void> {
   await fetchMetadataXml({
     baseUrl: stripUrlUserinfo(input.baseUrl.trim()),
     auth: connectionAuth({ auth: { username: input.login.trim(), password: input.password } }),
     timeout: input.timeout ?? DEFAULT_METADATA_TIMEOUT_MS,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
   })
 }
 
@@ -428,6 +438,12 @@ export interface UpdateCredentialsInput {
   /** New password; omit to keep the current one. Stored via {@link SecretStore}; never trimmed. */
   password?: string
   insecure?: boolean
+  /**
+   * Aborted by the time the write's turn comes, nothing is written (#236). A
+   * write once begun completes: the secret and the config are never left to
+   * disagree.
+   */
+  signal?: AbortSignal
 }
 
 export interface UpdateCredentialsResult {
@@ -458,6 +474,7 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
     throw new InvalidArgumentError('Provide a new login, a new password, or both', { argument: 'login' })
   }
   return withConfigLock(async () => {
+    input.signal?.throwIfAborted()
     const config = loadConfig(input.dataDir)
     const existing = config.connections[input.name]
     if (existing === undefined) {

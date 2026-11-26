@@ -53,6 +53,7 @@ async function addConnection(
   opts: ManagementToolsOptions,
   pool: ConnectionPool,
   args: AddConnectionArgs,
+  signal: AbortSignal,
 ): Promise<ToolResultBody> {
   const { connection, baseUrl, login, serverTimezone, label, password, overwrite } = args
   const hasPassword = password !== undefined && password !== ''
@@ -68,7 +69,7 @@ async function addConnection(
   // Verify before persisting when a password is available. The password is used
   // verbatim here so verify matches exactly what gets stored/used.
   if (hasPassword) {
-    await verifyConnectivity({ baseUrl, login, password: password as string })
+    await verifyConnectivity({ baseUrl, login, password: password as string, signal })
   }
   const result = await upsertConnection({
     dataDir: opts.dataDir,
@@ -81,6 +82,7 @@ async function addConnection(
     insecure: opts.insecure ?? false,
     overwrite: overwrite === true,
     createUnderEnvPassword: false,
+    signal,
   })
   pool.refresh(connection)
   return {
@@ -120,6 +122,7 @@ async function verifyCredentialChange(
   existing: StoredConnection,
   connection: string,
   change: CredentialChange,
+  signal: AbortSignal,
 ): Promise<boolean> {
   const store = new SecretStore({ dataDir: opts.dataDir, insecure: opts.insecure ?? false })
   const effectivePassword = change.password ?? (await store.read(connection))?.password
@@ -128,6 +131,7 @@ async function verifyCredentialChange(
     baseUrl: existing.baseUrl,
     login: change.login ?? existing.login,
     password: effectivePassword,
+    signal,
   })
   return true
 }
@@ -162,6 +166,7 @@ async function applyCredentialChange(
   connection: string,
   login: string | undefined,
   password: string | undefined,
+  signal: AbortSignal,
 ): Promise<ToolResultBody> {
   const change = parseCredentialChange(login, password)
   if (change.login === undefined && change.password === undefined) {
@@ -173,13 +178,14 @@ async function applyCredentialChange(
   }
   // Before verifying: the new pair must not be checked, and reported verified, when reads would not use it.
   assertNoEnvPassword(connection)
-  const verified = await verifyCredentialChange(opts, existing, connection, change)
+  const verified = await verifyCredentialChange(opts, existing, connection, change, signal)
   const result = await updateConnectionCredentials({
     dataDir: opts.dataDir,
     name: connection,
     ...(change.login !== undefined ? { login: change.login } : {}),
     ...(change.password !== undefined ? { password: change.password } : {}),
     insecure: opts.insecure ?? false,
+    signal,
   })
   // Rebuild the cached client (it was wired with the old credentials).
   pool.refresh(connection)
@@ -220,7 +226,7 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
         overwrite: z.boolean().optional().describe('Replace an existing connection (default false)'),
       },
     },
-    async (args) => toolResult(() => addConnection(opts, pool, args)),
+    async (args, { signal }) => toolResult(() => addConnection(opts, pool, args, signal)),
   )
 
   server.registerTool(
@@ -287,7 +293,7 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
           .describe('New password — stored securely, never returned. Omit to keep the current one.'),
       },
     },
-    async ({ connection, login, password }) =>
-      toolResult(() => applyCredentialChange(opts, pool, connection, login, password)),
+    async ({ connection, login, password }, { signal }) =>
+      toolResult(() => applyCredentialChange(opts, pool, connection, login, password, signal)),
   )
 }

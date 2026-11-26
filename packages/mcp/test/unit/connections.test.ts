@@ -273,6 +273,31 @@ describe('updateConnectionCredentials', () => {
   })
 })
 
+describe('a write cancelled while it waits for the config lock writes nothing (#236)', () => {
+  const conn = { baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow', insecure: true }
+
+  it('upsertConnection', async () => {
+    const first = upsertConnection({ dataDir: dir, name: 'a', ...conn, password: 'pa' })
+    const controller = new AbortController()
+    const queued = upsertConnection({ dataDir: dir, name: 'b', ...conn, password: 'pb', signal: controller.signal })
+    controller.abort()
+    await first
+    await expect(queued).rejects.toThrow()
+    expect(loadConfig(dir).connections.b).toBeUndefined()
+  })
+
+  it('updateConnectionCredentials', async () => {
+    await upsertConnection({ dataDir: dir, name: 'a', ...conn, password: 'pa' })
+    const first = upsertConnection({ dataDir: dir, name: 'b', ...conn })
+    const controller = new AbortController()
+    const queued = updateConnectionCredentials({ dataDir: dir, name: 'a', login: 'u2', signal: controller.signal })
+    controller.abort()
+    await first
+    await expect(queued).rejects.toThrow()
+    expect(loadConfig(dir).connections.a?.login).toBe('u')
+  })
+})
+
 describe('verifyConnectivity', () => {
   it('strips userinfo and trims the login before fetching $metadata', async () => {
     vi.mocked(fetchMetadataXml).mockClear()

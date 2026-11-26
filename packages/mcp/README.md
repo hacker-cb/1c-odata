@@ -31,8 +31,9 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 
 A call the MCP client cancels (`notifications/cancelled`) aborts the HTTP requests to 1С it has in flight —
 `query`, `get_entity`, `count` and `register_query` hand the request's abort signal to each of them, the
-parallel `/$count` included. The first `$metadata` download of a connection is not aborted: every call
-waiting on that connection shares it.
+parallel `/$count` included; `add_connection` and `set_credentials` abort the `$metadata` download that verifies the
+credentials, and store nothing unless their write had already begun. The first `$metadata` download of a connection is not aborted: every call waiting on
+that connection shares it.
 
 `serve` exits once the MCP client closes its end of stdin (the MCP stdio shutdown signal): the calls still running are
 aborted with their requests to 1С, unanswered, and so are the connection pool's `$metadata` downloads in flight. A script feeding requests
