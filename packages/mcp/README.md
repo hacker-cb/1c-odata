@@ -35,7 +35,8 @@ parallel `/$count` included. The first `$metadata` download of a connection is n
 waiting on that connection shares it.
 
 `serve` exits once the MCP client closes its end of stdin (the MCP stdio shutdown signal): the calls still running are
-aborted with their requests to 1С, unanswered, and so are the `$metadata` downloads in flight.
+aborted with their requests to 1С, unanswered, and so are the `$metadata` downloads in flight. A script feeding requests
+through a pipe keeps stdin open until its last answer has come.
 
 ## Quick start
 
