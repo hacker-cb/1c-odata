@@ -37,6 +37,13 @@ function needsAndWrap(expr: string): boolean {
   return false
 }
 
+/**
+ * A nullable / optional collection field for `any()` / `all()`: one whose row
+ * type is inferred. A field that holds no array at all (`null` only) infers
+ * none and is refused here.
+ */
+type NullableCollection<V> = unknown extends V ? never : unknown
+
 /** Variadic AND. @public */
 export function and(...exprs: FilterExpression[]): FilterExpression {
   if (exprs.length === 0) throw new InvalidArgumentError('and() requires at least one expression')
@@ -59,6 +66,11 @@ export function not(e: FilterExpression): FilterExpression {
 }
 
 /** Lambda — at least one row matches. The collection may be typed nullable or optional (a generated tabular part). @public */
+export function any<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression
+export function any<V>(
+  field: FieldExpr<V[] | null | undefined> & NullableCollection<V>,
+  fn: (t: FieldExprMap<V>) => FilterExpression,
+): FilterExpression
 export function any<V>(
   field: FieldExpr<V[] | null | undefined>,
   fn: (t: FieldExprMap<V>) => FilterExpression,
@@ -71,6 +83,11 @@ export function any<V>(
 }
 
 /** Lambda — all rows match. The collection may be typed nullable or optional (a generated tabular part). @public */
+export function all<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => FilterExpression): FilterExpression
+export function all<V>(
+  field: FieldExpr<V[] | null | undefined> & NullableCollection<V>,
+  fn: (t: FieldExprMap<V>) => FilterExpression,
+): FilterExpression
 export function all<V>(
   field: FieldExpr<V[] | null | undefined>,
   fn: (t: FieldExprMap<V>) => FilterExpression,
