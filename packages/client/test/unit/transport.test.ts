@@ -822,6 +822,82 @@ describe('transport — a hook error aborts req.signal without a timeout (#217)'
     })
   }
 
+  it('the abort reason is the hook’s own error', async () => {
+    const hookErr = new Error('token fetch failed')
+    let hookSignal: AbortSignal | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: (req) => {
+          hookSignal = req.signal
+          throw hookErr
+        },
+      },
+    }).catch(() => {})
+    expect(hookSignal?.reason).toBe(hookErr)
+  })
+
+  it('a replacement event from beforeRequest keeps the call’s signal for the hooks after it', async () => {
+    ok()
+    let before: AbortSignal | undefined
+    let after: AbortSignal | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: (req) => {
+          before = req.signal
+          return { method: req.method, url: req.url, headers: { ...req.headers, 'X-Trace': '1' } }
+        },
+        afterResponse: (req) => {
+          after = req.signal
+        },
+      },
+    })
+    expect(after).toBeInstanceOf(AbortSignal)
+    expect(after).toBe(before)
+  })
+
+  it('request: a hooks getter throwing after the response is the hook’s own error — recorded, signal aborted', async () => {
+    ok()
+    const getterErr = new Error('hooks getter')
+    let reads = 0
+    let hookSignal: AbortSignal | undefined
+    const trace: AttemptTrace = { threw: false }
+    const err = await request(
+      target,
+      {
+        get hooks() {
+          reads++
+          if (reads > 1) throw getterErr
+          return {
+            beforeRequest: (req: RequestEvent) => {
+              hookSignal = req.signal
+            },
+          }
+        },
+      },
+      trace,
+    ).catch((e: unknown) => e)
+    expect(err).toBe(getterErr)
+    expect(trace.threw).toBe(true)
+    expect(hookSignal?.aborted).toBe(true)
+  })
+
+  it('request: the timeout stops once the body is read — it never aborts req.signal under a slow afterResponse', async () => {
+    ok()
+    let hookSignal: AbortSignal | undefined
+    const res = await request(target, {
+      timeout: 30,
+      hooks: {
+        afterResponse: async (req) => {
+          hookSignal = req.signal
+          await new Promise((r) => setTimeout(r, 80))
+          if (req.signal?.aborted) throw req.signal.reason
+        },
+      },
+    })
+    expect(res.status).toBe(200)
+    expect(hookSignal?.aborted).toBe(false)
+  })
+
   it('a caller signal aborted by a hook error is not the caller’s: their own signal stays unaborted', async () => {
     const caller = new AbortController()
     const err = await request(target, {

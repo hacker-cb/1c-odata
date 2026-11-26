@@ -11,11 +11,15 @@ export interface RequestEvent {
   headers: Record<string, string>
   body?: string
   /**
-   * The call's signal — set by the library on every request it makes. It
-   * aborts when the call ends early: the timeout, the caller's own signal
-   * (client- or call-level), or a hook's own error ending the call (with or
-   * without a timeout). Hand it to work a hook starts, so that work ends with
-   * the call. Optional only so a hand-built event type-checks.
+   * The signal of this attempt — set by the library on every request it makes,
+   * a fresh one for each attempt a retry makes. It aborts when the attempt is
+   * cut short: the timeout, over what it bounds (`ClientOptions.timeout`),
+   * the caller's own signal
+   * (client- or call-level), or a hook's own error ending the call (its reason
+   * that error, with or without a timeout). Hand it to work a hook starts so
+   * that work stops when the call is cut short; it is not aborted when the
+   * call completes or fails otherwise. Optional only so a hand-built event
+   * type-checks.
    */
   signal?: AbortSignal
 }

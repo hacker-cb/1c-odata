@@ -115,7 +115,9 @@ async function prepareRequest(
       runHook(() => callOpts.hooks?.beforeRequest?.(reqEvent), trace),
       combined,
     )
-    if (result) reqEvent = result
+    // A replacement event keeps the call's signal: the fetch runs under it, and
+    // later hooks are promised it.
+    if (result) reqEvent = { ...result, signal: combined }
   } catch (e) {
     // The callers' `finally` that clears the timer is not reached from here.
     if (timeoutId) clearTimeout(timeoutId)
@@ -126,7 +128,7 @@ async function prepareRequest(
       await translateAndFireError(
         e,
         reqEvent,
-        callOpts.hooks,
+        () => callOpts.hooks,
         timeoutSignal,
         timeoutMs,
         combined,
@@ -135,8 +137,8 @@ async function prepareRequest(
       )
     }
     // The hook's own failure: the call ends here, and so does what the hook
-    // left running under req.signal.
-    callController.abort()
+    // left running under req.signal — the hook's error its reason.
+    callController.abort(e)
     throw e
   }
   // Read once: the method the trace records is the method sent.
@@ -342,7 +344,7 @@ async function endOnHookError<T>(hook: Promise<T>, call: AbortController, handed
   try {
     return await hook
   } catch (e) {
-    if (handed === undefined || e !== handed) call.abort()
+    if (handed === undefined || e !== handed) call.abort(e)
     throw e
   }
 }
@@ -361,7 +363,7 @@ function isAbort(e: unknown, signal: AbortSignal | null | undefined): boolean {
 async function translateAndFireError(
   e: unknown,
   reqEvent: RequestEvent,
-  hooks: RequestHooks | undefined,
+  readHooks: () => RequestHooks | undefined,
   timeoutSignal: AbortController | undefined,
   timeoutMs: number | undefined,
   requestSignal: AbortSignal | null | undefined,
@@ -380,7 +382,7 @@ async function translateAndFireError(
       request,
     })
     await endOnHookError(
-      runHook(() => hooks?.onError?.(reqEvent, err), trace, err),
+      runHook(() => readHooks()?.onError?.(reqEvent, err), trace, err),
       callController,
       err,
     )
@@ -393,7 +395,7 @@ async function translateAndFireError(
   // Anything else failed on the wire: a network-level error
   const err = new NetworkError(networkErrorMessage(e), { cause: e, request })
   await endOnHookError(
-    runHook(() => hooks?.onError?.(reqEvent, err), trace, err),
+    runHook(() => readHooks()?.onError?.(reqEvent, err), trace, err),
     callController,
     err,
   )
@@ -443,12 +445,15 @@ export async function request(
       // not per-request.
       response = await globalThis.fetch(reqEvent.url, fetchInit)
       body = await response.text()
+      // The exchange with 1С is over: the timeout bounded it and stops here, so
+      // it never aborts req.signal under afterResponse / onError below.
+      if (timeoutId) clearTimeout(timeoutId)
     } catch (e) {
       if (timeoutId) clearTimeout(timeoutId)
       return await translateAndFireError(
         e,
         reqEvent,
-        callOpts.hooks,
+        () => callOpts.hooks,
         timeoutSignal,
         timeoutMs,
         fetchInit.signal,
@@ -472,9 +477,9 @@ export async function request(
 
     // Not bounded by the timeout: the exchange with 1С is over and the body in
     // hand, so a slow hook must not turn a write 1С has made into a TimeoutError.
-    const { hooks } = callOpts
+    // `hooks` read inside each hook's run: a throwing getter is the hook's own error.
     await endOnHookError(
-      runHook(() => hooks?.afterResponse?.(reqEvent, resEvent), trace),
+      runHook(() => callOpts.hooks?.afterResponse?.(reqEvent, resEvent), trace),
       callController,
     )
 
@@ -484,7 +489,7 @@ export async function request(
         url: reqEvent.url,
       })
       await endOnHookError(
-        runHook(() => hooks?.onError?.(reqEvent, err), trace, err),
+        runHook(() => callOpts.hooks?.onError?.(reqEvent, err), trace, err),
         callController,
         err,
       )
@@ -551,7 +556,7 @@ export async function requestStream(
       return await translateAndFireError(
         e,
         reqEvent,
-        callOpts.hooks,
+        () => callOpts.hooks,
         timeoutSignal,
         timeoutMs,
         fetchInit.signal,
@@ -584,7 +589,7 @@ export async function requestStream(
       if (!isAbort(e, fetchInit.signal)) {
         // The hook's own error reaches the caller unchanged; the call ends
         // here, and so does what the hook left running under req.signal.
-        callController.abort()
+        callController.abort(e)
         throw e
       }
       // The deadline or the caller's abort ended the wait — a TimeoutError
@@ -594,7 +599,7 @@ export async function requestStream(
       return await translateAndFireError(
         e,
         reqEvent,
-        hooks,
+        () => hooks,
         timeoutSignal,
         timeoutMs,
         fetchInit.signal,
@@ -615,7 +620,7 @@ export async function requestStream(
         return await translateAndFireError(
           e,
           reqEvent,
-          callOpts.hooks,
+          () => callOpts.hooks,
           timeoutSignal,
           timeoutMs,
           fetchInit.signal,
