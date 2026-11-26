@@ -3,7 +3,7 @@ import { InvalidArgumentError } from '@1c-odata/client'
 import { assertValidConnectionName, configPath, loadConfig } from '../config.js'
 import { assertAddable, assertEnvPasswordStaysPutOnAdd, upsertConnection, verifyConnectivity } from '../connections.js'
 import { errorText } from '../redact.js'
-import { passwordEnvVar } from '../secret-store.js'
+import { envPassword, passwordEnvVar } from '../secret-store.js'
 import { promptConfirm, promptHidden, promptLine, readPasswordStdin } from './_prompt.js'
 
 export interface AddOptions {
@@ -60,8 +60,8 @@ async function resolveNonInteractivePassword(
   }
   // No explicit password — fall back to the env var if present. Env passwords
   // resolve verbatim at runtime, so verify with them verbatim but don't store them.
-  const fromEnv = process.env[passwordEnvVar(name)]
-  if (fromEnv !== undefined && fromEnv !== '') return { value: fromEnv, persist: false }
+  const fromEnv = envPassword(name)
+  if (fromEnv !== undefined) return { value: fromEnv, persist: false }
   return undefined
 }
 

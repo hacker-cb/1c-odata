@@ -43,6 +43,7 @@ beforeEach(async () => {
   })
   vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
   vi.stubEnv('ONEC_C_PASSWORD', '')
+  vi.stubEnv('ONEC_D_PASSWORD', '')
   await upsertConnection({
     dataDir: dir,
     name: 'c',
@@ -129,6 +130,26 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       await expectStoredPasswordKept()
     })
 
+    it('keeps the stored password over an overwrite to the same, differently written target', async () => {
+      // Without the env var too: the stored password is cleared only for another target.
+      writeFileSync(
+        join(dir, 'config.json'),
+        JSON.stringify({ connections: { c: { baseUrl: `${OLD}/`, login: 'u', serverTimezone: 'Europe/Moscow' } } }),
+        { mode: 0o600 },
+      )
+      const { call, close } = await tools()
+      const res = await call('add_connection', {
+        connection: 'c',
+        baseUrl: OLD,
+        login: 'u',
+        serverTimezone: 'UTC',
+        overwrite: true,
+      })
+      await close()
+      expect(res.isError).toBe(false)
+      expect((await stored().secret.read('c'))?.password).toBe('stored')
+    })
+
     it('reads a stored target as stored and normalized: a hand-written trailing slash is the same target', async () => {
       writeFileSync(
         join(dir, 'config.json'),
@@ -195,11 +216,53 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       expect(loadConfig(dir).connections.d?.baseUrl).toBe(NEW)
     })
 
+    it('the CLI add refuses a typed password for a new name under a set env var: reads would not use it', async () => {
+      vi.stubEnv('ONEC_D_PASSWORD', 'from-env')
+      await expect(
+        runAdd({ dataDir: dir, insecure: true, name: 'd', url: NEW, login: 'u', password: 'typed' }),
+      ).rejects.toThrow(/ONEC_D_PASSWORD/)
+      expect(fetched).toEqual([])
+    })
+
     it('the CLI add still creates one under a set env var (a person chose the target)', async () => {
       vi.stubEnv('ONEC_D_PASSWORD', 'from-env')
       await runAdd({ dataDir: dir, insecure: true, name: 'd', url: NEW, login: 'u' })
       expect(fetched).toEqual([`${NEW}/$metadata`])
       expect(loadConfig(dir).connections.d?.baseUrl).toBe(NEW)
+    })
+  })
+
+  describe('races and odd names', () => {
+    it('an overwrite queued behind a remove does not re-create the connection under the env password', async () => {
+      envPassword()
+      const { removeConnection } = await import('../../src/connections.js')
+      // The preflight saw the connection; the remove takes the lock first.
+      const removed = removeConnection({ dataDir: dir, name: 'c', insecure: true })
+      const readded = upsertConnection({
+        dataDir: dir,
+        name: 'c',
+        baseUrl: OLD,
+        login: 'u',
+        serverTimezone: 'UTC',
+        insecure: true,
+        overwrite: true,
+        createUnderEnvPassword: false,
+      })
+      await removed
+      await expect(readded).rejects.toThrow(/ONEC_C_PASSWORD/)
+      expect(stored().config).toBeUndefined()
+    })
+
+    it('a name the config object inherits (constructor) is a new connection, not a crash', async () => {
+      rmSync(join(dir, 'config.json'))
+      vi.stubEnv('ONEC_CONSTRUCTOR_PASSWORD', 'from-env')
+      const { call, close } = await tools()
+      const res = await call('add_connection', { connection: 'constructor', baseUrl: NEW, login: 'u', overwrite: true })
+      await close()
+      expect(res.isError).toBe(true)
+      expect(res.text).toContain('ONEC_CONSTRUCTOR_PASSWORD')
+      await runAdd({ dataDir: dir, insecure: true, name: 'constructor', url: NEW, login: 'u', force: true })
+      expect(loadConfig(dir).connections.constructor).toMatchObject({ baseUrl: NEW })
     })
   })
 
