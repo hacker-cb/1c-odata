@@ -29,7 +29,7 @@ export interface FilterExpression {
 /**
  * Compiled field-or-function sub-expression. Like `FilterExpression`, the
  * public surface is a nominal brand — plain objects cannot satisfy this
- * interface, so callers of `eq(v: DefinedValue<V> | FieldExpr<V>)` etc. can only pass
+ * interface, so callers of `eq(v: V | FieldExpr<V>)` etc. can only pass
  * values produced by the DSL proxy (`f.<Field>`, lambda parameters in
  * `any()`/`all()`, or compose-style method results).
  *
@@ -313,18 +313,18 @@ export type FieldExprFor<V> = BaseOps<V> &
   (V extends boolean ? BooleanOps : object) &
   (V extends string ? RefOps : object)
 
-/**
- * A value `eq` / `ne` take for a field of type `V`: anything `V` holds but
- * `undefined`, which is no value (an `InvalidArgumentError` at run time). A
- * field typed `X | undefined` — a hand-written type, or a generated optional
- * one — compares with an `X`, `null` where it admits one, or a field; an
- * untyped (`unknown`) field with anything but `undefined`.
- */
-type DefinedValue<V> = unknown extends V ? NonNullable<unknown> | null : Exclude<V, undefined>
-
 interface BaseOps<V> {
-  eq(v: DefinedValue<V> | FieldExpr<V>): FilterExpression
-  ne(v: DefinedValue<V> | FieldExpr<V>): FilterExpression
+  /**
+   * `<field> eq <v>`. `null` compares with a null field; `undefined` is no
+   * value — an `InvalidArgumentError` (check a value that may be missing, a
+   * field left out of `$select`, before the filter).
+   */
+  eq(v: V | FieldExpr<V>): FilterExpression
+  /**
+   * `<field> ne <v>`. `null` compares with a null field; `undefined` is no
+   * value — an `InvalidArgumentError`.
+   */
+  ne(v: V | FieldExpr<V>): FilterExpression
 }
 
 interface NumberOps {

@@ -425,41 +425,18 @@ describe('FilterBuilder — undefined is no value (#229)', () => {
     expect(() => c((f) => u(f.Code).eq?.(Symbol('x')))).toThrow(InvalidArgumentError)
   })
 
-  it('the types refuse undefined: a field typed `X | undefined` compares with an X, null or a field', () => {
-    type Row = { Артикул: string | undefined; Сумма: number | null | undefined }
-    const t = (fn: (f: FieldExprMap<Row>) => ReturnType<typeof raw>) => compileFilter<Row>('UTC', fn)
-    const row: Row = { Артикул: 'A-1', Сумма: null }
-    expect(t((f) => f.Артикул.eq('A-1'))).toBe(`Артикул eq 'A-1'`)
-    expect(t((f) => f.Сумма.eq(null))).toBe('Сумма eq null')
-    expect(t((f) => f.Артикул.ne(f.Артикул))).toBe('Артикул ne Артикул')
-    // @ts-expect-error — `undefined` is not a value
-    expect(() => t((f) => f.Артикул.eq(undefined))).toThrow(InvalidArgumentError)
-    // @ts-expect-error — a value that may be undefined is checked before the filter
-    expect(() => t((f) => f.Артикул.ne(row.Сумма === null ? undefined : row.Артикул))).toThrow(InvalidArgumentError)
-  })
-
-  it('a generated optional field, an untyped field and a generic wrapper type as they should', () => {
-    type Gen = { X?: string | null }
+  it('the types keep taking a value that may be undefined — the run time refuses an actual undefined', () => {
+    type Gen = { Артикул?: string | null; Сумма: number | undefined }
     const gen = (fn: (f: FieldExprMap<Gen>) => ReturnType<typeof raw>) => compileFilter<Gen>('UTC', fn)
-    const read: Gen = {}
-    expect(gen((f) => f.X.eq(null))).toBe('X eq null')
-    // @ts-expect-error — a read row's optional field may be undefined: check it first
-    expect(() => gen((f) => f.X.eq(read.X))).toThrow(InvalidArgumentError)
-    const x = read.X ?? null
-    expect(gen((f) => f.X.eq(x))).toBe('X eq null')
-
-    const untyped = (fn: (f: FieldExprMap<Record<string, unknown>>) => ReturnType<typeof raw>) =>
-      compileFilter<Record<string, unknown>>('UTC', fn)
-    expect(untyped((f) => f.A?.eq(1) as ReturnType<typeof raw>)).toBe('A eq 1')
-    expect(untyped((f) => f.A?.eq(null) as ReturnType<typeof raw>)).toBe('A eq null')
-    // @ts-expect-error — undefined is refused for an untyped field too
-    expect(() => untyped((f) => f.A?.eq(undefined) as ReturnType<typeof raw>)).toThrow(InvalidArgumentError)
-
-    // A generic wrapper still passes its own type parameter.
-    const byCode = <C extends string | null>(code: C) =>
-      compileFilter<{ Code: C }>('UTC', (f) => f.Code.eq(code) as ReturnType<typeof raw>)
-    expect(byCode('A')).toBe(`Code eq 'A'`)
-    expect(byCode(null)).toBe('Code eq null')
+    const present: Gen = { Артикул: 'A-1', Сумма: 5 }
+    const missing: Gen = { Сумма: undefined }
+    // A generated optional field compared with a value read from a row compiles, as before.
+    expect(gen((f) => f.Артикул.eq(present.Артикул))).toBe(`Артикул eq 'A-1'`)
+    expect(gen((f) => f.Сумма.ne(present.Сумма))).toBe('Сумма ne 5')
+    expect(gen((f) => f.Артикул.eq(null))).toBe('Артикул eq null')
+    // The value actually missing is the old bug: an error now, not `'undefined'`.
+    expect(() => gen((f) => f.Артикул.eq(missing.Артикул))).toThrow(InvalidArgumentError)
+    expect(() => gen((f) => f.Сумма.eq(missing.Сумма))).toThrow(InvalidArgumentError)
   })
 
   it('in a lambda the error names the row path', () => {
