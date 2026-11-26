@@ -371,6 +371,15 @@ function isAbort(e: unknown, signal: AbortSignal | null | undefined): boolean {
  * into the typed error hierarchy and fire the `onError` hook. Shared between
  * text and stream paths. Never handed a hook's own exception: those reach the
  * caller unchanged.
+ *
+ * The wait for `onError` is bounded by the request signal — what is left of
+ * the timeout, and the caller's signal. On a `TimeoutError` the deadline has
+ * passed: `onError` is called with it but not waited for, its rejection
+ * handled, and the call fails at once. On a `NetworkError` it is waited for
+ * until the deadline — the call then fails with that `NetworkError`, the one
+ * `onError` was given — or the caller's abort, which fails it with the abort's
+ * reason. Either way an `onError` outrun goes on by itself, under an aborted
+ * `req.signal`. With neither a timeout nor a signal it is waited for, as before.
  */
 async function translateAndFireError(
   e: unknown,
@@ -385,19 +394,17 @@ async function translateAndFireError(
   const request: RequestContext = { method: reqEvent.method, url: reqEvent.url }
   // The request signal carries the reason of whichever source aborted it
   // first: a timeout only where the timer was first.
-  const timedOut = timeoutSignal?.signal.aborted === true && requestSignal?.reason === timeoutSignal.signal.reason
+  const timedOut = (): boolean =>
+    timeoutSignal?.signal.aborted === true && requestSignal?.reason === timeoutSignal.signal.reason
   // timeoutMs is paired with timeoutSignal in prepareRequest: set whenever the signal can fire.
-  if (timedOut && timeoutMs !== undefined) {
+  if (timedOut() && timeoutMs !== undefined) {
     const err = new TimeoutError(`Request timed out after ${timeoutMs}ms`, {
       timeoutMs,
       cause: e,
       request,
     })
-    await endOnHookError(
-      runHook(() => readHooks()?.onError?.(reqEvent, err), trace, err),
-      callController,
-      err,
-    )
+    // The deadline has passed: onError is told, not waited for.
+    runHook(() => readHooks()?.onError?.(reqEvent, err), trace, err).catch(() => {})
     throw err
   }
   // A caller's abort is no network failure and nothing to retry: the caller
@@ -406,11 +413,20 @@ async function translateAndFireError(
   if (e instanceof Error && e.name === 'AbortError') throw e
   // Anything else failed on the wire: a network-level error
   const err = new NetworkError(networkErrorMessage(e), { cause: e, request })
-  await endOnHookError(
-    runHook(() => readHooks()?.onError?.(reqEvent, err), trace, err),
-    callController,
-    err,
-  )
+  try {
+    await settleWithin(
+      runHook(() => readHooks()?.onError?.(reqEvent, err), trace, err),
+      requestSignal ?? undefined,
+    )
+  } catch (x) {
+    // The wait was cut: by the deadline the call keeps its NetworkError, by the
+    // caller's abort it gets the abort's reason.
+    if (isAbort(x, requestSignal)) throw timedOut() ? err : requestSignal?.reason
+    // The hook's own error ends the call, and what it left under req.signal;
+    // the error it was handed, rethrown, is the library's.
+    if (x !== err) callController.abort(x)
+    throw x
+  }
   throw err
 }
 
@@ -461,7 +477,7 @@ export async function request(
       // it never aborts req.signal under afterResponse / onError below.
       if (timeoutId) clearTimeout(timeoutId)
     } catch (e) {
-      if (timeoutId) clearTimeout(timeoutId)
+      // The timer runs on: it bounds onError's wait below (translateAndFireError).
       return await translateAndFireError(
         e,
         reqEvent,
@@ -564,7 +580,7 @@ export async function requestStream(
     try {
       response = await globalThis.fetch(reqEvent.url, fetchInit)
     } catch (e) {
-      if (timeoutId) clearTimeout(timeoutId)
+      // The timer runs on: it bounds onError's wait below (translateAndFireError).
       return await translateAndFireError(
         e,
         reqEvent,
@@ -630,7 +646,7 @@ export async function requestStream(
         // The exchange with 1С is over: the timer stops here, as on a buffered call.
         if (timeoutId) clearTimeout(timeoutId)
       } catch (e) {
-        if (timeoutId) clearTimeout(timeoutId)
+        // The timer runs on: it bounds onError's wait below (translateAndFireError).
         return await translateAndFireError(
           e,
           reqEvent,
