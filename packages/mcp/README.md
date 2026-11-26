@@ -71,7 +71,12 @@ ONEC_MY_BASE_PASSWORD=… npx @1c-odata/mcp add my-base --url https://host/base/
 
 The interactive `add` (no `--url`) needs a real terminal; in a non-TTY context (CI, an agent) it errors and
 points you here. An **env-supplied password is verified but not copied to storage** — keep
-`ONEC_<NAME>_PASSWORD` exported in the environment that runs `serve`, not only during `add`.
+`ONEC_<NAME>_PASSWORD` exported in the environment that runs `serve`, not only during `add`. While it is set it
+outranks a stored password, so pointing that connection at another base URL or login (`add --force`,
+`add_connection` with `overwrite`), storing a password for it and changing its credentials (`set-credentials`,
+`set_credentials`) are refused — the env password would otherwise go to the new target, or the change would never be
+used; unset the variable first. An agent cannot create a connection under a name whose password is in such a variable
+(`add_connection` refuses it): that one is added through the CLI `add`.
 
 ### 2. Register the server with your MCP client
 

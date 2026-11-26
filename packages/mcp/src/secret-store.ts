@@ -78,6 +78,18 @@ export function passwordEnvVar(name: string): string {
   return `ONEC_${slug}_PASSWORD`
 }
 
+/**
+ * The password `ONEC_<NAME>_PASSWORD` holds for `name` in `env`, or `undefined`
+ * where it is unset or empty. Where set it outranks a stored password on read —
+ * the one rule {@link SecretStore} reads by and the connection guards check.
+ */
+export function envPassword(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const key = passwordEnvVar(name)
+  // An own key only: an injected env is a plain object, whose prototype answers for names it never set.
+  const value = Object.hasOwn(env, key) ? env[key] : undefined
+  return value !== undefined && value !== '' ? value : undefined
+}
+
 interface FileSecrets {
   [name: string]: string
 }
@@ -128,8 +140,8 @@ export class SecretStore {
 
   /** Read a password following env → keychain → file. `null` if none found. */
   async read(name: string): Promise<ReadResult | null> {
-    const fromEnv = this.env[passwordEnvVar(name)]
-    if (fromEnv !== undefined && fromEnv !== '') return { password: fromEnv, source: 'env' }
+    const fromEnv = envPassword(name, this.env)
+    if (fromEnv !== undefined) return { password: fromEnv, source: 'env' }
     if (!this.insecure) {
       const fromKeychain = await this.keychainRead(name)
       if (fromKeychain !== null) return { password: fromKeychain, source: 'keychain' }
@@ -141,8 +153,7 @@ export class SecretStore {
 
   /** Where the password for `name` lives, WITHOUT revealing it (for `list`). */
   async source(name: string): Promise<SecretSource> {
-    const fromEnv = this.env[passwordEnvVar(name)]
-    if (fromEnv !== undefined && fromEnv !== '') return 'env'
+    if (envPassword(name, this.env) !== undefined) return 'env'
     if (!this.insecure && (await this.keychainRead(name)) !== null) return 'keychain'
     if (this.fileRead(name) !== null) return 'file'
     return 'none'
@@ -176,11 +187,17 @@ export class SecretStore {
     return { backend: 'file' }
   }
 
-  /** Remove a password from every backend (file + keychain), regardless of preference. */
-  async remove(name: string): Promise<void> {
-    // Best-effort delete from BOTH backends — a secret may have been written to
-    // either on an earlier run (e.g. keychain then later `--insecure-storage`).
-    await this.keychainDelete(name)
+  /**
+   * Remove a password from every backend (file + keychain), regardless of
+   * preference — a secret may have been written to either on an earlier run
+   * (e.g. keychain then later `--insecure-storage`). Best-effort on the
+   * keychain unless `strict`: then a keychain this store reads that fails to
+   * delete (an error, not "no such entry") throws, as a password left there
+   * would be read again once the keychain answers. `--insecure-storage` never
+   * reads the keychain, so its delete stays best-effort even then.
+   */
+  async remove(name: string, opts: { strict?: boolean } = {}): Promise<void> {
+    await this.keychainDelete(name, opts.strict === true && !this.insecure)
     this.fileDelete(name)
   }
 
@@ -196,13 +213,22 @@ export class SecretStore {
     }
   }
 
-  private async keychainDelete(name: string): Promise<void> {
+  /**
+   * Delete `name`'s keychain entry. "No such entry" is not an error (the
+   * backend answers `false`); a keychain that fails otherwise is ignored —
+   * nothing reachable to delete — unless `strict`, when it throws.
+   */
+  private async keychainDelete(name: string, strict = false): Promise<void> {
     const mod = await this.keyringModule()
     if (mod === null) return
     try {
       this.keychainEntry(mod, name).deletePassword()
-    } catch {
-      // no entry / keychain unreachable — nothing to delete
+    } catch (err) {
+      if (strict) {
+        throw new Error(
+          `Could not delete the stored password of "${name}" from the OS keychain (${errMessage(err)}); nothing was changed. Fix the keychain and retry.`,
+        )
+      }
     }
   }
 
