@@ -33,12 +33,13 @@ const TOP = { top: 50 }
 // Each call in those tests carries a client timeout (20 s; they answer in about
 // a second), and vitest retries the test — on that TimeoutError alone, so any
 // other failure still shows at once — after a pause: a stalled attempt fails
-// fast and the next one starts afresh. The test timeout applies to each attempt
-// and leaves room for two calls of one.
+// fast and the next one starts afresh. Stalls have outlasted 70 s (run
+// 45845392446), so the retries span about 2.5 minutes. The test timeout applies
+// to each attempt: room for the two calls of one.
 const STALL = { ...TOP, timeout: 20_000 }
 const STALL_TEST = {
-  timeout: 90_000,
-  retry: { count: 2, delay: 5_000, condition: /^Request timed out after \d+ms$/ },
+  timeout: 60_000,
+  retry: { count: 3, delay: 20_000, condition: /^Request timed out after \d+ms$/ },
 }
 
 for (const { fixture, profile } of activeFixtures()) {
