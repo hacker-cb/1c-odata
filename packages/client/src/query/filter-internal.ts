@@ -78,6 +78,18 @@ const fieldTypes = new WeakMap<object, string>()
  */
 const dslExpressions = new WeakSet<object>()
 
+/**
+ * Whether `v` is an expression the DSL built — a filter, or a field expression
+ * (a boolean field stands as a filter by itself), but not a `guid()` literal.
+ * What `filter()` takes from its callback.
+ *
+ * @internal
+ */
+export function isDslExpression(v: unknown): v is FilterExpression {
+  // A `guid()` literal is a value, not a condition.
+  return typeof v === 'object' && v !== null && dslExpressions.has(v) && !guidLiterals.has(v)
+}
+
 /** Register `expr` as built by the DSL and return it. */
 function dslExpression<T extends object>(expr: T): T {
   dslExpressions.add(expr)

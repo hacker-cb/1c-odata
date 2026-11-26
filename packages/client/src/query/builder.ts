@@ -1,6 +1,12 @@
 import { InvalidArgumentError } from '../errors.js'
 import type { EntitySchema, MetadataIndex } from '../validate.js'
-import { type CompileContext, type FieldExprMap, type FilterExpression, makeFieldProxy } from './filter-internal.js'
+import {
+  type CompileContext,
+  type FieldExprMap,
+  type FilterExpression,
+  isDslExpression,
+  makeFieldProxy,
+} from './filter-internal.js'
 
 /**
  * Internal accumulated state of a query. Public for inspection by V3 url-builder
@@ -90,6 +96,12 @@ export class QueryBuilder<T = Record<string, unknown>> {
    * one, or for a field it does not list — a reference named `*_Key`. Such a
    * string must have the GUID form (`InvalidArgumentError` otherwise); for any
    * other GUID field use `guid()` from `@1c-odata/client/filter`.
+   *
+   * The callback must return an expression the DSL built. Anything else —
+   * `undefined` from untyped code (`.filter((f) => build?.(f))`), a string, a
+   * plain object — is an `InvalidArgumentError`, and a filter set before stays
+   * as it was: written into the query, it would drop that filter and send the
+   * request over the whole set.
    */
   filter(fn: (f: FieldExprMap<T>) => FilterExpression): this {
     const schema = this.filterSchema()
@@ -99,7 +111,16 @@ export class QueryBuilder<T = Record<string, unknown>> {
       metadataIndex: schema?.metadataIndex,
     }
     const f = makeFieldProxy<T>('', ctx, schema?.entity)
-    this.state.filter = fn(f)
+    const result: unknown = fn(f)
+    if (!isDslExpression(result)) {
+      throw new InvalidArgumentError(
+        `filter() callback must return a filter expression built by the DSL (f.<Field>.eq(…), and(…), raw(…)); received ${
+          result === null ? 'null' : typeof result
+        }`,
+        { argument: 'filter', received: result },
+      )
+    }
+    this.state.filter = result
     return this
   }
 
