@@ -82,6 +82,8 @@ export function parseV3Collection<T>(body: string, opts: ParseOptions): Collecti
   const parsed = safeParse(body)
   if (typeof parsed !== 'object' || parsed === null) throw new ParseError('Expected object at root')
   const obj = parsed as Record<string, unknown>
+  // Before the rows: a malformed count fails the response without mapping them first.
+  const count = inlineCount(obj['odata.count'])
   const value = Array.isArray(obj.value)
     ? (obj.value as unknown[]).map((v) => mapEntity(v as Record<string, unknown>, opts))
     : []
@@ -89,8 +91,20 @@ export function parseV3Collection<T>(body: string, opts: ParseOptions): Collecti
     odataMetadata: typeof obj['odata.metadata'] === 'string' ? (obj['odata.metadata'] as string) : '',
     value: value as T[],
   }
-  if (typeof obj['odata.count'] === 'string') result.count = strictCount(obj['odata.count'] as string, 'odata.count')
+  if (count !== undefined) result.count = count
   return result
+}
+
+/**
+ * The `odata.count` of a collection (`$inlinecount=allpages`) — a string in 1С,
+ * read by the `/$count` rule; a JSON number taken where it is a non-negative
+ * safe integer. Absent is `undefined`; anything else is a `ParseError`.
+ */
+function inlineCount(raw: unknown): number | undefined {
+  if (raw === undefined) return undefined
+  if (typeof raw === 'string') return strictCount(raw, 'odata.count')
+  if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0) return raw
+  throw new ParseError(`Expected a non-negative integer row count in odata.count, got: ${String(raw).slice(0, 50)}`)
 }
 
 /**
@@ -115,14 +129,18 @@ export function parseV3Single<T>(body: string, opts: ParseOptions): T {
  * The one parser of a `/$count` body — `.count()`, register virtual tables.
  */
 export function parseV3Count(body: string): number {
-  return strictCount(body.replace(/^\uFEFF/, '').trim(), '/$count')
+  return strictCount(body, '/$count')
 }
 
-/** `text` as a row count — only `^\d+$` within the safe range — or a `ParseError` naming `source`. */
+/**
+ * `text` as a row count — trimmed (`trim` takes a BOM too), then only `^\d+$`
+ * within the safe range — or a `ParseError` naming `source`.
+ */
 function strictCount(text: string, source: string): number {
-  const n = Number(text)
-  if (!/^\d+$/.test(text) || !Number.isSafeInteger(n)) {
-    throw new ParseError(`Expected a non-negative integer row count in ${source}, got: ${text.slice(0, 50)}`)
+  const digits = text.trim()
+  const n = /^\d+$/.test(digits) ? Number(digits) : Number.NaN
+  if (!Number.isSafeInteger(n)) {
+    throw new ParseError(`Expected a non-negative integer row count in ${source}, got: ${digits.slice(0, 50)}`)
   }
   return n
 }

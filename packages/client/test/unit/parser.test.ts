@@ -78,17 +78,36 @@ describe('V3 parser', () => {
   it.each([['12oops'], ['12 13'], ['1.5'], ['-1'], ['+1'], ['1e3'], ['0x10'], [''], ['n/a'], ['9007199254740993']])(
     'parseV3Count refuses %j instead of reading a count off it (#218)',
     (body) => {
-      expect(() => parseV3Count(body)).toThrow(ParseError)
-      expect(() => parseV3Count(body)).toThrow(/non-negative integer row count in \/\$count/)
+      let caught: unknown
+      try {
+        parseV3Count(body)
+      } catch (e) {
+        caught = e
+      }
+      expect(caught).toBeInstanceOf(ParseError)
+      expect((caught as ParseError).message).toMatch(/non-negative integer row count in \/\$count/)
     },
   )
 
-  it.each([['8oops'], ['-1'], ['1.5'], ['']])('parseV3Collection refuses an odata.count of %j (#218)', (count) => {
+  it.each([[' 8\r\n'], ['\uFEFF8'], [8]])('parseV3Collection reads an odata.count of %j as 8', (count) => {
     const body = JSON.stringify({ 'odata.metadata': 'http://x/$metadata#Catalog_X', 'odata.count': count, value: [] })
-    expect(() => parseV3Collection(body, { serverTimezone: TZ })).toThrow(
-      /non-negative integer row count in odata\.count/,
-    )
+    expect(parseV3Collection(body, { serverTimezone: TZ }).count).toBe(8)
   })
+
+  it('parseV3Collection leaves count undefined where odata.count is absent', () => {
+    const body = JSON.stringify({ 'odata.metadata': 'http://x/$metadata#Catalog_X', value: [] })
+    expect(parseV3Collection(body, { serverTimezone: TZ }).count).toBeUndefined()
+  })
+
+  it.each([['8oops'], ['-1'], ['1.5'], [''], [-1], [1.5], [null], [true]])(
+    'parseV3Collection refuses an odata.count of %j (#218)',
+    (count) => {
+      const body = JSON.stringify({ 'odata.metadata': 'http://x/$metadata#Catalog_X', 'odata.count': count, value: [] })
+      expect(() => parseV3Collection(body, { serverTimezone: TZ })).toThrow(
+        /non-negative integer row count in odata\.count/,
+      )
+    },
+  )
 
   it(`ONEC_EMPTY_DATE constant matches default`, () => {
     expect(ONEC_EMPTY_DATE).toBe('0001-01-01T00:00:00')
