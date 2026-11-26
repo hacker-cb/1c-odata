@@ -532,3 +532,35 @@ describe('requestWithRetry — maxDelayMs caps the first pause too', () => {
     }
   })
 })
+
+describe('requestWithRetry — an attempt replaced by a retry keeps its signal (#231)', () => {
+  it('each attempt gets its own req.signal; none is aborted once the call has succeeded', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        if (n < 3) return new HttpResponse(null, { status: 503 })
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const signals: (AbortSignal | undefined)[] = []
+    const caller = new AbortController()
+    await requestWithRetry(
+      { method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header }, signal: caller.signal },
+      {
+        retry: retryPolicy,
+        hooks: {
+          beforeRequest: (req) => {
+            signals.push(req.signal)
+          },
+        },
+      },
+    )
+    expect(signals).toHaveLength(3)
+    expect(new Set(signals).size).toBe(3)
+    expect(signals.map((s) => s?.aborted)).toEqual([false, false, false])
+    // The caller's own signal still ends them all, the call long over.
+    caller.abort()
+    expect(signals.map((s) => s?.aborted)).toEqual([true, true, true])
+  })
+})
