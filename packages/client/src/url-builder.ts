@@ -133,12 +133,18 @@ export function buildV3KeyUrl(base: string, entitySet: string, key: EntityKey, s
 }
 
 /**
- * Build a V3 `/$count` URL: returns plain integer.
+ * Build a V3 `/$count` URL: returns plain integer. It carries the query's
+ * `$filter`, `$select` and `$expand`: on a register virtual table in the path
+ * (`AccumulationRegister_X/Balance`) 1С counts the rows as it would roll them
+ * up by the `$select` (#215 — see `V3QueryBuilder.count()`), and a navigation
+ * path in `$select` needs its `$expand`, there as on the page. On an ordinary
+ * entity set the count is the same with them or without. `$orderby` / `$top` /
+ * `$skip` / `$inlinecount` stay off; so does `$format`, `/$count` answering
+ * text/plain.
  */
 export function buildV3CountUrl(base: string, q: QueryBuilder<unknown>): string {
   const path = `${base}/${encodeSegment(q.entitySet)}/$count`
-  // Only $filter — /$count returns text/plain, no $format needed
-  const params = buildQueryParams(q, { onlyFilter: true })
+  const params = buildQueryParams(q, { count: true })
   if (params.length === 0) return path
   return `${path}?${params.join('&')}`
 }
@@ -165,13 +171,13 @@ export function formatOrderBy(orderBy: readonly { field: string; dir?: 'asc' | '
   return orderBy.map((o) => `${o.field} ${o.dir ?? 'asc'}`).join(',')
 }
 
-function buildQueryParams(q: QueryBuilder<unknown>, opts: { onlyFilter?: boolean } = {}): string[] {
+function buildQueryParams(q: QueryBuilder<unknown>, opts: { count?: boolean } = {}): string[] {
   const s = q.state
   const params: string[] = []
   if (s.filter) params.push(qp('$filter', s.filter._expr))
-  if (!opts.onlyFilter) {
-    if (s.select) params.push(qp('$select', s.select.join(',')))
-    if (s.expand) params.push(qp('$expand', s.expand.join(',')))
+  if (s.select) params.push(qp('$select', s.select.join(',')))
+  if (s.expand) params.push(qp('$expand', s.expand.join(',')))
+  if (!opts.count) {
     if (s.orderBy) params.push(qp('$orderby', formatOrderBy(s.orderBy)))
     if (s.top !== undefined) params.push(qp('$top', String(s.top)))
     if (s.skip !== undefined) params.push(qp('$skip', String(s.skip)))

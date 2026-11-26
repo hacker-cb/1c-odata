@@ -71,10 +71,12 @@ function applyQueryOptions(builder: V3QueryBuilder<UntypedEntity>, opts: QueryOp
 
 /**
  * One page of `q` and, with `count`, the total from the set's `/$count` (the
- * same `$filter`) in parallel — never `$inlinecount`, with which 1С by its
- * 8.3.27 documentation drops `$skip` / `$top` (#206). One failing aborts the
- * other rather than leave it loading what no one reads; `signal` — the MCP
- * request's own — aborts both.
+ * same `$filter`, `$select` and `$expand`, #215 — on a virtual table in the
+ * path 1С counts the rows rolled up by the `$select`, which may be fewer than
+ * it returns) in parallel — never `$inlinecount`, with which 1С by its 8.3.27
+ * documentation drops `$skip` / `$top` (#206). One failing aborts the other
+ * rather than leave it loading what no one reads; `signal` — the MCP request's
+ * own — aborts both.
  */
 async function pageAndCount(
   q: V3QueryBuilder<UntypedEntity>,
@@ -227,7 +229,9 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
         count: z
           .boolean()
           .optional()
-          .describe('Include the total row count — a parallel /$count request with the same filter'),
+          .describe(
+            'Include the total row count — a parallel /$count request with the same filter, select and expand. On a register virtual table in the path with select, 1С counts the rows rolled up by it, and on some bases (production УТ) returns them un-rolled: then the count is below the number of rows — page on while hasMore holds, until a page comes back short or empty, rather than by the count.',
+          ),
         compact: z
           .boolean()
           .optional()
@@ -349,7 +353,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     {
       title: 'Query register virtual table',
       description:
-        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. On balance/turnovers/balanceAndTurnovers/drCrTurnovers select may also roll the rows up over the selected dimensions — but whether 1С does depends on the 1С configuration: on some bases the rows come rolled up (e.g. on a БП AccountingRegister turnovers, select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account), on others they come back un-rolled, one per full set of dimensions (e.g. УТ AccumulationRegister_ТоварыНаСкладах balance) — then sum them yourself, and total (1С\'s count) may be below the number of rows. On slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from (extDimensions takes neither); filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601 in the 1С server time unless they carry Z or an offset. Paginated via top/skip on the 1С server: each call reads one page and, in a parallel request, the exact total (1С computes the whole virtual table for each, so a big table costs seconds per page — and a deep skip more than the first; narrow with condition/period/select rather than paging through it; on data changing meanwhile the total and the page can briefly disagree). orderBy sorts on the server (costs time on a big table) — with top it gives a server-side top-N, e.g. orderBy [{"field":"СуммаTurnoverDr","dir":"desc"}], top 10. Without orderBy rows come in 1С\'s own order: in tests it stayed the same from page to page, but 1С does not promise that — when pages must not overlap or skip rows, pass orderBy over fields that identify a row (e.g. the selected dimensions).',
+        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. On balance/turnovers/balanceAndTurnovers/drCrTurnovers select may also roll the rows up over the selected dimensions — but whether 1С does depends on the 1С configuration: on some bases the rows come rolled up (e.g. on a БП AccountingRegister turnovers, select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account), on others they come back un-rolled, one per full set of dimensions (e.g. УТ AccumulationRegister_ТоварыНаСкладах balance) — then sum them yourself, and total (1С\'s count, rolled up) is below the number of rows: page on while hasMore holds, until a page comes back short or empty, rather than by total. On slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from (extDimensions takes neither); filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601 in the 1С server time unless they carry Z or an offset. Paginated via top/skip on the 1С server: each call reads one page and, in a parallel request, 1С\'s total (1С computes the whole virtual table for each, so a big table costs seconds per page — and a deep skip more than the first; narrow with condition/period/select rather than paging through it; on data changing meanwhile the total and the page can briefly disagree). orderBy sorts on the server (costs time on a big table) — with top it gives a server-side top-N, e.g. orderBy [{"field":"СуммаTurnoverDr","dir":"desc"}], top 10. Without orderBy rows come in 1С\'s own order: in tests it stayed the same from page to page, but 1С does not promise that — when pages must not overlap or skip rows, pass orderBy over fields that identify a row (e.g. the selected dimensions).',
       inputSchema: {
         connection: z.string().describe('Connection name'),
         register: z.string().describe('Register entity set, e.g. AccumulationRegister_ТоварыНаСкладах'),

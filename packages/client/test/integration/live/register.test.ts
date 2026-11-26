@@ -74,6 +74,16 @@ for (const { fixture, profile } of activeFixtures()) {
         expect(Array.isArray(rows)).toBe(true)
       }, 30_000)
 
+      it(`count() of ${acc}/Turnovers with a select counts the rows get() returns (#215)`, async () => {
+        // On БП 3.0 a $select rolls the virtual table up by account, and /$count with it counts
+        // those rows; without it, every account × ext-dimension × balanced-account row instead.
+        // A closed past year, so a posting between the two reads cannot change the rows.
+        const set = `${acc}/Turnovers(StartPeriod=datetime'2025-01-01T00:00:00',EndPeriod=datetime'2025-12-31T23:59:59')`
+        const q = () => client.query(set).select('Account_Key', 'СуммаTurnoverDr')
+        const [page, total] = await Promise.all([q().get(), q().count()])
+        expect(total).toBe(page.value.length)
+      }, 60_000)
+
       it(`recordsWithExtDimensions({ Period: { from, to }, Top }) on ${acc} resolves`, async () => {
         const rows = await client.register(acc).recordsWithExtDimensions({ Period: { from, to }, Top: 1 }, TOP)
         expect(Array.isArray(rows)).toBe(true)

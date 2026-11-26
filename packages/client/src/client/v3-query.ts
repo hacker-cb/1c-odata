@@ -28,7 +28,17 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
     return this.client.transportFetch(url, opts)
   }
 
-  /** Standalone count via `/$count` endpoint. Preserves filter, ignores top/skip. */
+  /**
+   * Standalone count via the `/$count` endpoint, with the query's `$filter`,
+   * `$select` and `$expand` (#215); `top` / `skip` / `orderBy` / `withCount()`
+   * are ignored. 1С counts the rows as it would roll them up by that
+   * `$select` — on a register virtual table in the path
+   * (`AccumulationRegister_X/Balance`) that is one row per selected set of
+   * dimensions. Where 1С returns those rows un-rolled (seen on production УТ
+   * 11.x bases), the count is below the number of rows `get()` returns. A
+   * `$select` 1С rejects fails the count as it fails `get()` — a navigation
+   * path in it needs its `expand()`.
+   */
   async count(opts: RequestOptions = {}): Promise<number> {
     const url = buildV3CountUrl(this.client.baseUrl, this)
     const raw = await this.client.transportGet(url, opts)

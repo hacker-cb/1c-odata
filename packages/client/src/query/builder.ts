@@ -147,7 +147,7 @@ export class QueryBuilder<T = Record<string, unknown>> {
    * `$skip` / `$top`, returning the collection from its start. On the bases
    * checked so far 1С honours the paging; where it must not depend on the
    * platform, page without `withCount()` and take the total from `.count()`
-   * (`/$count` with the same `$filter`) instead.
+   * (`/$count` with the same `$filter`, `$select` and `$expand`) instead.
    */
   withCount(): this {
     this.state.inlineCount = true

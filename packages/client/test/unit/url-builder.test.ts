@@ -98,6 +98,31 @@ describe('V3 URL builder', () => {
     expect(url).toContain('%24filter')
     expect(url).not.toContain('%24format') // /$count returns plain integer, no format needed
   })
+
+  it('buildV3CountUrl carries $select and $expand — the rows 1С counts — and no paging (#215)', () => {
+    const q = new QueryBuilder<{ DeletionMark: boolean } & Record<string, unknown>>('Catalog_X', 'Europe/Moscow')
+      .filter((f) => f.DeletionMark.eq(false))
+      .select('Description', 'Owner/Description')
+      .expand('Owner')
+      .orderBy('Description')
+      .top(5)
+      .skip(10)
+      .withCount()
+    const url = buildV3CountUrl(base, q)
+    expect(url).toBe(
+      `${base}/Catalog_X/$count?%24filter=DeletionMark%20eq%20false&%24select=Description%2COwner%2FDescription&%24expand=Owner`,
+    )
+  })
+
+  it('buildV3CountUrl keeps $select on a register virtual table in the path (#215)', () => {
+    const q = new QueryBuilder('AccumulationRegister_Товары/Balance', 'Europe/Moscow').select('Номенклатура_Key')
+    const url = buildV3CountUrl(base, q)
+    // The set path is one segment (encodeSegment); 1С counts it with the $select: 1416 rows, as the page holds,
+    // against 1574 without it on УТ 11.5 AccumulationRegister_ТоварыНаСкладах/Balance, $select=Номенклатура_Key.
+    expect(url).toBe(
+      `${base}/${encodeURIComponent('AccumulationRegister_Товары/Balance')}/$count?%24select=${encodeURIComponent('Номенклатура_Key')}`,
+    )
+  })
 })
 
 describe('V3 URL builder — entity set as one segment', () => {
