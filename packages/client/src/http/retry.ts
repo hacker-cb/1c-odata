@@ -26,7 +26,8 @@ export async function requestWithRetry(config: RequestConfig, callOpts: RetryWra
   const policy = resolvePolicy(callOpts.retry)
   if (!policy) return request(config, callOpts)
 
-  let delayMs = policy.initialDelayMs
+  // `maxDelayMs` caps every pause, the first one included.
+  let delayMs = Math.min(policy.initialDelayMs, policy.maxDelayMs)
   for (let attempt = 0; ; attempt++) {
     const trace: AttemptTrace = { threw: false }
     try {

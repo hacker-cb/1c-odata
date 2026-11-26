@@ -503,3 +503,28 @@ describe('requestWithRetry — a pause past what a timer keeps (#232)', () => {
     expect(await pending).toMatchObject({ name: 'AbortError' })
   })
 })
+
+describe('requestWithRetry — maxDelayMs caps the first pause too', () => {
+  it('an initialDelayMs above maxDelayMs waits maxDelayMs', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        if (n < 2) return new HttpResponse(null, { status: 503 })
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const spy = vi.spyOn(globalThis, 'setTimeout')
+    try {
+      await requestWithRetry(
+        { method: 'GET', url: `${base}/Catalog_X`, headers: { Authorization: auth.header } },
+        { retry: { ...retryPolicy, initialDelayMs: 30_000, maxDelayMs: 5 } },
+      )
+      expect(n).toBe(2)
+      expect(spy).toHaveBeenCalledWith(expect.any(Function), 5)
+      expect(spy).not.toHaveBeenCalledWith(expect.any(Function), 30_000)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
