@@ -318,11 +318,14 @@ export async function verifyConnectivity(input: {
   login: string
   password: string
   timeout?: number
+  /** Aborts the `$metadata` download — an MCP call's own signal, so a cancel stops it (#236). */
+  signal?: AbortSignal
 }): Promise<void> {
   await fetchMetadataXml({
     baseUrl: stripUrlUserinfo(input.baseUrl.trim()),
     auth: connectionAuth({ auth: { username: input.login.trim(), password: input.password } }),
     timeout: input.timeout ?? DEFAULT_METADATA_TIMEOUT_MS,
+    ...(input.signal !== undefined ? { signal: input.signal } : {}),
   })
 }
 
