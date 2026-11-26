@@ -60,10 +60,13 @@ let dir: string
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'mcp-mgmt-cancel-'))
+  // The stored password is what these tests read back: no env var may stand in for it.
+  vi.stubEnv('ONEC_C_PASSWORD', '')
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -84,15 +87,21 @@ async function cancelDuringVerify(name: string, args: Record<string, unknown>): 
   const { mcp, close } = await connect()
   const controller = new AbortController()
   const call = mcp.callTool({ name, arguments: args }, undefined, { signal: controller.signal })
-  const hit = await arrived
-  expect(hit.url).toMatch(/\/\$metadata$/)
-  controller.abort()
-  await expect(call).rejects.toThrow()
-  await vi.waitFor(() => expect(hit.aborted).toBe(true))
-  // Let the tool's handler settle before the assertions on what it wrote.
-  await new Promise((r) => setTimeout(r, 50))
-  await close()
-  return hit
+  try {
+    // A call settling before it reaches 1С is a failure of its own, not a timeout.
+    const first = await Promise.race([arrived, call.then((r) => ({ settled: r }))])
+    expect(first).not.toHaveProperty('settled')
+    const hit = first as Hit
+    expect(hit.url).toMatch(/\/\$metadata$/)
+    controller.abort()
+    await expect(call).rejects.toThrow()
+    await vi.waitFor(() => expect(hit.aborted).toBe(true))
+    // Let the tool's handler settle before the assertions on what it wrote.
+    await new Promise((r) => setTimeout(r, 50))
+    return hit
+  } finally {
+    await close()
+  }
 }
 
 describe('a cancelled connection check aborts its $metadata download and writes nothing (#236)', () => {

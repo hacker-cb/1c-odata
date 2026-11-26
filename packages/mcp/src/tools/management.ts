@@ -71,8 +71,6 @@ async function addConnection(
   if (hasPassword) {
     await verifyConnectivity({ baseUrl, login, password: password as string, signal })
   }
-  // A call cancelled meanwhile writes nothing.
-  signal.throwIfAborted()
   const result = await upsertConnection({
     dataDir: opts.dataDir,
     name: connection,
@@ -84,6 +82,7 @@ async function addConnection(
     insecure: opts.insecure ?? false,
     overwrite: overwrite === true,
     createUnderEnvPassword: false,
+    signal,
   })
   pool.refresh(connection)
   return {
@@ -180,14 +179,13 @@ async function applyCredentialChange(
   // Before verifying: the new pair must not be checked, and reported verified, when reads would not use it.
   assertNoEnvPassword(connection)
   const verified = await verifyCredentialChange(opts, existing, connection, change, signal)
-  // A call cancelled meanwhile writes nothing.
-  signal.throwIfAborted()
   const result = await updateConnectionCredentials({
     dataDir: opts.dataDir,
     name: connection,
     ...(change.login !== undefined ? { login: change.login } : {}),
     ...(change.password !== undefined ? { password: change.password } : {}),
     insecure: opts.insecure ?? false,
+    signal,
   })
   // Rebuild the cached client (it was wired with the old credentials).
   pool.refresh(connection)

@@ -182,6 +182,8 @@ export interface UpsertConnectionInput {
    * `add_connection` — so the env password never goes where it did (#233 batch).
    */
   createUnderEnvPassword?: boolean
+  /** Once aborted — checked when the write's turn comes — nothing is written (#236). */
+  signal?: AbortSignal
 }
 
 export interface UpsertConnectionResult {
@@ -261,6 +263,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
   })
 
   return withConfigLock(async () => {
+    input.signal?.throwIfAborted()
     const config = loadConfig(input.dataDir)
     const existing = storedConnection(config.connections, input.name)
     const existed = existing !== undefined
@@ -431,6 +434,8 @@ export interface UpdateCredentialsInput {
   /** New password; omit to keep the current one. Stored via {@link SecretStore}; never trimmed. */
   password?: string
   insecure?: boolean
+  /** Once aborted — checked when the write's turn comes — nothing is written (#236). */
+  signal?: AbortSignal
 }
 
 export interface UpdateCredentialsResult {
@@ -461,6 +466,7 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
     throw new InvalidArgumentError('Provide a new login, a new password, or both', { argument: 'login' })
   }
   return withConfigLock(async () => {
+    input.signal?.throwIfAborted()
     const config = loadConfig(input.dataDir)
     const existing = config.connections[input.name]
     if (existing === undefined) {
