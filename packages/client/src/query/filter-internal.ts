@@ -1,4 +1,5 @@
 // packages/client/src/query/filter-internal.ts
+import { InvalidArgumentError, ODataError } from '../errors.js'
 import { formatNumberLiteral } from '../format-number.js'
 import { formatScalarLiteral } from '../url-builder.js'
 
@@ -55,16 +56,61 @@ export interface CompileContext {
   lambdaCounter: { value: number }
 }
 
-function makeFilter(expr: string): FilterExpression {
-  return Object.freeze({ _expr: expr }) as unknown as FilterExpression
+/**
+ * Every expression the DSL itself built — filters and field expressions alike.
+ * What tells an expression from a value: an `_expr` field proves nothing, since
+ * any object parsed from JSON can carry one, but membership here cannot be
+ * forged by data.
+ */
+const dslExpressions = new WeakSet<object>()
+
+/** Register `expr` as built by the DSL and return it. */
+function dslExpression<T extends object>(expr: T): T {
+  dslExpressions.add(expr)
+  return expr
 }
 
+/**
+ * A frozen `FilterExpression` over the OData V3 string `expr`, registered as
+ * built by the DSL.
+ *
+ * @internal
+ */
+export function makeFilter(expr: string): FilterExpression {
+  return dslExpression(Object.freeze({ _expr: expr })) as unknown as FilterExpression
+}
+
+/**
+ * The OData literal of a comparison or operator argument: a scalar by its JS
+ * type, or an expression the DSL built (a field as the value, `f.A.eq(f.B)`)
+ * as its own text. Any other object with an `_expr` field is refused — taken
+ * as an expression, a value from outside would rewrite the filter. Reading a
+ * value that is not the DSL's can fail on its own (no prototype, a `toString`
+ * that is not a function, a revoked `Proxy`): that is an
+ * `InvalidArgumentError` naming the field too, the failure its `cause`.
+ */
 function formatLiteral(v: unknown, ctx: CompileContext, argument: string): string {
   if (v === null) return 'null'
-  const literal = formatScalarLiteral(v, ctx.serverTimezone, argument)
-  if (literal !== undefined) return literal
-  if (typeof v === 'object' && '_expr' in v) return (v as { _expr: string })._expr
-  return `'${String(v).replace(/'/g, "''")}'`
+  if (typeof v === 'object' && dslExpressions.has(v)) return (v as { _expr: string })._expr
+  try {
+    const literal = formatScalarLiteral(v, ctx.serverTimezone, argument)
+    if (literal !== undefined) return literal
+    if (typeof v === 'object' && '_expr' in v) {
+      throw new InvalidArgumentError(
+        `Filter value for "${argument}" is an object with an "_expr" field that the filter DSL did not build — ` +
+          'pass a scalar, or a field expression (f.<Field>) to compare with another field',
+        { argument, received: v },
+      )
+    }
+    return `'${String(v).replace(/'/g, "''")}'`
+  } catch (cause) {
+    if (cause instanceof ODataError) throw cause
+    throw new InvalidArgumentError(`Filter value for "${argument}" cannot be read as a literal`, {
+      argument,
+      received: v,
+      cause,
+    })
+  }
 }
 
 /**
@@ -181,6 +227,37 @@ interface RefOps {
 }
 
 /**
+ * An integer argument of a DSL function — `substring`'s start and length,
+ * `dateadd`'s amount, which 1С takes as integers only: a fraction, a non-finite
+ * or a non-number value is an `InvalidArgumentError` here rather than a 400
+ * from the server.
+ */
+function intLiteral(v: number, argument: string): string {
+  if (!Number.isSafeInteger(v)) {
+    throw new InvalidArgumentError(`"${argument}" must be an integer; received ${String(v)}`, { argument, received: v })
+  }
+  return formatNumberLiteral(v, argument)
+}
+
+/** The units `dateadd` / `datedifference` take — the `DateOps` signature's list. */
+const DATE_UNITS: ReadonlySet<unknown> = new Set(['second', 'minute', 'hour', 'day', 'month', 'quarter', 'year'])
+
+/**
+ * A `dateadd` / `datedifference` unit, written into the filter as is — so one
+ * of `DATE_UNITS` only: the type admits no other, and untyped code passing
+ * anything else gets an `InvalidArgumentError` rather than its text in `$filter`.
+ */
+function dateUnit(unit: unknown, argument: string): string {
+  if (!DATE_UNITS.has(unit)) {
+    throw new InvalidArgumentError(
+      `Date unit for "${argument}" must be one of ${[...DATE_UNITS].join(', ')}; received ${typeof unit === 'string' ? `'${unit}'` : typeof unit}`,
+      { argument, received: unit },
+    )
+  }
+  return unit as string
+}
+
+/**
  * Build a FieldExpr-typed proxy. Every property access returns a wrapped
  * field expression with all method surfaces; TS narrowing via FieldExprFor<V>
  * controls which methods are visible at the type level.
@@ -198,49 +275,58 @@ export function makeFieldProxy<T>(prefix: string, ctx: CompileContext): FieldExp
 }
 
 function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & FieldExpr<V> & { _ctx: CompileContext } {
-  const f = {
-    _expr: expr,
-    _ctx: ctx,
-    eq: (v: unknown) => makeFilter(`${expr} eq ${formatLiteral(v, ctx, expr)}`),
-    ne: (v: unknown) => makeFilter(`${expr} ne ${formatLiteral(v, ctx, expr)}`),
-    gt: (v: unknown) => makeFilter(`${expr} gt ${formatLiteral(v, ctx, expr)}`),
-    ge: (v: unknown) => makeFilter(`${expr} ge ${formatLiteral(v, ctx, expr)}`),
-    lt: (v: unknown) => makeFilter(`${expr} lt ${formatLiteral(v, ctx, expr)}`),
-    le: (v: unknown) => makeFilter(`${expr} le ${formatLiteral(v, ctx, expr)}`),
-    startsWith: (v: string) => makeFilter(`startswith(${expr}, ${formatLiteral(v, ctx, expr)})`),
-    endsWith: (v: string) => makeFilter(`endswith(${expr}, ${formatLiteral(v, ctx, expr)})`),
-    substringof: (v: string) => makeFilter(`substringof(${formatLiteral(v, ctx, expr)}, ${expr})`),
-    like: (pat: string) => makeFilter(`like(${expr}, ${formatLiteral(pat, ctx, expr)})`),
-    concat: (other: unknown) => wrapField<string>(`concat(${expr}, ${formatLiteral(other, ctx, expr)})`, ctx),
-    substring: (start: number, length?: number) => {
-      const s = formatNumberLiteral(start, `${expr}:substring.start`)
-      const inner =
-        length !== undefined
-          ? `substring(${expr}, ${s}, ${formatNumberLiteral(length, `${expr}:substring.length`)})`
-          : `substring(${expr}, ${s})`
-      return wrapField<string>(inner, ctx)
-    },
-    add: (v: unknown) => wrapField<number>(`${expr} add ${formatLiteral(v, ctx, expr)}`, ctx),
-    sub: (v: unknown) => wrapField<number>(`${expr} sub ${formatLiteral(v, ctx, expr)}`, ctx),
-    mul: (v: unknown) => wrapField<number>(`${expr} mul ${formatLiteral(v, ctx, expr)}`, ctx),
-    div: (v: unknown) => wrapField<number>(`${expr} div ${formatLiteral(v, ctx, expr)}`, ctx),
-    round: () => wrapField<number>(`round(${expr})`, ctx),
-    year: () => wrapField<number>(`year(${expr})`, ctx),
-    month: () => wrapField<number>(`month(${expr})`, ctx),
-    day: () => wrapField<number>(`day(${expr})`, ctx),
-    hour: () => wrapField<number>(`hour(${expr})`, ctx),
-    minute: () => wrapField<number>(`minute(${expr})`, ctx),
-    second: () => wrapField<number>(`second(${expr})`, ctx),
-    dayofweek: () => wrapField<number>(`dayofweek(${expr})`, ctx),
-    dayofyear: () => wrapField<number>(`dayofyear(${expr})`, ctx),
-    quarter: () => wrapField<number>(`quarter(${expr})`, ctx),
-    dateadd: (unit: string, amount: number) =>
-      wrapField<Date>(`dateadd(${expr}, '${unit}', ${formatNumberLiteral(amount, `${expr}:dateadd.amount`)})`, ctx),
-    datedifference: (other: unknown, unit: string) =>
-      wrapField<number>(`datedifference(${expr}, ${formatLiteral(other, ctx, expr)}, '${unit}')`, ctx),
-    isof: (typeName: string) => makeFilter(`isof(${expr}, ${formatLiteral(typeName, ctx, expr)})`),
-    cast: (typeName: string) => wrapField<string>(`cast(${expr}, ${formatLiteral(typeName, ctx, expr)})`, ctx),
-  }
+  // Frozen: a registered expression's text cannot be swapped after the fact.
+  const f = dslExpression(
+    Object.freeze({
+      _expr: expr,
+      _ctx: ctx,
+      eq: (v: unknown) => makeFilter(`${expr} eq ${formatLiteral(v, ctx, expr)}`),
+      ne: (v: unknown) => makeFilter(`${expr} ne ${formatLiteral(v, ctx, expr)}`),
+      gt: (v: unknown) => makeFilter(`${expr} gt ${formatLiteral(v, ctx, expr)}`),
+      ge: (v: unknown) => makeFilter(`${expr} ge ${formatLiteral(v, ctx, expr)}`),
+      lt: (v: unknown) => makeFilter(`${expr} lt ${formatLiteral(v, ctx, expr)}`),
+      le: (v: unknown) => makeFilter(`${expr} le ${formatLiteral(v, ctx, expr)}`),
+      startsWith: (v: string) => makeFilter(`startswith(${expr}, ${formatLiteral(v, ctx, expr)})`),
+      endsWith: (v: string) => makeFilter(`endswith(${expr}, ${formatLiteral(v, ctx, expr)})`),
+      substringof: (v: string) => makeFilter(`substringof(${formatLiteral(v, ctx, expr)}, ${expr})`),
+      like: (pat: string) => makeFilter(`like(${expr}, ${formatLiteral(pat, ctx, expr)})`),
+      concat: (other: unknown) => wrapField<string>(`concat(${expr}, ${formatLiteral(other, ctx, expr)})`, ctx),
+      substring: (start: number, length?: number) => {
+        const s = intLiteral(start, `${expr}:substring.start`)
+        const inner =
+          length !== undefined
+            ? `substring(${expr}, ${s}, ${intLiteral(length, `${expr}:substring.length`)})`
+            : `substring(${expr}, ${s})`
+        return wrapField<string>(inner, ctx)
+      },
+      add: (v: unknown) => wrapField<number>(`${expr} add ${formatLiteral(v, ctx, expr)}`, ctx),
+      sub: (v: unknown) => wrapField<number>(`${expr} sub ${formatLiteral(v, ctx, expr)}`, ctx),
+      mul: (v: unknown) => wrapField<number>(`${expr} mul ${formatLiteral(v, ctx, expr)}`, ctx),
+      div: (v: unknown) => wrapField<number>(`${expr} div ${formatLiteral(v, ctx, expr)}`, ctx),
+      round: () => wrapField<number>(`round(${expr})`, ctx),
+      year: () => wrapField<number>(`year(${expr})`, ctx),
+      month: () => wrapField<number>(`month(${expr})`, ctx),
+      day: () => wrapField<number>(`day(${expr})`, ctx),
+      hour: () => wrapField<number>(`hour(${expr})`, ctx),
+      minute: () => wrapField<number>(`minute(${expr})`, ctx),
+      second: () => wrapField<number>(`second(${expr})`, ctx),
+      dayofweek: () => wrapField<number>(`dayofweek(${expr})`, ctx),
+      dayofyear: () => wrapField<number>(`dayofyear(${expr})`, ctx),
+      quarter: () => wrapField<number>(`quarter(${expr})`, ctx),
+      dateadd: (unit: string, amount: number) =>
+        wrapField<Date>(
+          `dateadd(${expr}, '${dateUnit(unit, `${expr}:dateadd.unit`)}', ${intLiteral(amount, `${expr}:dateadd.amount`)})`,
+          ctx,
+        ),
+      datedifference: (other: unknown, unit: string) =>
+        wrapField<number>(
+          `datedifference(${expr}, ${formatLiteral(other, ctx, expr)}, '${dateUnit(unit, `${expr}:datedifference.unit`)}')`,
+          ctx,
+        ),
+      isof: (typeName: string) => makeFilter(`isof(${expr}, ${formatLiteral(typeName, ctx, expr)})`),
+      cast: (typeName: string) => wrapField<string>(`cast(${expr}, ${formatLiteral(typeName, ctx, expr)})`, ctx),
+    }),
+  )
   return f as unknown as FieldExprFor<V> & FieldExpr<V> & { _ctx: CompileContext }
 }
 

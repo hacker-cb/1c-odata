@@ -1,6 +1,6 @@
 import { InvalidArgumentError } from './errors.js'
 import type { ChainedFieldExpr, FieldExpr, FieldExprMap, FilterExpression } from './query/filter-internal.js'
-import { type CompileContext, makeFieldProxy } from './query/filter-internal.js'
+import { type CompileContext, makeFieldProxy, makeFilter } from './query/filter-internal.js'
 
 // OData V3 precedence: `not > and > or`. `or` is loosest, so an `or`-joined
 // sub-expression must be parenthesized when it's an `and` operand — otherwise
@@ -33,21 +33,19 @@ function needsAndWrap(expr: string): boolean {
 export function and(...exprs: FilterExpression[]): FilterExpression {
   if (exprs.length === 0) throw new InvalidArgumentError('and() requires at least one expression')
   if (exprs.length === 1) return exprs[0] as FilterExpression
-  return Object.freeze({
-    _expr: exprs.map((e) => (needsAndWrap(e._expr) ? `(${e._expr})` : e._expr)).join(' and '),
-  }) as unknown as FilterExpression
+  return makeFilter(exprs.map((e) => (needsAndWrap(e._expr) ? `(${e._expr})` : e._expr)).join(' and '))
 }
 
 /** Variadic OR. @public */
 export function or(...exprs: FilterExpression[]): FilterExpression {
   if (exprs.length === 0) throw new InvalidArgumentError('or() requires at least one expression')
   if (exprs.length === 1) return exprs[0] as FilterExpression
-  return Object.freeze({ _expr: exprs.map((e) => `(${e._expr})`).join(' or ') }) as unknown as FilterExpression
+  return makeFilter(exprs.map((e) => `(${e._expr})`).join(' or '))
 }
 
 /** Negation. @public */
 export function not(e: FilterExpression): FilterExpression {
-  return Object.freeze({ _expr: `not (${e._expr})` }) as unknown as FilterExpression
+  return makeFilter(`not (${e._expr})`)
 }
 
 /** Lambda — at least one row matches. @public */
@@ -56,7 +54,7 @@ export function any<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => Filter
   const id = `t${ctx.lambdaCounter.value++}`
   const inner = makeFieldProxy<V>(`${id}/`, ctx)
   const body = fn(inner)
-  return Object.freeze({ _expr: `${field._expr}/any(${id}: ${body._expr})` }) as unknown as FilterExpression
+  return makeFilter(`${field._expr}/any(${id}: ${body._expr})`)
 }
 
 /** Lambda — all rows match. @public */
@@ -65,12 +63,12 @@ export function all<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => Filter
   const id = `t${ctx.lambdaCounter.value++}`
   const inner = makeFieldProxy<V>(`${id}/`, ctx)
   const body = fn(inner)
-  return Object.freeze({ _expr: `${field._expr}/all(${id}: ${body._expr})` }) as unknown as FilterExpression
+  return makeFilter(`${field._expr}/all(${id}: ${body._expr})`)
 }
 
 /** Escape hatch — caller assembles the expression string. @public */
 export function raw(s: string): FilterExpression {
-  return Object.freeze({ _expr: s }) as unknown as FilterExpression
+  return makeFilter(s)
 }
 
 /**
