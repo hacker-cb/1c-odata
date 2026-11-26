@@ -52,6 +52,8 @@ interface PreparedRequest {
   timeoutId: ReturnType<typeof setTimeout> | undefined
   timeoutSignal: AbortController | undefined
   timeoutMs: number | undefined
+  /** Ends the call early — aborted when a hook's own error ends it, timeout or not. */
+  callController: AbortController
 }
 
 /**
@@ -66,7 +68,9 @@ interface PreparedRequest {
  * abort with the abort's reason, even where the hook ignores the signal. A
  * hook that throws fails the call with its own error, unchanged; the call ends
  * there, so its timer is cleared and `req.signal` aborted — work the hook left
- * running under it is cancelled rather than left without a deadline.
+ * running under it is cancelled rather than left without a deadline. That holds
+ * with no timeout too: the call's own controller is always part of the signal,
+ * so `req.signal` is always set.
  */
 async function prepareRequest(
   config: RequestConfig,
@@ -75,8 +79,10 @@ async function prepareRequest(
 ): Promise<PreparedRequest> {
   const start = Date.now()
 
-  // Combine signals: client.signal + per-call.signal + timeout signal.
-  const signals: AbortSignal[] = []
+  // Combine signals: client.signal + per-call.signal + timeout signal + the
+  // call's own controller, which a hook's own error aborts.
+  const callController = new AbortController()
+  const signals: AbortSignal[] = [callController.signal]
   if (callOpts.signal) signals.push(callOpts.signal)
   if (config.signal) signals.push(config.signal)
   let timeoutId: ReturnType<typeof setTimeout> | undefined
@@ -87,7 +93,7 @@ async function prepareRequest(
     timeoutId = setTimeout(() => timeoutSignal?.abort(), timeoutMs)
     signals.push(timeoutSignal.signal)
   }
-  const combined = signals.length > 0 ? AbortSignal.any(signals) : undefined
+  const combined = AbortSignal.any(signals)
 
   // Build the RequestEvent for hooks
   let reqEvent: RequestEvent = {
@@ -95,7 +101,7 @@ async function prepareRequest(
     url: config.url,
     headers: { ...config.headers },
     ...(config.body !== undefined ? { body: config.body } : {}),
-    ...(combined !== undefined ? { signal: combined } : {}),
+    signal: combined,
   }
 
   // beforeRequest hook may mutate headers, body, etc.
@@ -104,24 +110,37 @@ async function prepareRequest(
     // Already aborted (a caller's abort before the call, or during a retry's
     // pause): end here, before the hook is called — the same path as an abort
     // while it runs.
-    if (combined?.aborted) throw combined.reason
+    if (combined.aborted) throw combined.reason
     const result = await settleWithin(
       runHook(() => callOpts.hooks?.beforeRequest?.(reqEvent), trace),
       combined,
     )
     if (result) reqEvent = result
+    // The event keeps the call's signal — the fetch runs under it, and later
+    // hooks are promised it — whether the hook returned a replacement without
+    // one or dropped it from the event it was given.
+    reqEvent = withSignal(reqEvent, combined)
   } catch (e) {
     // The callers' `finally` that clears the timer is not reached from here.
     if (timeoutId) clearTimeout(timeoutId)
     // The wait ended with the request signal — the deadline or the caller's
     // abort — rather than with the hook: classified as on the wire (a
     // TimeoutError with onError, or the caller's own reason).
-    if (combined?.aborted && e === combined.reason) {
-      await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, combined, trace)
+    if (combined.aborted && e === combined.reason) {
+      await translateAndFireError(
+        e,
+        reqEvent,
+        () => callOpts.hooks,
+        timeoutSignal,
+        timeoutMs,
+        combined,
+        trace,
+        callController,
+      )
     }
     // The hook's own failure: the call ends here, and so does what the hook
-    // left running under req.signal.
-    timeoutSignal?.abort()
+    // left running under req.signal — the hook's error its reason.
+    callController.abort(e)
     throw e
   }
   // Read once: the method the trace records is the method sent.
@@ -131,11 +150,21 @@ async function prepareRequest(
   const fetchInit: RequestInit = {
     method,
     headers: reqEvent.headers,
-    ...(combined !== undefined ? { signal: combined } : {}),
+    signal: combined,
     ...(reqEvent.body !== undefined ? { body: reqEvent.body } : {}),
   }
 
-  return { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs }
+  return { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs, callController }
+}
+
+/**
+ * `event` carrying `signal`: set in place where it lacks it, so the event a
+ * hook returned stays the one later hooks see (its prototype and identity
+ * intact); a copy only where the object refuses the write (frozen).
+ */
+function withSignal(event: RequestEvent, signal: AbortSignal): RequestEvent {
+  if (event.signal === signal || Reflect.set(event, 'signal', signal)) return event
+  return { ...event, signal }
 }
 
 /**
@@ -316,6 +345,22 @@ async function runStreamAfterResponse(
   if (signal?.aborted) throw signal.reason
 }
 
+/**
+ * Await a hook already started, and where it fails with an error of its own —
+ * anything but `handed`, the error `onError` was given — abort the call's
+ * controller: the call ends with that error, and so does what the hook left
+ * running under `req.signal`. Aborted only once the hook has settled, so the
+ * abort never races the hook's error to the caller.
+ */
+async function endOnHookError<T>(hook: Promise<T>, call: AbortController, handed?: unknown): Promise<T> {
+  try {
+    return await hook
+  } catch (e) {
+    if (handed === undefined || e !== handed) call.abort(e)
+    throw e
+  }
+}
+
 /** Whether `e` is the request signal's own abort — not a hook's error. */
 function isAbort(e: unknown, signal: AbortSignal | null | undefined): boolean {
   return signal?.aborted === true && e === signal.reason
@@ -330,11 +375,12 @@ function isAbort(e: unknown, signal: AbortSignal | null | undefined): boolean {
 async function translateAndFireError(
   e: unknown,
   reqEvent: RequestEvent,
-  hooks: RequestHooks | undefined,
+  readHooks: () => RequestHooks | undefined,
   timeoutSignal: AbortController | undefined,
   timeoutMs: number | undefined,
   requestSignal: AbortSignal | null | undefined,
   trace: AttemptTrace | undefined,
+  callController: AbortController,
 ): Promise<never> {
   const request: RequestContext = { method: reqEvent.method, url: reqEvent.url }
   // The request signal carries the reason of whichever source aborted it
@@ -347,7 +393,11 @@ async function translateAndFireError(
       cause: e,
       request,
     })
-    await runHook(() => hooks?.onError?.(reqEvent, err), trace, err)
+    await endOnHookError(
+      runHook(() => readHooks()?.onError?.(reqEvent, err), trace, err),
+      callController,
+      err,
+    )
     throw err
   }
   // A caller's abort is no network failure and nothing to retry: the caller
@@ -356,7 +406,11 @@ async function translateAndFireError(
   if (e instanceof Error && e.name === 'AbortError') throw e
   // Anything else failed on the wire: a network-level error
   const err = new NetworkError(networkErrorMessage(e), { cause: e, request })
-  await runHook(() => hooks?.onError?.(reqEvent, err), trace, err)
+  await endOnHookError(
+    runHook(() => readHooks()?.onError?.(reqEvent, err), trace, err),
+    callController,
+    err,
+  )
   throw err
 }
 
@@ -388,7 +442,7 @@ export async function request(
   trace?: AttemptTrace,
 ): Promise<RawResponse> {
   const prepared = await prepareRequest(config, callOpts, trace)
-  const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs } = prepared
+  const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs, callController } = prepared
 
   try {
     // Only the wire — the fetch and reading the body — can fail as a network
@@ -403,9 +457,21 @@ export async function request(
       // not per-request.
       response = await globalThis.fetch(reqEvent.url, fetchInit)
       body = await response.text()
+      // The exchange with 1С is over: the timeout bounded it and stops here, so
+      // it never aborts req.signal under afterResponse / onError below.
+      if (timeoutId) clearTimeout(timeoutId)
     } catch (e) {
       if (timeoutId) clearTimeout(timeoutId)
-      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, fetchInit.signal, trace)
+      return await translateAndFireError(
+        e,
+        reqEvent,
+        () => callOpts.hooks,
+        timeoutSignal,
+        timeoutMs,
+        fetchInit.signal,
+        trace,
+        callController,
+      )
     }
     const headers: Record<string, string> = {}
     response.headers.forEach((v, k) => {
@@ -423,15 +489,22 @@ export async function request(
 
     // Not bounded by the timeout: the exchange with 1С is over and the body in
     // hand, so a slow hook must not turn a write 1С has made into a TimeoutError.
-    const { hooks } = callOpts
-    await runHook(() => hooks?.afterResponse?.(reqEvent, resEvent), trace)
+    // `hooks` read inside each hook's run: a throwing getter is the hook's own error.
+    await endOnHookError(
+      runHook(() => callOpts.hooks?.afterResponse?.(reqEvent, resEvent), trace),
+      callController,
+    )
 
     if (response.status >= 400) {
       const err = await mapResponseToError(response.status, response.statusText, headers, body, {
         method: reqEvent.method,
         url: reqEvent.url,
       })
-      await runHook(() => hooks?.onError?.(reqEvent, err), trace, err)
+      await endOnHookError(
+        runHook(() => callOpts.hooks?.onError?.(reqEvent, err), trace, err),
+        callController,
+        err,
+      )
       throw err
     }
 
@@ -483,7 +556,7 @@ export async function requestStream(
   trace?: AttemptTrace,
 ): Promise<StreamResponse> {
   const prepared = await prepareRequest(config, callOpts, trace)
-  const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs } = prepared
+  const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs, callController } = prepared
 
   try {
     // As in `request()`: only the fetch and reading an error body are the wire.
@@ -492,7 +565,16 @@ export async function requestStream(
       response = await globalThis.fetch(reqEvent.url, fetchInit)
     } catch (e) {
       if (timeoutId) clearTimeout(timeoutId)
-      return await translateAndFireError(e, reqEvent, callOpts.hooks, timeoutSignal, timeoutMs, fetchInit.signal, trace)
+      return await translateAndFireError(
+        e,
+        reqEvent,
+        () => callOpts.hooks,
+        timeoutSignal,
+        timeoutMs,
+        fetchInit.signal,
+        trace,
+        callController,
+      )
     }
 
     const headers: Record<string, string> = {}
@@ -519,14 +601,23 @@ export async function requestStream(
       if (!isAbort(e, fetchInit.signal)) {
         // The hook's own error reaches the caller unchanged; the call ends
         // here, and so does what the hook left running under req.signal.
-        timeoutSignal?.abort()
+        callController.abort(e)
         throw e
       }
       // The deadline or the caller's abort ended the wait — a TimeoutError
       // (onError fired) or the abort's reason, never a bare AbortError from a
       // body the timer already cut.
       if (timeoutId) clearTimeout(timeoutId)
-      return await translateAndFireError(e, reqEvent, hooks, timeoutSignal, timeoutMs, fetchInit.signal, trace)
+      return await translateAndFireError(
+        e,
+        reqEvent,
+        () => hooks,
+        timeoutSignal,
+        timeoutMs,
+        fetchInit.signal,
+        trace,
+        callController,
+      )
     }
 
     // For error responses we DO consume the body to map to a typed error —
@@ -536,23 +627,30 @@ export async function requestStream(
       let body: string
       try {
         body = await response.text()
+        // The exchange with 1С is over: the timer stops here, as on a buffered call.
+        if (timeoutId) clearTimeout(timeoutId)
       } catch (e) {
         if (timeoutId) clearTimeout(timeoutId)
         return await translateAndFireError(
           e,
           reqEvent,
-          callOpts.hooks,
+          () => callOpts.hooks,
           timeoutSignal,
           timeoutMs,
           fetchInit.signal,
           trace,
+          callController,
         )
       }
       const err = await mapResponseToError(response.status, response.statusText, headers, body, {
         method: reqEvent.method,
         url: reqEvent.url,
       })
-      await runHook(() => hooks?.onError?.(reqEvent, err), trace, err)
+      await endOnHookError(
+        runHook(() => hooks?.onError?.(reqEvent, err), trace, err),
+        callController,
+        err,
+      )
       throw err
     }
 
