@@ -116,6 +116,13 @@ const dslFilters = new WeakSet<object>()
  */
 function formatLiteral(v: unknown, ctx: CompileContext, argument: string): string {
   if (v === null) return 'null'
+  if (typeof v === 'object' && guidLiterals.has(v)) {
+    throw new InvalidArgumentError(
+      `guid() for "${argument}" is a value to compare a GUID field with (eq/ne/gt/ge/lt/le) — ` +
+        'not an operand of a string, date or arithmetic function',
+      { argument, received: (v as { _expr: string })._expr },
+    )
+  }
   if (typeof v === 'object' && dslExpressions.has(v)) {
     const text = (v as { _expr: string })._expr
     return dslFilters.has(v) ? `(${text})` : text
@@ -142,7 +149,7 @@ function formatLiteral(v: unknown, ctx: CompileContext, argument: string): strin
 }
 
 /**
- * Whether the field at `path` holds a GUID — its comparisons then write a
+ * What the field at `path` holds — on a GUID field comparisons write a
  * GUID string as `guid'…'`, which 1С needs: a quoted `'…'` against a reference
  * matches nothing, silently, and against another `Edm.Guid` field fails. The
  * schema decides where it has the field (`propType`); otherwise the 1С naming
@@ -151,9 +158,54 @@ function formatLiteral(v: unknown, ctx: CompileContext, argument: string): strin
  * a navigation property (`'Ответственный/Идентификатор'`) is not in the
  * entity's schema, so it too goes by the name.
  */
-function isGuidField(path: string, propType: string | undefined): boolean {
-  if (propType !== undefined) return propType === 'Edm.Guid'
-  return path.endsWith('_Key') // the suffix holds no '/': the last segment's is the path's
+function guidKind(path: string, propType: string | undefined): GuidKind {
+  if (propType !== undefined) return propType === 'Edm.Guid' ? 'guid' : 'other'
+  // The suffix holds no '/': the last segment's is the path's.
+  return path.endsWith('_Key') ? 'guid' : 'unknown'
+}
+
+/**
+ * What a field is known to hold: a GUID (`Edm.Guid` by the schema, or a `*_Key`
+ * name), something else by the schema, or — no schema for it, or a computed
+ * expression — unknown.
+ */
+type GuidKind = 'guid' | 'other' | 'unknown'
+
+/** The literals `guid()` built — values for a comparison only. */
+const guidLiterals = new WeakSet<object>()
+
+/**
+ * The string inside `v`: a primitive string, or a `String` object of any realm
+ * (read by `String.prototype.valueOf` itself, as `dateTime` reads a `Date`);
+ * `undefined` for anything else.
+ */
+function stringValue(v: unknown): string | undefined {
+  if (typeof v === 'string') return v
+  if (typeof v !== 'object' || v === null) return undefined
+  try {
+    return String.prototype.valueOf.call(v)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The operand of a comparison on a field: `guid()` is taken as is — unless the
+ * schema says the field holds no GUID (an `Edm.String` such as `Recorder`,
+ * which 1С fails to compare with one) — and on a GUID field a string, primitive
+ * or boxed, goes through `formatGuidComparand`.
+ */
+function formatComparand(v: unknown, ctx: CompileContext, argument: string, kind: GuidKind): string {
+  if (typeof v === 'object' && v !== null && guidLiterals.has(v)) {
+    if (kind === 'other') {
+      throw new InvalidArgumentError(
+        `guid() for "${argument}": the schema types this field other than Edm.Guid — compare it with a string`,
+        { argument, received: (v as { _expr: string })._expr },
+      )
+    }
+    return (v as { _expr: string })._expr
+  }
+  return kind === 'guid' ? formatGuidComparand(v, ctx, argument) : formatLiteral(v, ctx, argument)
 }
 
 /**
@@ -164,15 +216,16 @@ function isGuidField(path: string, propType: string | undefined): boolean {
  * writes it.
  */
 function formatGuidComparand(v: unknown, ctx: CompileContext, argument: string): string {
-  if (typeof v !== 'string') return formatLiteral(v, ctx, argument)
-  if (!GUID_RE.test(v)) {
+  const s = stringValue(v)
+  if (s === undefined) return formatLiteral(v, ctx, argument)
+  if (!GUID_RE.test(s)) {
     throw new InvalidArgumentError(
       `Filter value for "${argument}" must be a GUID (8-4-4-4-12 hex form): the field is an Edm.Guid ` +
         '(by the schema, or a 1С reference named *_Key)',
       { argument, received: v },
     )
   }
-  return `guid'${v}'`
+  return `guid'${s}'`
 }
 
 /**
@@ -191,7 +244,9 @@ export function makeGuidLiteral(value: string): FieldExpr<Guid> {
       received: value,
     })
   }
-  return dslExpression(Object.freeze({ _expr: `guid'${value}'` })) as unknown as FieldExpr<Guid>
+  const literal = dslExpression(Object.freeze({ _expr: `guid'${value}'` }))
+  guidLiterals.add(literal)
+  return literal as unknown as FieldExpr<Guid>
 }
 
 /**
@@ -373,7 +428,7 @@ export function makeFieldProxy<T>(prefix: string, ctx: CompileContext, schema?: 
       if (key === '_expr' || key === '_phantom' || key === '_ctx') return undefined
       const propType =
         schema !== undefined && Object.hasOwn(schema.properties, key) ? schema.properties[key]?.type : undefined
-      const field = wrapField<unknown>(prefix + key, ctx, isGuidField(prefix + key, propType))
+      const field = wrapField<unknown>(prefix + key, ctx, guidKind(prefix + key, propType))
       if (propType !== undefined) fieldTypes.set(field, propType)
       return field
     },
@@ -383,11 +438,11 @@ export function makeFieldProxy<T>(prefix: string, ctx: CompileContext, schema?: 
 function wrapField<V>(
   expr: string,
   ctx: CompileContext,
-  guid = false,
+  kind: GuidKind = 'unknown',
 ): FieldExprFor<V> & FieldExpr<V> & { _ctx: CompileContext } {
   // A field holding a GUID writes a string operand as `guid'…'`; a computed
-  // expression (`cast()`, arithmetic, functions) never does.
-  const comparand = (v: unknown) => (guid ? formatGuidComparand(v, ctx, expr) : formatLiteral(v, ctx, expr))
+  // expression (`cast()`, arithmetic, functions) is of unknown kind and never does.
+  const comparand = (v: unknown) => formatComparand(v, ctx, expr, kind)
   // Each arithmetic operation in its own parentheses: OData binds mul/div
   // tighter than add/sub, so a chain written bare — `A add 1 mul 2` — would not
   // compute what the calls say, `(A add 1) mul 2`.

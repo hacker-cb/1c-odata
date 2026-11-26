@@ -3,6 +3,7 @@
 // Edm.Guid attribute (live GET, trade 11.5), while `Recorder` — an Edm.String —
 // fails the other way, on `guid'…'`. The schema decides where the query has one;
 // otherwise the 1С naming rule `*_Key` does; `guid()` covers the rest.
+import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { InvalidArgumentError } from '../../../src/errors.js'
 import { any, guid, toFilterString } from '../../../src/filter.js'
@@ -192,12 +193,43 @@ describe('filter DSL — a GUID string for a GUID field (#228)', () => {
       expect(withIndex('InformationRegister_X', (f) => f.Ref_Key.ne(guid(G)))).toBe(`Ref_Key ne guid'${G}'`)
     })
 
+    it('is a comparison value only — not an operand of a string, date or arithmetic function', () => {
+      type Untyped = Record<string, (...v: unknown[]) => { eq(v: unknown): FilterExpression } & FilterExpression>
+      const u = (e: unknown) => e as Untyped
+      for (const build of [
+        (f: FieldExprMap<Row>) => f.Code.concat(guid(G)).eq('x'),
+        (f: FieldExprMap<Row>) => u(f.Code).startsWith?.(guid(G)) as FilterExpression,
+        (f: FieldExprMap<Row>) => u(f.Code).like?.(guid(G)) as FilterExpression,
+        (f: FieldExprMap<Row>) => u(f.Code).add?.(guid(G)).eq(1) as FilterExpression,
+      ]) {
+        expect(() => noIndex(build)).toThrow(InvalidArgumentError)
+      }
+    })
+
+    it('refuses a field the schema types other than Edm.Guid — Recorder, Code', () => {
+      expect(() => withIndex('InformationRegister_X', (f) => f.Recorder.eq(guid(G)))).toThrow(InvalidArgumentError)
+      expect(() => withIndex('InformationRegister_X', (f) => f.Code.gt(guid(G)))).toThrow(InvalidArgumentError)
+      // Without a schema the field's type is unknown: the caller says it holds a GUID.
+      expect(noIndex((f) => f.Code.gt(guid(G)))).toBe(`Code gt guid'${G}'`)
+    })
+
     it.each(['', 'not-a-guid', `${G} `, `{${G}}`, `${G}' or 'a`, 42 as unknown as string])(
       'refuses %j with an InvalidArgumentError',
       (v) => {
         expect(() => guid(v)).toThrow(InvalidArgumentError)
       },
     )
+  })
+
+  describe('a boxed string is read as the string it holds', () => {
+    it('a String object on a GUID field is checked and written as guid', () => {
+      const boxed = (s: string) => new String(s) as unknown as string
+      expect(noIndex((f) => f.Ref_Key.eq(boxed(G)))).toBe(`Ref_Key eq guid'${G}'`)
+      expect(() => noIndex((f) => f.Ref_Key.eq(boxed('not-a-guid')))).toThrow(InvalidArgumentError)
+      // Another realm's String object too.
+      const foreign = runInNewContext(`new String('${G}')`) as string
+      expect(withIndex('InformationRegister_X', (f) => f.Идентификатор.eq(foreign))).toBe(`Идентификатор eq guid'${G}'`)
+    })
   })
 
   describe('a plain QueryBuilder has no schema — the *_Key rule alone', () => {

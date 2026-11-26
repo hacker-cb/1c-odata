@@ -82,7 +82,10 @@ export function all<V>(field: FieldExpr<V[]>, fn: (t: FieldExprMap<V>) => Filter
  * `Edm.Guid` attribute queried without a schema, through a navigation path,
  * or on a virtual table (`Register_X/SliceLast()`). 1С matches no rows for a
  * GUID written as a plain string `'…'` against a reference, and fails the
- * request against another `Edm.Guid` field.
+ * request against another `Edm.Guid` field. It is a value for a comparison
+ * (`eq` / `ne` / `gt` / `ge` / `lt` / `le`) only: as the operand of a string,
+ * date or arithmetic function, or against a field the schema types other than
+ * `Edm.Guid`, it is an `InvalidArgumentError`.
  *
  * @example
  *   client
