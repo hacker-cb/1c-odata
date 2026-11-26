@@ -1,5 +1,50 @@
 # @1c-odata/client
 
+## 0.11.0
+
+### Minor Changes
+
+- [#249](https://github.com/hacker-cb/1c-odata/pull/249) [`aa0b7c9`](https://github.com/hacker-cb/1c-odata/commit/aa0b7c94ec502e24dd20c2d513385cd953c2fdae) Thanks [@hacker-cb](https://github.com/hacker-cb)! - `filter()` refuses a callback result that is not a filter expression with an `InvalidArgumentError`, and leaves a filter set before as it was. Untyped code returning `undefined` (`.filter((f) => build?.(f))` with `build` missing) used to clear the query's filter — the request then went out over the whole entity set, silently; `null`, a string or an object without `_expr` text are refused too, and so is a `guid()` literal (a value, not a condition). The combinators `and` / `or` / `not` / `any` / `all` refuse such an operand with the same error instead of a `TypeError`, and read an operand's text once. Typed code is unaffected: the callback is typed `(f) => FilterExpression`, and any filter expression — a copy of one included — is taken as before.
+
+  **Migration:** to query without a filter, build the query without `.filter()` rather than returning `undefined` from its callback.
+
+- [#251](https://github.com/hacker-cb/1c-odata/pull/251) [`815c221`](https://github.com/hacker-cb/1c-odata/commit/815c221cbf3e596039bb5c7a595c365bc8656a8d) Thanks [@hacker-cb](https://github.com/hacker-cb)! - Filter DSL types: nullable fields get their operators, and `bigint` fields are typed as `bigint` ([#230](https://github.com/hacker-cb/1c-odata/issues/230)).
+
+  - **A nullable field has the operators of its type.** `FieldExprFor` distributed over the field's union with `null`, so a generated `Сумма?: number | null` had no `gt` / `add` / …, a `Дата?: Date | null` no `year()`, a `Комментарий?: string | null` no `startsWith` — `strictNullChecks` code needed a cast. The surface is now read off the non-null type as a whole. A nullable field is an operand too (`f.Количество.gt(f.Сумма)`, `f.Дата.lt(f.ДатаОкончания)`), and arithmetic on it keeps its `null` (`f.Сумма.add(1)` is a `number | null` expression, so `.eq(null)` compiles).
+  - **Numeric fields are one family.** An `Edm.Int64` read as `bigint` (`int64Mode: 'bigint'`): comparisons and arithmetic take `number` or `bigint` operands, and `add` / `sub` / `mul` / `div` / `round` return a `bigint` expression (they were typed for `number`). A `number` field takes a `bigint` or a `bigint` expression as well, and a field typed `number | bigint` keeps its operators. `f.Int64.gt(5)` and `f.Int64.add(1).eq(5)` compile as before.
+  - **`any()` / `all()` take a nullable or optional tabular part** (`Товары?: Row[] | null`, as codegen emits it), which they refused in their types; a field holding no array at all is still refused.
+
+  Nothing changes in what is sent.
+
+  **Migration:** code that annotated a `bigint` field's arithmetic as `ChainedFieldExpr<number>` needs `ChainedFieldExpr<bigint>` (or no annotation).
+
+- [#241](https://github.com/hacker-cb/1c-odata/pull/241) [`e629dcc`](https://github.com/hacker-cb/1c-odata/commit/e629dccc502d43baf73d40ddaa2cb67726f9b24f) Thanks [@hacker-cb](https://github.com/hacker-cb)! - The filter DSL writes a GUID string compared with a GUID field as `guid'…'`, as 1С needs it ([#228](https://github.com/hacker-cb/1c-odata/issues/228)). It used to write `Ref_Key eq '8af68945-…'`, which 1С answers with no rows — silently — and, for an `Edm.Guid` attribute such as `Идентификатор`, with an error. A field counts as a GUID field by the client's `MetadataIndex` (`Edm.Guid`, tabular rows inside `any()` / `all()` included); without one, or for a field it does not list (a navigation path, a virtual table), by the 1С reference name `*_Key`. Fields typed `Edm.String` — `Recorder` among them — keep the quoted form.
+
+  **Changes in what is sent or thrown:**
+
+  - `f.Ref_Key.eq(id)` (and `ne` / `gt` / `ge` / `lt` / `le`) now sends `Ref_Key eq guid'…'` instead of `Ref_Key eq '…'`. Code comparing `toFilterString()` output with a fixed string needs updating.
+  - A string that is not a GUID (8-4-4-4-12 hex) compared with such a field is now an `InvalidArgumentError` naming the field, rather than a filter 1С matches nothing with.
+
+  **New:** `guid(value)` in `@1c-odata/client/filter` — a GUID literal for the GUID fields the DSL cannot tell by itself: an `Edm.Guid` attribute queried without a schema (`f.Идентификатор.eq(guid(id))`), through a navigation path or on a virtual table. It throws `InvalidArgumentError` for a value that is not a GUID; the literal is for comparisons only — as a function or arithmetic operand, or against a field the schema types other than `Edm.Guid`, it is an `InvalidArgumentError` too.
+
+- [#246](https://github.com/hacker-cb/1c-odata/pull/246) [`f79571c`](https://github.com/hacker-cb/1c-odata/commit/f79571c6aca37e8bc3f03c3d71545c9f87dadd61) Thanks [@hacker-cb](https://github.com/hacker-cb)! - The filter DSL refuses `undefined` as a value ([#229](https://github.com/hacker-cb/1c-odata/issues/229)), and the query builder sends no empty `$select` / `$expand` ([#237](https://github.com/hacker-cb/1c-odata/issues/237)).
+
+  - **`undefined` in a value slot is now an `InvalidArgumentError`** naming the field (`argument`, the row path inside `any()` / `all()`), and so is a function or a symbol (a method passed uncalled). It used to be written as a string — `f.X.eq(undefined)` sent `X eq 'undefined'`, `f.Сумма.add(undefined)` sent `(Сумма add 'undefined')` — a filter 1С rejects or silently matches nothing with.
+
+    **Migration:** where a value may be missing (a field left out of `$select`), check it before the filter, or pass `null` explicitly to compare with a null field. The types are unchanged: a value present in the row works as before.
+
+  - **`select()` with no fields (or blank names only), or `expand()` while nothing is expanded, sends no `$select` / `$expand`** — in `get()`, `raw()`, `stream()` and `count()`; blank names beside real ones are dropped. It used to send `$select=` / `$expand=`, which 1С reads as absent (checked live: 200 with every property), so what comes back is unchanged — only the URL loses the empty option.
+
+### Patch Changes
+
+- [#245](https://github.com/hacker-cb/1c-odata/pull/245) [`46a34c1`](https://github.com/hacker-cb/1c-odata/commit/46a34c1a9235262a03ddf957950cab88fa6732ae) Thanks [@hacker-cb](https://github.com/hacker-cb)! - Documentation: `RequestEvent.signal` and `RequestHooks` now spell out what `req.signal` ends. It aborts only when its attempt is cut short — the timeout, the call's signal (yours, or the one a register read with `count: true` adds), a hook's own error — and not on a response, an error from 1С or the network by itself, or a retry replacing the attempt. Work a hook starts without awaiting it can outlive the call; the docs say how to bound it. No behaviour change.
+
+- [#242](https://github.com/hacker-cb/1c-odata/pull/242) [`f3d172d`](https://github.com/hacker-cb/1c-odata/commit/f3d172d131178aa0515f53eb943debe43ee14b71) Thanks [@hacker-cb](https://github.com/hacker-cb)! - A `timeout` above `2³¹ − 1` ms (about 24.8 days), `Infinity` included, no longer fails the call with a `TimeoutError` almost at once: it is capped at that limit, the longest delay a Node timer keeps, as the retry pause already was. `TimeoutError.timeoutMs` reports the capped value. `0`, a negative value and `NaN` still disable the timeout.
+
+- [#242](https://github.com/hacker-cb/1c-odata/pull/242) [`f3d172d`](https://github.com/hacker-cb/1c-odata/commit/f3d172d131178aa0515f53eb943debe43ee14b71) Thanks [@hacker-cb](https://github.com/hacker-cb)! - An event returned by `beforeRequest` whose `method`, `headers` or `body` getter throws now ends the call as the hook's own error: the timeout's timer is cleared and `req.signal` aborted with that error, and the call is not retried. Before, the timer was left running.
+
+- [#242](https://github.com/hacker-cb/1c-odata/pull/242) [`f3d172d`](https://github.com/hacker-cb/1c-odata/commit/f3d172d131178aa0515f53eb943debe43ee14b71) Thanks [@hacker-cb](https://github.com/hacker-cb)! - `RetryPolicy.maxDelayMs` now caps the first pause between attempts too: an `initialDelayMs` above it went uncapped into the first pause (in full with `jitter: 'none'`, a random share of it with `'full'`).
+
 ## 0.10.0
 
 ### Minor Changes
