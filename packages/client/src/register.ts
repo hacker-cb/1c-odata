@@ -2,9 +2,9 @@
 import type { RequestOptions } from './client/options.js'
 import type { ODataV3Client } from './client/v3-client.js'
 import { V3QueryBuilder } from './client/v3-query.js'
-import { InvalidArgumentError, ParseError } from './errors.js'
+import { InvalidArgumentError } from './errors.js'
 import { buildFunctionUrl } from './functions.js'
-import { parseOptsFor, parseV3Collection } from './parser.js'
+import { parseOptsFor, parseV3Collection, parseV3Count } from './parser.js'
 import { assertNonNegativeInt } from './query/builder.js'
 import { formatOrderBy, isDate, qp } from './url-builder.js'
 
@@ -248,20 +248,6 @@ function filterParams(filter: unknown): string[] {
   }
   const trimmed = filter.trim()
   return trimmed !== '' ? [qp('$filter', trimmed)] : []
-}
-
-/**
- * The row count a `/$count` answers: the whole (BOM-stripped, trimmed) body a
- * non-negative decimal integer within the safe range — `12oops`, `1.5`, `-1`
- * or an empty body is a `ParseError` rather than a count read off its prefix.
- */
-function rowCount(body: string): number {
-  const text = body.replace(/^\uFEFF/, '').trim()
-  const n = Number(text)
-  if (!/^\d+$/.test(text) || !Number.isSafeInteger(n)) {
-    throw new ParseError(`Expected a non-negative integer row count from /$count, got: ${text.slice(0, 50)}`)
-  }
-  return n
 }
 
 /** Append encoded system options to a function-import URL that may already carry its parameters. */
@@ -524,7 +510,7 @@ export class RegisterHelper<T> {
       ).value
     if (count !== true) return rows(reqOpts)
     const total = async (call: RequestOptions): Promise<number> =>
-      rowCount((await this.client.transportGet(withParams(countUrl(fiUrl), params.count), call)).body)
+      parseV3Count((await this.client.transportGet(withParams(countUrl(fiUrl), params.count), call)).body)
     // One failing aborts the other rather than leave it loading a page no one reads.
     const sibling = new AbortController()
     const signal = reqOpts.signal !== undefined ? AbortSignal.any([reqOpts.signal, sibling.signal]) : sibling.signal
