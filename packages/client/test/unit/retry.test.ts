@@ -533,7 +533,7 @@ describe('requestWithRetry — maxDelayMs caps the first pause too', () => {
   })
 })
 
-describe('requestWithRetry — an attempt a retry replaces keeps its signal (#231)', () => {
+describe('requestWithRetry — an attempt replaced by a retry keeps its signal (#231)', () => {
   it('each attempt gets its own req.signal; none is aborted once the call has succeeded', async () => {
     let n = 0
     server.use(
