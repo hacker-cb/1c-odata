@@ -1,7 +1,9 @@
 // packages/client/src/query/filter-internal.ts
 import { InvalidArgumentError, ODataError } from '../errors.js'
 import { formatNumberLiteral } from '../format-number.js'
-import { formatScalarLiteral } from '../url-builder.js'
+import type { Guid } from '../types/core.js'
+import { formatScalarLiteral, GUID_RE } from '../url-builder.js'
+import type { EntitySchema, MetadataIndex } from '../validate.js'
 
 declare const filterExpressionBrand: unique symbol
 declare const fieldExprBrand: unique symbol
@@ -49,12 +51,24 @@ export interface InternalFieldExpr<V> extends FieldExpr<V> {
   readonly _ctx: CompileContext
 }
 
-/** @internal — per-compileFilter mutable state (timezone + lambda counter). */
+/** @internal — per-compileFilter mutable state (timezone + lambda counter + schema index). */
 export interface CompileContext {
   readonly serverTimezone: string
   /** Mutable lambda counter — incremented per `any()`/`all()` use. */
   lambdaCounter: { value: number }
+  /**
+   * The index the filtered entity's schema came from, where the query has one:
+   * `any()`/`all()` resolve a tabular part's row type through it.
+   */
+  readonly metadataIndex?: MetadataIndex | undefined
 }
+
+/**
+ * The declared EDM type of each field expression the proxy built from a schema
+ * property (`Edm.Guid`, `Collection(<ns>.<Row>)`, …). Kept beside the frozen
+ * expression rather than on it, so no internal key shadows a 1С field name.
+ */
+const fieldTypes = new WeakMap<object, string>()
 
 /**
  * Every expression the DSL itself built — filters and field expressions alike.
@@ -102,6 +116,13 @@ const dslFilters = new WeakSet<object>()
  */
 function formatLiteral(v: unknown, ctx: CompileContext, argument: string): string {
   if (v === null) return 'null'
+  if (typeof v === 'object' && guidLiterals.has(v)) {
+    throw new InvalidArgumentError(
+      `guid() for "${argument}" is a value to compare a GUID field with (eq/ne/gt/ge/lt/le) — ` +
+        'not an operand of a string, date or arithmetic function',
+      { argument, received: (v as { _expr: string })._expr },
+    )
+  }
   if (typeof v === 'object' && dslExpressions.has(v)) {
     const text = (v as { _expr: string })._expr
     return dslFilters.has(v) ? `(${text})` : text
@@ -125,6 +146,126 @@ function formatLiteral(v: unknown, ctx: CompileContext, argument: string): strin
       cause,
     })
   }
+}
+
+/**
+ * What the field at `path` holds — on a GUID field comparisons write a
+ * GUID string as `guid'…'`, which 1С needs: a quoted `'…'` against a reference
+ * matches nothing, silently, and against another `Edm.Guid` field fails. The
+ * schema decides where it has the field (`propType`); otherwise the 1С naming
+ * rule does — a reference is `<X>_Key` (every `*_Key` property of the 1С bases
+ * checked is `Edm.Guid`), read on the last segment of the path. A path through
+ * a navigation property (`'Ответственный/Идентификатор'`) is not in the
+ * entity's schema, so it too goes by the name.
+ */
+function guidKind(path: string, propType: string | undefined): GuidKind {
+  if (propType !== undefined) return propType === 'Edm.Guid' ? 'guid' : 'other'
+  // The suffix holds no '/': the last segment's is the path's.
+  return path.endsWith('_Key') ? 'guid' : 'unknown'
+}
+
+/**
+ * What a field is known to hold: a GUID (`Edm.Guid` by the schema, or a `*_Key`
+ * name), something else by the schema, or — no schema for it, or a computed
+ * expression — unknown.
+ */
+type GuidKind = 'guid' | 'other' | 'unknown'
+
+/** The literals `guid()` built — values for a comparison only. */
+const guidLiterals = new WeakSet<object>()
+
+/**
+ * The string inside `v`: a primitive string, or a `String` object of any realm
+ * (read by `String.prototype.valueOf` itself, as `dateTime` reads a `Date`);
+ * `undefined` for anything else.
+ */
+function stringValue(v: unknown): string | undefined {
+  if (typeof v === 'string') return v
+  if (typeof v !== 'object' || v === null) return undefined
+  try {
+    return String.prototype.valueOf.call(v)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The operand of a comparison on a field: `guid()` is taken as is — unless the
+ * schema says the field holds no GUID (an `Edm.String` such as `Recorder`,
+ * which 1С fails to compare with one) — and on a GUID field a string, primitive
+ * or boxed, goes through `formatGuidComparand`.
+ */
+function formatComparand(v: unknown, ctx: CompileContext, argument: string, kind: GuidKind): string {
+  if (typeof v === 'object' && v !== null && guidLiterals.has(v)) {
+    if (kind === 'other') {
+      throw new InvalidArgumentError(
+        `guid() for "${argument}": the schema types this field other than Edm.Guid — compare it with a string`,
+        { argument, received: (v as { _expr: string })._expr },
+      )
+    }
+    return (v as { _expr: string })._expr
+  }
+  return kind === 'guid' ? formatGuidComparand(v, ctx, argument) : formatLiteral(v, ctx, argument)
+}
+
+/**
+ * The operand of a comparison on a GUID field: a string is written
+ * `guid'…'`, and must have the GUID form — any other string is an
+ * `InvalidArgumentError` rather than a filter 1С answers with no rows or a
+ * 400. Anything else (`null`, a field expression, `guid()`) as `formatLiteral`
+ * writes it.
+ */
+function formatGuidComparand(v: unknown, ctx: CompileContext, argument: string): string {
+  const s = stringValue(v)
+  if (s === undefined) return formatLiteral(v, ctx, argument)
+  if (!GUID_RE.test(s)) {
+    throw new InvalidArgumentError(
+      `Filter value for "${argument}" must be a GUID (8-4-4-4-12 hex form): the field is an Edm.Guid ` +
+        '(by the schema, or a 1С reference named *_Key)',
+      { argument, received: v },
+    )
+  }
+  return `guid'${s}'`
+}
+
+/**
+ * A GUID literal for a filter value: `guid'…'`, as a field expression the DSL
+ * built, so any comparison takes it as is. For a field the DSL cannot tell is
+ * an `Edm.Guid` — one the schema does not list and not named `*_Key`
+ * (`Идентификатор` queried schema-less, or through a navigation path).
+ *
+ * @throws InvalidArgumentError — `value` is not a GUID in the 8-4-4-4-12 hex form.
+ * @internal
+ */
+export function makeGuidLiteral(value: string): FieldExpr<Guid> {
+  if (typeof value !== 'string' || !GUID_RE.test(value)) {
+    throw new InvalidArgumentError('guid() takes a GUID in the 8-4-4-4-12 hex form', {
+      argument: 'guid',
+      received: value,
+    })
+  }
+  const literal = dslExpression(Object.freeze({ _expr: `guid'${value}'` }))
+  guidLiterals.add(literal)
+  return literal as unknown as FieldExpr<Guid>
+}
+
+/**
+ * The row schema of a tabular part `field` — what `any()`/`all()` give their
+ * lambda's fields — resolved from its declared `Collection(<ns>.<Row>)` type
+ * through the context's index (as `parser.ts` resolves a nested value's type).
+ * `undefined` without an index, for a field the proxy built with no schema, or
+ * for a row type the index does not hold.
+ *
+ * @internal
+ */
+export function rowSchemaOf(field: object, ctx: CompileContext): EntitySchema | undefined {
+  const index = ctx.metadataIndex
+  let t = fieldTypes.get(field)
+  if (index === undefined || t === undefined) return undefined
+  if (t.startsWith('Collection(') && t.endsWith(')')) t = t.slice('Collection('.length, -1)
+  const prefix = `${index.schemaNamespace}.`
+  const local = t.startsWith(prefix) ? t.slice(prefix.length) : t
+  return Object.hasOwn(index.schemas, local) ? index.schemas[local] : undefined
 }
 
 /**
@@ -179,10 +320,10 @@ interface NumberOps {
 }
 
 interface StringOps {
-  gt(v: string): FilterExpression
-  ge(v: string): FilterExpression
-  lt(v: string): FilterExpression
-  le(v: string): FilterExpression
+  gt(v: string | FieldExpr<string>): FilterExpression
+  ge(v: string | FieldExpr<string>): FilterExpression
+  lt(v: string | FieldExpr<string>): FilterExpression
+  le(v: string | FieldExpr<string>): FilterExpression
   startsWith(v: string): FilterExpression
   endsWith(v: string): FilterExpression
   substringof(v: string): FilterExpression
@@ -274,21 +415,34 @@ function dateUnit(unit: unknown, argument: string): string {
 /**
  * Build a FieldExpr-typed proxy. Every property access returns a wrapped
  * field expression with all method surfaces; TS narrowing via FieldExprFor<V>
- * controls which methods are visible at the type level.
+ * controls which methods are visible at the type level. `schema` — the
+ * entity's (or a tabular row's) where the query has one — gives each field its
+ * declared type: whether its comparisons write a GUID string as `guid'…'`.
  *
  * @internal
  */
-export function makeFieldProxy<T>(prefix: string, ctx: CompileContext): FieldExprMap<T> {
+export function makeFieldProxy<T>(prefix: string, ctx: CompileContext, schema?: EntitySchema): FieldExprMap<T> {
   return new Proxy({} as FieldExprMap<T>, {
     get(_, key) {
       if (typeof key !== 'string') return undefined
       if (key === '_expr' || key === '_phantom' || key === '_ctx') return undefined
-      return wrapField<unknown>(prefix + key, ctx)
+      const propType =
+        schema !== undefined && Object.hasOwn(schema.properties, key) ? schema.properties[key]?.type : undefined
+      const field = wrapField<unknown>(prefix + key, ctx, guidKind(prefix + key, propType))
+      if (propType !== undefined) fieldTypes.set(field, propType)
+      return field
     },
   })
 }
 
-function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & FieldExpr<V> & { _ctx: CompileContext } {
+function wrapField<V>(
+  expr: string,
+  ctx: CompileContext,
+  kind: GuidKind = 'unknown',
+): FieldExprFor<V> & FieldExpr<V> & { _ctx: CompileContext } {
+  // A field holding a GUID writes a string operand as `guid'…'`; a computed
+  // expression (`cast()`, arithmetic, functions) is of unknown kind and never does.
+  const comparand = (v: unknown) => formatComparand(v, ctx, expr, kind)
   // Each arithmetic operation in its own parentheses: OData binds mul/div
   // tighter than add/sub, so a chain written bare — `A add 1 mul 2` — would not
   // compute what the calls say, `(A add 1) mul 2`.
@@ -299,12 +453,12 @@ function wrapField<V>(expr: string, ctx: CompileContext): FieldExprFor<V> & Fiel
     Object.freeze({
       _expr: expr,
       _ctx: ctx,
-      eq: (v: unknown) => makeFilter(`${expr} eq ${formatLiteral(v, ctx, expr)}`),
-      ne: (v: unknown) => makeFilter(`${expr} ne ${formatLiteral(v, ctx, expr)}`),
-      gt: (v: unknown) => makeFilter(`${expr} gt ${formatLiteral(v, ctx, expr)}`),
-      ge: (v: unknown) => makeFilter(`${expr} ge ${formatLiteral(v, ctx, expr)}`),
-      lt: (v: unknown) => makeFilter(`${expr} lt ${formatLiteral(v, ctx, expr)}`),
-      le: (v: unknown) => makeFilter(`${expr} le ${formatLiteral(v, ctx, expr)}`),
+      eq: (v: unknown) => makeFilter(`${expr} eq ${comparand(v)}`),
+      ne: (v: unknown) => makeFilter(`${expr} ne ${comparand(v)}`),
+      gt: (v: unknown) => makeFilter(`${expr} gt ${comparand(v)}`),
+      ge: (v: unknown) => makeFilter(`${expr} ge ${comparand(v)}`),
+      lt: (v: unknown) => makeFilter(`${expr} lt ${comparand(v)}`),
+      le: (v: unknown) => makeFilter(`${expr} le ${comparand(v)}`),
       startsWith: (v: string) => makeFilter(`startswith(${expr}, ${formatLiteral(v, ctx, expr)})`),
       endsWith: (v: string) => makeFilter(`endswith(${expr}, ${formatLiteral(v, ctx, expr)})`),
       substringof: (v: string) => makeFilter(`substringof(${formatLiteral(v, ctx, expr)}, ${expr})`),
