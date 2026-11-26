@@ -14,7 +14,7 @@ const extra = { signal: new AbortController().signal }
 interface Result {
   total: number
   totalCapped?: boolean
-  pagination: { skip: number; top: number; returned: number; truncated: boolean; hasMore: boolean }
+  pagination: { skip: number; top: number; returned: number; truncated: boolean; hasMore: boolean; ambiguous?: string }
   rows: { n: number }[]
 }
 
@@ -229,5 +229,32 @@ describe('register_query pages on the 1С server (#192)', () => {
     const { run } = setup(4, { ...limits, maxBytes: 1024 }, { pad: 'x'.repeat(600) })
     const { data } = await run({ skip: 0 })
     expect(data.pagination).toMatchObject({ returned: 1, truncated: true, hasMore: true })
+  })
+})
+
+describe('register_query marks a page it cannot place in pagination.ambiguous (#235)', () => {
+  const limits: Limits = { ...DEFAULT_LIMITS, defaultTop: 4, maxTop: 4 }
+
+  it('"skipIgnoredOrCountShort" at a skip with as many rows as counted', async () => {
+    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true })
+    const { data } = await run({ skip: 8 })
+    expect(data.pagination).toMatchObject({ hasMore: false, ambiguous: 'skipIgnoredOrCountShort' })
+  })
+
+  it('"skipIgnoredOrCountShort" on a full page holding a short count equal to top', async () => {
+    // 12 rows counted 4: at skip 4 a full page of 4 is as many as counted.
+    const { run } = setup(12, limits, { count: 4 })
+    const { data } = await run({ skip: 4 })
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: false, ambiguous: 'skipIgnoredOrCountShort' })
+  })
+
+  it.each([
+    ['a first page', {}],
+    ['the empty page past the rows', { skip: 12 }],
+    ['a page past a short count', { skip: 8 }],
+  ])('absent on %s', async (_what, args) => {
+    const { run } = setup(12, limits, { count: 6 })
+    const { data } = await run(args)
+    expect(data.pagination).not.toHaveProperty('ambiguous')
   })
 })

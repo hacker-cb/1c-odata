@@ -194,7 +194,9 @@ one `ONEC_A_B_PASSWORD` — `add` rejects the colliding second name, so pick a d
 
 Every read tool keeps its result within a byte budget so a large query can't overflow the model's context:
 row sets are truncated to a usable sample (the response carries `truncated` / `hasMore` and a hint to narrow
-the request), and an oversized individual field (e.g. a base64 `ValueStorage`) is capped with a marker. One
+the request; `query` and `register_query` add `pagination.ambiguous` — `"skipIgnoredOrCountShort"` or
+`"skipUnverified"` — only on a page 1С's answer leaves unplaced, which ends the paging and is not to be joined to the
+pages before it), and an oversized individual field (e.g. a base64 `ValueStorage`) is capped with a marker. One
 row is always returned even if it alone exceeds the budget, so you still see the shape (narrow with `select`
 or `compact`); `get_entity` instead refuses an over-budget entity and points you to `query` + `$select`. Tune
 it with env vars (all optional):

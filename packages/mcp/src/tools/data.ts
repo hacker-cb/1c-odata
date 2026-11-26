@@ -102,8 +102,23 @@ interface Page<T> {
   more: boolean
   /** Whether paging on by `skip` reaches the rows left — false where 1С may ignore `$skip`. */
   pageable: boolean
+  /** Why the page cannot be placed — set exactly where `pageable` is false (#235). */
+  ambiguous?: Ambiguity
   note: string
 }
+
+/**
+ * Why a page cannot be placed at its `skip`, as `pagination.ambiguous` reports
+ * it: `skipIgnoredOrCountShort` — at a `skip`, 1С sent as many rows as it
+ * counted (or, ignoring `$top`, more): it ignored `$skip` (these are the set's
+ * first rows) or counts fewer rows than it has; `skipUnverified` — 1С ignored
+ * `$top` and no count was asked for, so whether it kept to `$skip` is unknown.
+ */
+type Ambiguity = 'skipIgnoredOrCountShort' | 'skipUnverified'
+
+/** Text for the tools' descriptions: the `pagination.ambiguous` field, as {@link Ambiguity} reads it. */
+const AMBIGUOUS_DOC =
+  'pagination.ambiguous is present only on a page 1С\'s answer leaves unplaced (then hasMore is false): "skipIgnoredOrCountShort" — at a skip 1С sent as many rows as it counted, so it either ignored $skip (these are the first rows) or counts fewer rows than it has; "skipUnverified" — 1С ignored $top and no count was asked for, so whether it kept to $skip is unknown (query only; page with count:true). Do not page on or join such a page to the previous ones — narrow the request instead.'
 
 /**
  * The page `query` and `register_query` return from the `rows` 1С sent for
@@ -130,7 +145,7 @@ function placePage<T>(rows: T[], limit: number, offset: number, total: number | 
   if (ambiguous) {
     const as = rows.length === total ? 'exactly as many as' : 'more than'
     const note = ` ⚠ 1С returned ${rows.length} rows at skip ${offset} — ${as} it counted: it either ignored $skip (these are the set's first rows) or counts fewer rows than it has (a $select rolling a register virtual table up)${cut}, taken as starting at skip. Paging on stops here: ${narrow}.`
-    return { value, more: false, pageable: false, note }
+    return { value, more: false, pageable: false, ambiguous: 'skipIgnoredOrCountShort', note }
   }
   const sent = ` ⚠ 1С returned ${rows.length} rows for top ${limit} — it ignored $top here${cut}, taken as starting at skip.`
   if (total === undefined) {
@@ -138,6 +153,7 @@ function placePage<T>(rows: T[], limit: number, offset: number, total: number | 
       value,
       more: false,
       pageable: false,
+      ambiguous: 'skipUnverified',
       note: `${sent} Whether 1С honoured $skip is unknown: page with count:true.`,
     }
   }
@@ -211,7 +227,8 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     {
       title: 'Query data',
       description:
-        'Read-only OData query against an entity set ($filter, $select, $expand, $orderby, $top/$skip, optional count). Large results are truncated to a byte budget — use select to keep them small. With expand, also include the navigation property in select (e.g. "Партнер/Description") or the expanded data is dropped. To look up records by key use get_entity (once per id) — do NOT build long "Ref_Key eq … or …" filters; 1С rejects over-long URLs with HTTP 404 (keep any OR-batch ≤ ~10). For register balances/turnovers/totals use register_query, not raw "*_RecordType" rows. Do not pass a register virtual table with its parameters in the path as entitySet ("AccountingRegister_X/Turnovers(StartPeriod=…,AccountCondition=\'…\')"): they all share ONE URL path segment, which IIS caps at 260 characters by default — about two GUIDs in a condition — and rejects with HTTP 400 "Invalid URL"; register_query sends them in the query string, with no such limit.',
+        'Read-only OData query against an entity set ($filter, $select, $expand, $orderby, $top/$skip, optional count). Large results are truncated to a byte budget — use select to keep them small. With expand, also include the navigation property in select (e.g. "Партнер/Description") or the expanded data is dropped. To look up records by key use get_entity (once per id) — do NOT build long "Ref_Key eq … or …" filters; 1С rejects over-long URLs with HTTP 404 (keep any OR-batch ≤ ~10). For register balances/turnovers/totals use register_query, not raw "*_RecordType" rows. Do not pass a register virtual table with its parameters in the path as entitySet ("AccountingRegister_X/Turnovers(StartPeriod=…,AccountCondition=\'…\')"): they all share ONE URL path segment, which IIS caps at 260 characters by default — about two GUIDs in a condition — and rejects with HTTP 400 "Invalid URL"; register_query sends them in the query string, with no such limit. ' +
+        AMBIGUOUS_DOC,
       inputSchema: {
         connection: z.string().describe('Connection name'),
         entitySet: z.string().describe('Entity set, e.g. Catalog_Валюты'),
@@ -259,6 +276,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           value,
           more,
           pageable,
+          ambiguous,
           note: topNote,
         } = placePage(page.value, limit, offset, total, 'narrow with filter, or use register_query for a register')
         const fetched = value.length
@@ -283,6 +301,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
               returned: rows.length,
               truncated,
               hasMore: pageable && (truncated || more),
+              ...(ambiguous !== undefined ? { ambiguous } : {}),
             },
             value: rows,
           },
@@ -356,7 +375,8 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
     {
       title: 'Query register virtual table',
       description:
-        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. On balance/turnovers/balanceAndTurnovers/drCrTurnovers select may also roll the rows up over the selected dimensions — but whether 1С does depends on the 1С configuration: on some bases the rows come rolled up (e.g. on a БП AccountingRegister turnovers, select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account), on others they come back un-rolled, one per full set of dimensions (e.g. УТ AccumulationRegister_ТоварыНаСкладах balance) — then sum them yourself, and total (1С\'s count, rolled up) is below the number of rows: page on while hasMore holds, until a page comes back short or empty, rather than by total. On slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from (extDimensions takes neither); filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601 in the 1С server time unless they carry Z or an offset. Paginated via top/skip on the 1С server: each call reads one page and, in a parallel request, 1С\'s total (1С computes the whole virtual table for each, so a big table costs seconds per page — and a deep skip more than the first; narrow with condition/period/select rather than paging through it; on data changing meanwhile the total and the page can briefly disagree). orderBy sorts on the server (costs time on a big table) — with top it gives a server-side top-N, e.g. orderBy [{"field":"СуммаTurnoverDr","dir":"desc"}], top 10. Without orderBy rows come in 1С\'s own order: in tests it stayed the same from page to page, but 1С does not promise that — when pages must not overlap or skip rows, pass orderBy over fields that identify a row (e.g. the selected dimensions).',
+        'Server-side analytics on a 1С register — stock balances, period turnovers/sales totals, slices. 1С aggregates by the register dimensions and returns pre-summed rows; prefer this over query on raw "*_RecordType" records for totals/by-dimension breakdowns. On balance/turnovers/balanceAndTurnovers/drCrTurnovers select may also roll the rows up over the selected dimensions — but whether 1С does depends on the 1С configuration: on some bases the rows come rolled up (e.g. on a БП AccountingRegister turnovers, select ["Account_Key","СуммаTurnoverDr","СуммаTurnoverCr"] gives one row per account), on others they come back un-rolled, one per full set of dimensions (e.g. УТ AccumulationRegister_ТоварыНаСкладах balance) — then sum them yourself, and total (1С\'s count, rolled up) is below the number of rows: page on while hasMore holds, until a page comes back short or empty, rather than by total. On slices and recordsWithExtDimensions select only picks fields. dimensions (the Dimensions parameter of the virtual table) limits which dimensions the table is built over — select can only group by those. condition/accountCondition restrict the records the table is computed from (extDimensions takes neither); filter restricts the resulting rows. Tables: balance/turnovers/balanceAndTurnovers (accumulation), sliceFirst/sliceLast (information), drCrTurnovers/extDimensions/recordsWithExtDimensions (accounting). Dates are ISO 8601 in the 1С server time unless they carry Z or an offset. Paginated via top/skip on the 1С server: each call reads one page and, in a parallel request, 1С\'s total (1С computes the whole virtual table for each, so a big table costs seconds per page — and a deep skip more than the first; narrow with condition/period/select rather than paging through it; on data changing meanwhile the total and the page can briefly disagree). orderBy sorts on the server (costs time on a big table) — with top it gives a server-side top-N, e.g. orderBy [{"field":"СуммаTurnoverDr","dir":"desc"}], top 10. Without orderBy rows come in 1С\'s own order: in tests it stayed the same from page to page, but 1С does not promise that — when pages must not overlap or skip rows, pass orderBy over fields that identify a row (e.g. the selected dimensions). ' +
+        AMBIGUOUS_DOC,
       inputSchema: {
         connection: z.string().describe('Connection name'),
         register: z.string().describe('Register entity set, e.g. AccumulationRegister_ТоварыНаСкладах'),
@@ -443,6 +463,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
           value,
           more,
           pageable,
+          ambiguous,
           note: pageNote,
         } = placePage(page.value, limit, offset, total, `narrow with ${narrowBy}`)
         // 1С may count a $select as rolled up while returning its rows un-rolled:
@@ -472,6 +493,7 @@ export function registerDataTools(server: McpServer, pool: ReadPool, limits: Lim
               returned: rows.length,
               truncated,
               hasMore: pageable && (truncated || more),
+              ...(ambiguous !== undefined ? { ambiguous } : {}),
             },
             rows,
           },
