@@ -5,7 +5,7 @@ import { loadConfig, type StoredConnection } from '../config.js'
 import type { ConnectionPool } from '../connection-pool.js'
 import {
   assertAddable,
-  assertEnvPasswordNotRetargeted,
+  assertEnvPasswordStaysPutOnAdd,
   assertNoEnvPassword,
   removeConnection,
   setConnectionLabel,
@@ -59,7 +59,12 @@ async function addConnection(
   // Preflight the duplicate check BEFORE verifying, so a password is never sent
   // to baseUrl only to be rejected as "already exists" afterwards.
   assertAddable(opts.dataDir, connection, overwrite === true)
-  assertEnvPasswordNotRetargeted(opts.dataDir, connection, { baseUrl, login })
+  assertEnvPasswordStaysPutOnAdd(
+    opts.dataDir,
+    connection,
+    { baseUrl, login },
+    { create: false, storesPassword: hasPassword },
+  )
   // Verify before persisting when a password is available. The password is used
   // verbatim here so verify matches exactly what gets stored/used.
   if (hasPassword) {

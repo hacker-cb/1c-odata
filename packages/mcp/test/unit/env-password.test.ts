@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -64,6 +64,12 @@ afterEach(() => {
 /** Set the env password of connection `c`, which outranks the stored one on read. */
 const envPassword = () => vi.stubEnv('ONEC_C_PASSWORD', 'from-env')
 
+/** The stored password of `c` is still the one it was added with — read past the env var. */
+async function expectStoredPasswordKept() {
+  vi.stubEnv('ONEC_C_PASSWORD', '')
+  expect((await stored().secret.read('c'))?.password).toBe('stored')
+}
+
 const stored = () => ({
   config: loadConfig(dir).connections.c,
   secret: new SecretStore({ dataDir: dir, insecure: true }),
@@ -104,7 +110,42 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       await close()
       expect(fetched).toEqual([])
       expect(stored().config).toMatchObject({ baseUrl: OLD, login: 'u' })
-      expect((await stored().secret.read('c'))?.password).toBe('from-env')
+      await expectStoredPasswordKept()
+    })
+
+    it('refuses a new password for the same target: reads would keep the env one', async () => {
+      envPassword()
+      const { call, close } = await tools()
+      const res = await call('add_connection', {
+        connection: 'c',
+        baseUrl: OLD,
+        login: 'u',
+        password: 'new',
+        overwrite: true,
+      })
+      await close()
+      expect(res.isError).toBe(true)
+      expect(fetched).toEqual([])
+      await expectStoredPasswordKept()
+    })
+
+    it('reads a stored target as stored and normalized: a hand-written trailing slash is the same target', async () => {
+      writeFileSync(
+        join(dir, 'config.json'),
+        JSON.stringify({ connections: { c: { baseUrl: `${OLD}/`, login: 'u', serverTimezone: 'Europe/Moscow' } } }),
+        { mode: 0o600 },
+      )
+      envPassword()
+      const { call, close } = await tools()
+      const res = await call('add_connection', {
+        connection: 'c',
+        baseUrl: OLD,
+        login: 'u',
+        serverTimezone: 'UTC',
+        overwrite: true,
+      })
+      await close()
+      expect(res.isError).toBe(false)
     })
 
     it('still takes an overwrite keeping the target (a label, a timezone)', async () => {
@@ -129,6 +170,36 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       expect(res.isError).toBe(false)
       expect(stored().config?.baseUrl).toBe(NEW)
       expect(await stored().secret.read('c')).toBeNull()
+    })
+  })
+
+  describe('add_connection creating a connection (an agent never picks where the env password goes)', () => {
+    it('refuses remove_connection then add_connection to another server, before any request', async () => {
+      envPassword()
+      const { call, close } = await tools()
+      expect((await call('remove_connection', { connection: 'c' })).isError).toBe(false)
+      const res = await call('add_connection', { connection: 'c', baseUrl: NEW, login: 'u' })
+      await close()
+      expect(res.isError).toBe(true)
+      expect(res.text).toContain('ONEC_C_PASSWORD')
+      expect(res.text).toContain('1c-odata-mcp add')
+      expect(fetched).toEqual([])
+      expect(stored().config).toBeUndefined()
+    })
+
+    it('creates as before without the env var', async () => {
+      const { call, close } = await tools()
+      const res = await call('add_connection', { connection: 'd', baseUrl: NEW, login: 'u' })
+      await close()
+      expect(res.isError).toBe(false)
+      expect(loadConfig(dir).connections.d?.baseUrl).toBe(NEW)
+    })
+
+    it('the CLI add still creates one under a set env var (a person chose the target)', async () => {
+      vi.stubEnv('ONEC_D_PASSWORD', 'from-env')
+      await runAdd({ dataDir: dir, insecure: true, name: 'd', url: NEW, login: 'u' })
+      expect(fetched).toEqual([`${NEW}/$metadata`])
+      expect(loadConfig(dir).connections.d?.baseUrl).toBe(NEW)
     })
   })
 

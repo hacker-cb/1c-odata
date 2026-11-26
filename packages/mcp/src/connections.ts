@@ -11,7 +11,7 @@ import { fetchMetadataXml } from '@1c-odata/metadata'
 import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfig } from './config.js'
 import { DEFAULT_METADATA_TIMEOUT_MS, DEFAULT_REACHABILITY_TIMEOUT_MS } from './constants.js'
 import { stripUrlUserinfo } from './redact.js'
-import { passwordEnvVar, SecretStore } from './secret-store.js'
+import { envPassword, passwordEnvVar, SecretStore } from './secret-store.js'
 
 /**
  * Throw if `name`'s password env-var slug collides with a DIFFERENT existing
@@ -30,51 +30,74 @@ function assertNoPasswordEnvCollision(connections: Record<string, StoredConnecti
   }
 }
 
-/** The `ONEC_<NAME>_PASSWORD` variable set (non-empty) for `name` — it outranks a stored password on read — or `undefined`. */
-function envPasswordVar(name: string): string | undefined {
-  const envVar = passwordEnvVar(name)
-  const value = process.env[envVar]
-  return value !== undefined && value !== '' ? envVar : undefined
-}
-
 /** A connection's auth target as stored: the base URL without userinfo, normalized, and the trimmed login. */
 function authTarget(baseUrl: string, login: string): { baseUrl: string; login: string } {
   return { baseUrl: normalizeBaseUrl(stripUrlUserinfo(baseUrl.trim())), login: login.trim() }
 }
 
 /**
- * Throw where overwriting `existing` would point it at another base URL or
- * login while its password comes from `ONEC_<NAME>_PASSWORD`: the stored
- * password is cleared on such a change, but the env one outranks it on read,
- * so it would go to the new server — which the caller (an agent through
- * `add_connection`) chose.
+ * What an add may do to a connection whose password comes from
+ * `ONEC_<NAME>_PASSWORD` — which outranks a stored password on read:
+ * `create` — whether it may create the connection (a person through the CLI
+ * may, choosing where the env password goes; an agent through `add_connection`
+ * may not, or a `remove_connection` + `add_connection` would point it anywhere);
+ * `storesPassword` — whether it stores a password, which reads would not use.
+ */
+export interface EnvPasswordAdd {
+  create: boolean
+  storesPassword: boolean
+}
+
+/**
+ * Throw where an add would send the env password of `name` somewhere it was
+ * not set up for, or store what reads would not use: create the connection
+ * where `add.create` forbids it, point an existing one at another base URL or
+ * login (an overwrite clears only the stored password, and the env one would
+ * go to the new server), or store a password.
  */
 function assertEnvPasswordStaysPut(
   name: string,
   existing: StoredConnection | undefined,
   next: { baseUrl: string; login: string },
+  add: EnvPasswordAdd,
 ): void {
-  if (existing === undefined || (existing.baseUrl === next.baseUrl && existing.login === next.login)) return
-  const envVar = envPasswordVar(name)
-  if (envVar === undefined) return
-  throw new InvalidArgumentError(
-    `The password of connection "${name}" comes from ${envVar}; pointing the connection at another server or login would send that password there. Unset ${envVar} first, or add the new target under another connection name.`,
-    { argument: 'baseUrl' },
-  )
+  if (envPassword(name) === undefined) return
+  const envVar = passwordEnvVar(name)
+  if (existing === undefined) {
+    if (add.create) return
+    throw new InvalidArgumentError(
+      `The password of connection "${name}" would come from ${envVar}, which is set: a connection under this name is added through the CLI (\`1c-odata-mcp add\`), not by an agent, so that a person chooses where that password goes.`,
+      { argument: 'connection' },
+    )
+  }
+  const stored = authTarget(existing.baseUrl, existing.login)
+  if (stored.baseUrl !== next.baseUrl || stored.login !== next.login) {
+    throw new InvalidArgumentError(
+      `The password of connection "${name}" comes from ${envVar}; pointing the connection at another server or login would send that password there. Unset ${envVar} first, or add the new target under another connection name.`,
+      { argument: stored.baseUrl !== next.baseUrl ? 'baseUrl' : 'login' },
+    )
+  }
+  if (add.storesPassword) {
+    throw new InvalidArgumentError(
+      `The password of connection "${name}" comes from ${envVar}, which outranks a stored one: reads would keep sending it, not the password given here. Change or unset ${envVar} instead.`,
+      { argument: 'password' },
+    )
+  }
 }
 
 /**
- * Preflight for an overwrite, BEFORE its credentials are verified: throw where
- * it would point an existing connection whose password comes from
- * `ONEC_<NAME>_PASSWORD` at another base URL or login. {@link upsertConnection}
- * re-checks under the config lock.
+ * Preflight for an add, BEFORE its credentials are verified — see
+ * {@link EnvPasswordAdd} for what it refuses where `name`'s password comes
+ * from `ONEC_<NAME>_PASSWORD`. {@link upsertConnection} re-checks under the
+ * config lock what does not turn on the caller.
  */
-export function assertEnvPasswordNotRetargeted(
+export function assertEnvPasswordStaysPutOnAdd(
   dataDir: string,
   name: string,
   next: { baseUrl: string; login: string },
+  add: EnvPasswordAdd,
 ): void {
-  assertEnvPasswordStaysPut(name, loadConfig(dataDir).connections[name], authTarget(next.baseUrl, next.login))
+  assertEnvPasswordStaysPut(name, loadConfig(dataDir).connections[name], authTarget(next.baseUrl, next.login), add)
 }
 
 /**
@@ -84,8 +107,8 @@ export function assertEnvPasswordNotRetargeted(
  * before verifying and again by {@link updateConnectionCredentials}.
  */
 export function assertNoEnvPassword(name: string): void {
-  const envVar = envPasswordVar(name)
-  if (envVar === undefined) return
+  if (envPassword(name) === undefined) return
+  const envVar = passwordEnvVar(name)
   throw new InvalidArgumentError(
     `The password of connection "${name}" comes from ${envVar}, which outranks a stored one: reads would keep sending it whatever is changed here. Change or unset ${envVar} instead.`,
     { argument: 'connection' },
@@ -203,8 +226,7 @@ function buildStoredConnection(
  */
 export async function upsertConnection(input: UpsertConnectionInput): Promise<UpsertConnectionResult> {
   assertValidConnectionName(input.name)
-  const baseUrl = normalizeBaseUrl(stripUrlUserinfo(input.baseUrl.trim()))
-  const login = input.login.trim()
+  const { baseUrl, login } = authTarget(input.baseUrl, input.login)
   // Trim the timezone too (non-interactive --timezone / MCP tool args aren't
   // trimmed by their callers): surrounding whitespace would fail the IANA check
   // even for an otherwise-valid zone.
@@ -230,7 +252,13 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
 
     // Authoritative (under the lock) re-checks of the env-var guards.
     assertNoPasswordEnvCollision(config.connections, input.name)
-    assertEnvPasswordStaysPut(input.name, existing, { baseUrl, login })
+    // Creating is the caller's to rule on (its preflight): only it knows who chose the target.
+    assertEnvPasswordStaysPut(
+      input.name,
+      existing,
+      { baseUrl, login },
+      { create: true, storesPassword: password !== undefined && password !== '' },
+    )
 
     // Mutate the secret store BEFORE persisting config: if a secret write/remove
     // throws, config.json is left untouched, so it can never end up pointing at a

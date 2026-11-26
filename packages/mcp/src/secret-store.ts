@@ -78,6 +78,16 @@ export function passwordEnvVar(name: string): string {
   return `ONEC_${slug}_PASSWORD`
 }
 
+/**
+ * The password `ONEC_<NAME>_PASSWORD` holds for `name` in `env`, or `undefined`
+ * where it is unset or empty. Where set it outranks a stored password on read —
+ * the one rule {@link SecretStore} reads by and the connection guards check.
+ */
+export function envPassword(name: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const value = env[passwordEnvVar(name)]
+  return value !== undefined && value !== '' ? value : undefined
+}
+
 interface FileSecrets {
   [name: string]: string
 }
@@ -128,8 +138,8 @@ export class SecretStore {
 
   /** Read a password following env → keychain → file. `null` if none found. */
   async read(name: string): Promise<ReadResult | null> {
-    const fromEnv = this.env[passwordEnvVar(name)]
-    if (fromEnv !== undefined && fromEnv !== '') return { password: fromEnv, source: 'env' }
+    const fromEnv = envPassword(name, this.env)
+    if (fromEnv !== undefined) return { password: fromEnv, source: 'env' }
     if (!this.insecure) {
       const fromKeychain = await this.keychainRead(name)
       if (fromKeychain !== null) return { password: fromKeychain, source: 'keychain' }
@@ -141,8 +151,7 @@ export class SecretStore {
 
   /** Where the password for `name` lives, WITHOUT revealing it (for `list`). */
   async source(name: string): Promise<SecretSource> {
-    const fromEnv = this.env[passwordEnvVar(name)]
-    if (fromEnv !== undefined && fromEnv !== '') return 'env'
+    if (envPassword(name, this.env) !== undefined) return 'env'
     if (!this.insecure && (await this.keychainRead(name)) !== null) return 'keychain'
     if (this.fileRead(name) !== null) return 'file'
     return 'none'

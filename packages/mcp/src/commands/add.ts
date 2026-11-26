@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { InvalidArgumentError } from '@1c-odata/client'
 import { assertValidConnectionName, configPath, loadConfig } from '../config.js'
-import { assertAddable, assertEnvPasswordNotRetargeted, upsertConnection, verifyConnectivity } from '../connections.js'
+import { assertAddable, assertEnvPasswordStaysPutOnAdd, upsertConnection, verifyConnectivity } from '../connections.js'
 import { errorText } from '../redact.js'
 import { passwordEnvVar } from '../secret-store.js'
 import { promptConfirm, promptHidden, promptLine, readPasswordStdin } from './_prompt.js'
@@ -169,7 +169,10 @@ export async function runAdd(opts: AddOptions): Promise<void> {
   const fields = opts.url !== undefined ? await gatherNonInteractive(opts) : await gatherInteractive(opts)
   if (fields === null) return
   // Before verifying, which would already send an env password to the new target.
-  assertEnvPasswordNotRetargeted(opts.dataDir, fields.name, fields)
+  assertEnvPasswordStaysPutOnAdd(opts.dataDir, fields.name, fields, {
+    create: true,
+    storesPassword: fields.persistPassword && fields.password !== undefined && fields.password !== '',
+  })
   if (!(await verifyOrConfirm(fields, opts))) return
 
   const result = await upsertConnection({
