@@ -86,7 +86,7 @@ describe('ODataV3Client.query', () => {
       }),
     )
     const n = await client
-      .query<{ DeletionMark: boolean }>('Catalog_X')
+      .query<{ DeletionMark: boolean } & Record<string, unknown>>('Catalog_X')
       .filter((f) => f.DeletionMark.eq(false))
       .select('Owner/Description')
       .expand('Owner')

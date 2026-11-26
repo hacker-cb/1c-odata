@@ -100,7 +100,7 @@ describe('V3 URL builder', () => {
   })
 
   it('buildV3CountUrl carries $select and $expand — the rows 1С counts — and no paging (#215)', () => {
-    const q = new QueryBuilder<{ DeletionMark: boolean }>('Catalog_X', 'Europe/Moscow')
+    const q = new QueryBuilder<{ DeletionMark: boolean } & Record<string, unknown>>('Catalog_X', 'Europe/Moscow')
       .filter((f) => f.DeletionMark.eq(false))
       .select('Description', 'Owner/Description')
       .expand('Owner')
