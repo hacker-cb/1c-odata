@@ -110,10 +110,30 @@ describe('query with count: a parallel /$count, never $inlinecount (#206)', () =
     expect(data.pagination.hasMore).toBe(true)
   })
 
-  it('ends hasMore at the last page by the total', async () => {
+  it('pages on past a full page landing exactly on the total; the empty page after ends it (#234)', async () => {
     const { run } = setup(8, limits)
-    const { data } = await run({ count: true, skip: 4 })
-    expect(data.pagination.hasMore).toBe(false)
+    expect((await run({ count: true, skip: 4 })).data.pagination.hasMore).toBe(true)
+    expect((await run({ count: true, skip: 8 })).data.pagination).toMatchObject({ returned: 0, hasMore: false })
+  })
+
+  it('ends hasMore on a short last page', async () => {
+    const { run } = setup(6, limits)
+    expect((await run({ count: true, skip: 4 })).data.pagination).toMatchObject({ returned: 2, hasMore: false })
+  })
+
+  it('reaches every row past a short count that a full page lands on (#234)', async () => {
+    // 12 rows, counted 8 (a select on a virtual table 1С counts rolled up and returns un-rolled).
+    const { run } = setup(12, limits, { count: 8 })
+    const seen: number[] = []
+    let skip = 0
+    // Bounded: a regression answering hasMore on an empty page must fail, not hang.
+    for (let page = 0; page < 10; page++) {
+      const { data } = await run({ count: true, skip })
+      seen.push(...data.value.map((r) => r.n))
+      if (!data.pagination.hasMore) break
+      skip += data.pagination.returned
+    }
+    expect(seen).toEqual(Array.from({ length: 12 }, (_, i) => i))
   })
 
   it('a failing /$count fails the call and aborts the page', async () => {

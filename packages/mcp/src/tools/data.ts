@@ -114,8 +114,8 @@ interface Page<T> {
  * ambiguous: 1С either ignored `$skip` (these are the set's first rows) or
  * counted fewer rows than it has (a `$select` rolling a register virtual table
  * up). So is a page past `limit` without a count. Such a page offers no paging
- * on, and the note says why and how to `narrow` instead. Within `limit`, rows
- * outrunning the count are taken as a short count: a full page goes on.
+ * on, and the note says why and how to `narrow` instead. Within `limit`, a
+ * full page goes on whatever the count says (see {@link moreAfter}).
  */
 function placePage<T>(rows: T[], limit: number, offset: number, total: number | undefined, narrow: string): Page<T> {
   const topIgnored = rows.length > limit
@@ -147,14 +147,17 @@ function placePage<T>(rows: T[], limit: number, offset: number, total: number | 
 
 /**
  * Whether rows remain past a page of `fetched` rows at `offset`, 1С having
- * kept to `$skip` / `$top`. An empty page ends the paging; the `total`, where
- * known, decides — unless the rows already outran it (a register virtual table
- * may count rows a `$select` rolls up differently), when a full page goes on.
+ * kept to `$skip` / `$top`. An empty page ends the paging, and a full page
+ * goes on whatever the `total` says: on a register virtual table 1С may count
+ * the rows rolled up by a `$select` and return them un-rolled — a `total`
+ * below the rows, which a full page may land on exactly (#215, #234). The
+ * price is one empty page where the rows really end on a page boundary. A
+ * short page ends the paging unless the `total` says rows remain.
  */
 function moreAfter(offset: number, fetched: number, limit: number, total: number | undefined): boolean {
   if (fetched === 0) return false
-  if (total !== undefined && offset + fetched <= total) return offset + fetched < total
-  return fetched === limit
+  if (fetched === limit) return true
+  return total !== undefined && offset + fetched < total
 }
 
 /**

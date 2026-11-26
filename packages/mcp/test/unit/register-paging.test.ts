@@ -88,9 +88,25 @@ describe('register_query pages on the 1С server (#192)', () => {
     expect((await run({ skip: 6 })).data.pagination).toMatchObject({ returned: 0, hasMore: false })
   })
 
-  it('keeps hasMore on an exact last full page only while the total says rows remain', async () => {
+  it('pages on past a full page landing exactly on the total; the empty page after ends it (#234)', async () => {
     const { run } = setup(8, limits)
-    expect((await run({ skip: 4 })).data.pagination).toMatchObject({ returned: 4, hasMore: false })
+    expect((await run({ skip: 4 })).data.pagination).toMatchObject({ returned: 4, hasMore: true })
+    expect((await run({ skip: 8 })).data.pagination).toMatchObject({ returned: 0, hasMore: false })
+  })
+
+  it('reaches every row past a short count that a full page lands on (#234)', async () => {
+    // 12 rows, counted 8 (a select 1С counts rolled up and returns un-rolled).
+    const { run } = setup(12, limits, { count: 8 })
+    const seen: number[] = []
+    let skip = 0
+    // Bounded: a regression answering hasMore on an empty page must fail, not hang.
+    for (let page = 0; page < 10; page++) {
+      const { data } = await run({ skip })
+      seen.push(...data.rows.map((r) => r.n))
+      if (!data.pagination.hasMore) break
+      skip += data.pagination.returned
+    }
+    expect(seen).toEqual(Array.from({ length: 12 }, (_, i) => i))
   })
 
   it('cuts a page 1С sent past top (honouring skip) back to top, and says so', async () => {
