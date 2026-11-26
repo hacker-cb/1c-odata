@@ -48,7 +48,8 @@ function setup(
       return { value, count }
     },
   }
-  const client = { serverTimezone: 'Europe/Moscow', register: () => helper }
+  const register = { ...helper, extDimensions: (opts: ReadFiCountOptions) => helper.balance(undefined, opts) }
+  const client = { serverTimezone: 'Europe/Moscow', register: () => register }
   const pool = { get: async () => ({ client }) as unknown as PoolEntry } as unknown as ReadPool
   registerDataTools(server, pool, limits)
   const run = async (args: Record<string, unknown>) => {
@@ -100,20 +101,96 @@ describe('register_query pages on the 1С server (#192)', () => {
     expect(JSON.stringify(summary)).toContain('ignored $top')
   })
 
-  it('pages the whole table here when 1С ignored both $top and $skip', async () => {
+  it('drops no rows on a guess when 1С ignored both $top and $skip (#214)', async () => {
+    // As many rows as counted at a skip: these may be the table's first rows, or a short count.
     const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true })
     const { data, summary } = await run({ skip: 8 })
-    expect(data.rows.map((r) => r.n)).toEqual([8, 9])
-    expect(data.pagination).toMatchObject({ returned: 2, hasMore: false })
-    expect(JSON.stringify(summary)).toContain('whole table and starting at skip 8')
+    expect(data.rows.map((r) => r.n)).toEqual([0, 1, 2, 3])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
+    const text = JSON.stringify(summary)
+    expect(text).toContain('ignored $skip (these are the set')
+    expect(text).toContain('counts fewer rows than it has')
+    expect(text).toContain('Paging on stops here: narrow with condition, period, filter or select')
   })
 
-  it('keeps paging from the rows in hand when 1С ignored $top and the count is short', async () => {
-    // 1С honoured $skip but not $top and counted 3 of 10 rows: rows 4–9 came back.
-    const { run } = setup(10, limits, { ignoreTop: true, count: 3 })
-    const { data } = await run({ skip: 4 })
+  it('keeps the rows asked for when $top is ignored and a short count equals them (#214)', async () => {
+    // 1С honoured $skip, ignored $top, and counted 6 of 10 rows: rows 4–9 — six — came back.
+    const { run } = setup(10, limits, { ignoreTop: true, count: 6 })
+    const { data, summary } = await run({ skip: 4 })
     expect(data.rows.map((r) => r.n)).toEqual([4, 5, 6, 7])
-    expect(data.pagination).toMatchObject({ returned: 4, hasMore: true })
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
+    expect(JSON.stringify(summary)).toContain('Paging on stops here')
+  })
+
+  it('stops on an ambiguous page even when the byte budget cut it, and offers no skip (#214)', async () => {
+    const { run } = setup(
+      10,
+      { ...limits, maxBytes: 1024 },
+      { ignoreTop: true, ignoreSkip: true, pad: 'x'.repeat(600) },
+    )
+    const { data, summary } = await run({ skip: 8 })
+    expect(data.pagination).toMatchObject({ returned: 1, truncated: true, hasMore: false })
+    expect(JSON.stringify(summary)).not.toContain('page with skip')
+  })
+
+  it('ends the paging on an empty page, whatever the parallel count says', async () => {
+    // The count saw 12 rows, the page — read a moment later — none past skip 10.
+    const { run } = setup(10, limits, { count: 12 })
+    expect((await run({ skip: 10 })).data.pagination).toMatchObject({ returned: 0, hasMore: false })
+  })
+
+  it('takes rows past top at a skip against a count of 0 as ambiguous', async () => {
+    // The count saw an empty table; the page, read a moment later, ten rows past top.
+    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true, count: 0 })
+    const { data } = await run({ skip: 8 })
+    expect(data.rows.map((r) => r.n)).toEqual([0, 1, 2, 3])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
+  })
+
+  it('narrows extDimensions only by what it takes, the truncation hint included', async () => {
+    const { run } = setup(
+      10,
+      { ...limits, maxBytes: 1024 },
+      { ignoreTop: true, ignoreSkip: true, pad: 'x'.repeat(600) },
+    )
+    const { data, summary } = await run({ skip: 8, table: 'extDimensions' })
+    expect(data.pagination.truncated).toBe(true)
+    expect(JSON.stringify(summary)).toContain('narrow with filter or select, or set compact:true')
+    expect(JSON.stringify(summary)).toContain('Paging on stops here: narrow with filter or select')
+    expect(JSON.stringify(summary)).not.toContain('condition')
+  })
+
+  it('claims no rows past the count on an empty page past it', async () => {
+    const { run } = setup(10, limits)
+    const { data, summary } = await run({ skip: 20 })
+    expect(data.pagination).toMatchObject({ returned: 0, hasMore: false })
+    expect(JSON.stringify(summary)).not.toContain('returned rows past that')
+  })
+
+  it('stops paging when 1С ignored $top and sent more rows than it counted at a skip (#214)', async () => {
+    // 1С honoured $skip but not $top and counted 3 of 10 rows: rows 4–9 came back — but with
+    // $skip ignored too it would send rows 0–9, just as many past a count that short: no paging on.
+    const { run } = setup(10, limits, { ignoreTop: true, count: 3 })
+    const { data, summary } = await run({ skip: 4 })
+    expect(data.rows.map((r) => r.n)).toEqual([4, 5, 6, 7])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
+    expect(JSON.stringify(summary)).toContain('more than it counted')
+  })
+
+  it('never loops on the first rows when 1С ignored $top and $skip and counts short (#214)', async () => {
+    const { run } = setup(10, limits, { ignoreTop: true, ignoreSkip: true, count: 6 })
+    const { data } = await run({ skip: 4 })
+    expect(data.rows.map((r) => r.n)).toEqual([0, 1, 2, 3])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
+  })
+
+  it('within top too: as many rows as counted at a skip offers no paging on (#214)', async () => {
+    // 1С kept to $top but ignored $skip: the table's 4 rows again, at skip 4.
+    const { run } = setup(4, limits, { ignoreSkip: true })
+    const { data, summary } = await run({ skip: 4 })
+    expect(data.rows.map((r) => r.n)).toEqual([0, 1, 2, 3])
+    expect(data.pagination).toMatchObject({ returned: 4, hasMore: false })
+    expect(JSON.stringify(summary)).toContain('exactly as many as it counted')
   })
 
   it('pages on by full pages once the rows outrun a short count (ungrouped $select)', async () => {
