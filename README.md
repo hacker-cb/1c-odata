@@ -160,7 +160,7 @@ Everything URL-shaped works without a schema: query builder + filter DSL, CRUD, 
 | ValueStorage triples on read | grouped into `{ contentType, base64Data }` | flat `<X>_Base64Data` + `<X>_Type` fields |
 | Clearing a date on write | `null` → sentinel automatically | pass `ONEC_EMPTY_DATE` explicitly (`null` stays `null`) |
 | `validateOnWrite` | ✅ | ❌ (throws at construction) |
-| GUID strings in the filter DSL | `guid'…'` for every `Edm.Guid` field | `guid'…'` for `*_Key` references; `guid('…')` for any other GUID field |
+| GUID strings in the filter DSL | `guid'…'` for every `Edm.Guid` field the index lists (past it, as schema-less) | `guid'…'` for `*_Key` references; `guid('…')` for any other GUID field |
 
 Daylight saving: 1С stores wall-clock time without checking it against the zone, so a time a switch skips reads moved forward by the gap and a time passed twice reads as the earlier instant (`Temporal`'s `'compatible'` rule); `parseInZone(naive, zone, { disambiguation: 'reject' })` refuses a skipped time instead. A string that names no real date-time (`2026-02-30T00:00:00`) is a `ParseError` in a field the schema types `Edm.DateTime`, and stays a string where only the schema-less heuristic matched it.
 

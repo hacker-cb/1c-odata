@@ -153,7 +153,7 @@ function formatLiteral(v: unknown, ctx: CompileContext, argument: string): strin
  */
 function isGuidField(path: string, propType: string | undefined): boolean {
   if (propType !== undefined) return propType === 'Edm.Guid'
-  return path.slice(path.lastIndexOf('/') + 1).endsWith('_Key')
+  return path.endsWith('_Key') // the suffix holds no '/': the last segment's is the path's
 }
 
 /**
