@@ -182,7 +182,11 @@ export interface UpsertConnectionInput {
    * `add_connection` — so the env password never goes where it did (#233 batch).
    */
   createUnderEnvPassword?: boolean
-  /** Once aborted — checked when the write's turn comes — nothing is written (#236). */
+  /**
+   * Aborted by the time the write's turn comes, nothing is written (#236). A
+   * write once begun completes: the secret and the config are never left to
+   * disagree.
+   */
   signal?: AbortSignal
 }
 
@@ -434,7 +438,11 @@ export interface UpdateCredentialsInput {
   /** New password; omit to keep the current one. Stored via {@link SecretStore}; never trimmed. */
   password?: string
   insecure?: boolean
-  /** Once aborted — checked when the write's turn comes — nothing is written (#236). */
+  /**
+   * Aborted by the time the write's turn comes, nothing is written (#236). A
+   * write once begun completes: the secret and the config are never left to
+   * disagree.
+   */
   signal?: AbortSignal
 }
 
