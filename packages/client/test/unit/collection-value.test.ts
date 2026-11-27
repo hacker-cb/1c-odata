@@ -60,7 +60,8 @@ describe('parseV3Collection — a body without a value array', () => {
     [{}, 'an object'],
     ['', 'string ""'],
     [0, 'number 0'],
-    ['x'.repeat(80), `string "${'x'.repeat(49)}…`],
+    ['x'.repeat(80), `string "${'x'.repeat(50)}…"`],
+    ['😀'.repeat(80), `string "${'😀'.repeat(50)}…"`],
   ])('a value that is no array — %j', (value, shown) => {
     expect(parseError({ value }).message).toBe(
       `Expected a "value" array in the collection response, got "value" ${shown}`,
@@ -74,6 +75,15 @@ describe('parseV3Collection — a body without a value array', () => {
   ])('a row that is no object — %j', (row, shown) => {
     expect(parseError({ value: [{ Code: '1' }, row] }).message).toBe(
       `Expected an object at value[1] of the collection response, got ${shown}`,
+    )
+  })
+
+  it('a number past the JSON range shows as Infinity, not null', () => {
+    expect(() => parseV3Collection('{"value": 1e999}', { serverTimezone: TZ })).toThrow(
+      new ParseError('Expected a "value" array in the collection response, got "value" number Infinity'),
+    )
+    expect(() => parseV3Collection('{"odata.count": 1e999, "value": []}', { serverTimezone: TZ })).toThrow(
+      new ParseError('Expected a non-negative integer row count in odata.count, got: number Infinity'),
     )
   })
 

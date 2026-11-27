@@ -127,15 +127,29 @@ function describeJson(v: unknown): string {
   if (v === null) return 'null'
   if (Array.isArray(v)) return 'an array'
   if (typeof v === 'object') return 'an object'
-  const text = JSON.stringify(v)
-  return `${typeof v} ${text.length > 50 ? `${text.slice(0, 50)}…` : text}`
+  // A string is cut before it is quoted — never serialized whole, never split inside a character or an escape.
+  if (typeof v === 'string') return `string ${JSON.stringify(clip(v, 50))}`
+  return `${typeof v} ${String(v)}`
+}
+
+/** `s` cut to its first `max` characters (code points), `…` marking a cut. */
+function clip(s: string, max: number): string {
+  if (s.length <= max) return s
+  let out = ''
+  let n = 0
+  for (const ch of s) {
+    if (n === max) return `${out}…`
+    out += ch
+    n++
+  }
+  return out
 }
 
 /** The first keys of a response body's root object, for a message. */
 function rootKeys(root: Record<string, unknown>): string {
   const keys = Object.keys(root)
   if (keys.length === 0) return 'an empty object'
-  const shown = keys.slice(0, 5).map((k) => JSON.stringify(k.length > 40 ? `${k.slice(0, 40)}…` : k))
+  const shown = keys.slice(0, 5).map((k) => JSON.stringify(clip(k, 40)))
   return `keys ${shown.join(', ')}${keys.length > 5 ? `, … (${keys.length} in all)` : ''}`
 }
 
@@ -149,7 +163,7 @@ function inlineCount(raw: unknown): number | undefined {
   if (typeof raw === 'string') return strictCount(raw, 'odata.count')
   if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0) return raw
   // Not `String(raw)`: a JSON object with a `"toString"` key fails it with a TypeError.
-  throw new ParseError(`Expected a non-negative integer row count in odata.count, got ${describeJson(raw)}`)
+  throw new ParseError(`Expected a non-negative integer row count in odata.count, got: ${describeJson(raw)}`)
 }
 
 /**

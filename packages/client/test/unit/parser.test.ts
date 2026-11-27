@@ -117,7 +117,7 @@ describe('V3 parser', () => {
   ])('parseV3Collection refuses an odata.count of %j with a ParseError naming its kind', (count, shown) => {
     const body = JSON.stringify({ 'odata.count': count, value: [] })
     expect(() => parseV3Collection(body, { serverTimezone: TZ })).toThrow(
-      new ParseError(`Expected a non-negative integer row count in odata.count, got ${shown}`),
+      new ParseError(`Expected a non-negative integer row count in odata.count, got: ${shown}`),
     )
   })
 
