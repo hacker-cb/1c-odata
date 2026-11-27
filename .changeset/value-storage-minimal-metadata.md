@@ -14,6 +14,8 @@ Where it is unclear whether 1С sends a storage, the heavier format is asked for
 
 Every other read — no index, a type without storages, a `$select` without them, register virtual tables, `raw()` — stays `nometadata`, its request byte-for-byte as before. The parser drops the `<Nav>@navigationLinkUrl` annotations `minimalmetadata` adds (one per navigation property of a row, an expanded entity's included), and keeps the root `odata.metadata` out of the row as it already did, so a row reads the same in either format — a query's `odataMetadata` now carries that URI where it was empty. 1С sends no such annotation in `nometadata` — not even beside an empty expanded reference — so a `nometadata` row from 1С is unchanged; another server's would lose them.
 
+A storage in a tabular part's row (`<Doc>_<Part>_RowType`) still arrives flat — `<X>_Base64Data` alone — until #290.
+
 **Cost:** a read of a type with storages is heavier on the wire — measured on live УТ 11.5 / БП 3.0 at +5 % to +45 %, the navigation links accounting for most of it. A `$select` that leaves storages out keeps the lighter format.
 
 **Migration:** none in code. A row of such a type no longer carries `<X>_Base64Data` as a plain field where it did; read `<X>.base64Data`. Without an index nothing changes: the halves stay flat, `_Base64Data` alone.
