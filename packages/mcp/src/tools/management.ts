@@ -52,7 +52,6 @@ interface AddConnectionArgs {
 /** Body of the `add_connection` tool (extracted to keep the tool callback flat). */
 async function addConnection(
   opts: ManagementToolsOptions,
-  pool: ConnectionPool,
   args: AddConnectionArgs,
   signal: AbortSignal,
 ): Promise<ToolResultBody> {
@@ -87,7 +86,6 @@ async function addConnection(
     byAgent: true,
     signal,
   })
-  pool.refresh(connection)
   return {
     summary: `Connection "${connection}" ${result.overwritten ? 'updated' : 'added'}${passwordNote(result)}.`,
     data: {
@@ -169,7 +167,6 @@ function summarizeCredentialChange(
 /** Body of the `set_credentials` tool (extracted to keep the tool callback flat). */
 async function applyCredentialChange(
   opts: ManagementToolsOptions,
-  pool: ConnectionPool,
   connection: string,
   login: string | undefined,
   password: string | undefined,
@@ -196,8 +193,6 @@ async function applyCredentialChange(
     expected: { baseUrl: existing.baseUrl, login: existing.login, password: storedPassword },
     signal,
   })
-  // Rebuild the cached client (it was wired with the old credentials).
-  pool.refresh(connection)
   return summarizeCredentialChange(connection, result, verified)
 }
 
@@ -205,8 +200,14 @@ async function applyCredentialChange(
  * Connection-management tools. These WRITE the MCP's own config (not the 1С
  * base — data access stays read-only). A password may be supplied but is
  * write-only: it is stored via SecretStore and no tool ever returns it.
+ *
+ * They leave the pool alone: its every `get` compares the connection and its
+ * password with what its client was built from and rebuilds on a change
+ * (#274), so a change here — or in another process — reaches it without a
+ * refresh, and one that changes nothing the client uses (a label) costs no
+ * `$metadata` download. `_pool` stays in the signature the server calls.
  */
-export function registerManagementTools(server: McpServer, pool: ConnectionPool, opts: ManagementToolsOptions): void {
+export function registerManagementTools(server: McpServer, _pool: ConnectionPool, opts: ManagementToolsOptions): void {
   server.registerTool(
     'add_connection',
     {
@@ -245,7 +246,7 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
           ),
       },
     },
-    async (args, { signal }) => toolResult(() => addConnection(opts, pool, args, signal)),
+    async (args, { signal }) => toolResult(() => addConnection(opts, args, signal)),
   )
 
   server.registerTool(
@@ -265,7 +266,6 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
           insecure: opts.insecure ?? false,
           signal,
         })
-        pool.refresh(connection)
         return {
           summary: removed ? `Connection "${connection}" removed.` : `No connection named "${connection}".`,
           data: { connection, removed },
@@ -314,6 +314,6 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
       },
     },
     async ({ connection, login, password }, { signal }) =>
-      toolResult(() => applyCredentialChange(opts, pool, connection, login, password, signal)),
+      toolResult(() => applyCredentialChange(opts, connection, login, password, signal)),
   )
 }
