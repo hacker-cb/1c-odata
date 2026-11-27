@@ -179,7 +179,10 @@ function inlineCount(raw: unknown): number | undefined {
  */
 export function parseV3Single<T>(body: string, opts: ParseOptions): T {
   const parsed = safeParse(body)
-  if (typeof parsed !== 'object' || parsed === null) throw new ParseError('Expected object at root')
+  // An array is no entity: spread into one it would read as `{}` (or `{"0": …}`) with every field missing.
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new ParseError('Expected object at root')
+  }
   const obj = parsed as Record<string, unknown>
   // Strip odata.metadata from the entity payload
   const { 'odata.metadata': _, ...rest } = obj

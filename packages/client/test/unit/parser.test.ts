@@ -22,6 +22,11 @@ describe('V3 parser', () => {
     expect(r.odataMetadata).toContain('Catalog_X')
   })
 
+  it.each(['[]', '[{"Ref_Key":"g"}]'])('parseV3Single refuses an array at the root (%s)', (body) => {
+    expect(() => parseV3Single(body, { serverTimezone: TZ })).toThrow(ParseError)
+    expect(() => parseV3Single(body, { serverTimezone: TZ })).toThrow('Expected object at root')
+  })
+
   it('parseV3Collection converts string odata.count → number', () => {
     const body = JSON.stringify({
       'odata.metadata': 'http://x/$metadata#Catalog_X',
