@@ -11,6 +11,8 @@ import { keychainServiceName, SecretStore, secretKey } from '../../src/secret-st
 const keychain = vi.hoisted(() => ({
   deleteFails: false,
   setFails: false,
+  /** Runs as a password is set — under the data-dir lock, so a test can break the dir after the lock is taken. */
+  onSet: undefined as (() => void) | undefined,
   entries: new Map<string, string>(),
 }))
 
@@ -24,6 +26,7 @@ vi.mock('@napi-rs/keyring', () => ({
       return keychain.entries.get(this.key) ?? null
     }
     setPassword(password: string): void {
+      keychain.onSet?.()
       if (keychain.setFails) throw new Error('Platform secure storage failure: keychain locked')
       keychain.entries.set(this.key, password)
     }
@@ -44,6 +47,7 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'mcp-retarget-'))
   keychain.deleteFails = false
   keychain.setFails = false
+  keychain.onSet = undefined
   keychain.entries.clear()
   vi.stubEnv('ONEC_C_PASSWORD', '')
   saveConfig(dir, { connections: { c: { baseUrl: OLD, login: 'u', serverTimezone: 'Europe/Moscow' } } })
@@ -163,7 +167,8 @@ describe('a password written while the keychain cannot store it (#257)', () => {
       keychain.setFails = true
       await writeNew() // an earlier fallback: 'new' in the file, the config at NEW
       keychain.setFails = false
-      chmodSync(dir, 0o500)
+      // Read-only once the write holds the lock: the keychain takes it, the file copy cannot be deleted.
+      keychain.onSet = () => chmodSync(dir, 0o500)
       try {
         await expect(
           upsertConnection({
@@ -175,7 +180,7 @@ describe('a password written while the keychain cannot store it (#257)', () => {
             password: 'newer',
             overwrite: true,
           }),
-        ).rejects.toThrow()
+        ).rejects.toThrow(/EACCES.*credentials\.json/)
       } finally {
         chmodSync(dir, 0o700)
       }
@@ -191,9 +196,10 @@ describe('a password written while the keychain cannot store it (#257)', () => {
     async () => {
       keychain.entries.set(keychainKey(), 'old')
       keychain.setFails = true
-      chmodSync(dir, 0o500)
+      // Read-only once the write holds the lock: the keychain refuses, and so does the file fallback.
+      keychain.onSet = () => chmodSync(dir, 0o500)
       try {
-        await expect(writeNew()).rejects.toThrow()
+        await expect(writeNew()).rejects.toThrow(/EACCES.*credentials\.json/)
       } finally {
         chmodSync(dir, 0o700)
       }
@@ -265,7 +271,7 @@ describe('an agent’s connection reads only a password stored for its own targe
   it('a login change of the agent’s connection (set_credentials) keeps its password: the key is the server alone', async () => {
     await removeConnection({ dataDir: dir, name: 'c' })
     await agentAdds(EVIL, 'agents')
-    await updateConnectionCredentials({ dataDir: dir, name: 'c', login: 'u2' })
+    await updateConnectionCredentials({ expected: { baseUrl: EVIL, login: 'u' }, dataDir: dir, name: 'c', login: 'u2' })
     expect(loadConfig(dir).connections.c).toMatchObject({ login: 'u2', addedBy: 'agent' })
     expect(await resolved()).toBe('agents')
   })

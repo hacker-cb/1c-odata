@@ -352,7 +352,13 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
     it('updateConnectionCredentials refuses', async () => {
       envPassword()
       await expect(
-        updateConnectionCredentials({ dataDir: dir, name: 'c', password: 'new', insecure: true }),
+        updateConnectionCredentials({
+          expected: { baseUrl: OLD, login: 'u' },
+          dataDir: dir,
+          name: 'c',
+          password: 'new',
+          insecure: true,
+        }),
       ).rejects.toThrow(/ONEC_C_PASSWORD/)
     })
   })
