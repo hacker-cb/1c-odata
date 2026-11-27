@@ -98,6 +98,21 @@ function assertEntitySchema(v: unknown, filePath: string, path: string): void {
     if (!Array.isArray(v.valueStorages)) fail(filePath, `${path}.valueStorages`, 'array', v.valueStorages)
     for (const [i, x] of v.valueStorages.entries()) assertString(x, filePath, `${path}.valueStorages[${i}]`)
   }
+  if (v.navigation !== undefined) {
+    assertPlainObject(v.navigation, filePath, `${path}.navigation`)
+    for (const [name, nav] of Object.entries(v.navigation))
+      assertNavigationSchema(nav, filePath, `${path}.navigation.${name}`)
+  }
+}
+
+/**
+ * A navigation entry's shape. A `type` naming no schema of the index is no refusal: the expanded value reads
+ * schema-less (`schema-lookup.ts`), and one dangling navigation is no reason to fail the whole index.
+ */
+function assertNavigationSchema(v: unknown, filePath: string, path: string): void {
+  assertPlainObject(v, filePath, path)
+  assertString(v.type, filePath, `${path}.type`)
+  if (v.collection !== undefined && v.collection !== true) fail(filePath, `${path}.collection`, 'true', v.collection)
 }
 
 function assertDataShape(v: unknown, filePath: string, path: string): void {

@@ -125,6 +125,40 @@ describe('loadMetadataIndex', () => {
     await expect(loadMetadataIndex(path)).rejects.toThrow(/enums\.E\.members/)
   })
 
+  describe('navigation (#283)', () => {
+    const withNavigation = (navigation: unknown) =>
+      writeJson('nav.json', {
+        schemaNamespace: 'X',
+        schemas: { E: { properties: {}, navigation }, T: { properties: {} } },
+        entitySetToType: {},
+      })
+
+    it('loads an index whose schema records navigations, a target it lacks included', async () => {
+      const navigation = {
+        Контрагент: { type: 'T' },
+        Строки: { type: 'T', collection: true },
+        Висячая: { type: 'Нет' },
+      }
+      const idx = await loadMetadataIndex(await withNavigation(navigation))
+      expect(idx.schemas.E?.navigation).toEqual(navigation)
+    })
+
+    it.each([
+      ['not an object', [], /schemas\.E\.navigation: expected object, got array/],
+      ['an entry not an object', { N: 'T' }, /navigation\.N: expected object, got string/],
+      ['a type not a string', { N: { type: 1 } }, /navigation\.N\.type: expected string, got number/],
+      [
+        'a collection other than true',
+        { N: { type: 'T', collection: false } },
+        /navigation\.N\.collection: expected true/,
+      ],
+    ])('throws MetadataError on navigation %s', async (_, navigation, message) => {
+      const path = await withNavigation(navigation)
+      await expect(loadMetadataIndex(path)).rejects.toThrow(MetadataError)
+      await expect(loadMetadataIndex(path)).rejects.toThrow(message)
+    })
+  })
+
   it('throws MetadataError on file not found', async () => {
     await expect(loadMetadataIndex(join(tmp, 'does-not-exist.json'))).rejects.toThrow(MetadataError)
   })

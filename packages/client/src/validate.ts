@@ -23,6 +23,26 @@ export interface EntitySchema {
   properties: Record<string, PropertySchema>
   /** ValueStorage bases (group `<X>` + `<X>_Base64Data` + `<X>_Type` into ValueStorage). */
   valueStorages?: string[]
+  /**
+   * Navigation properties by name — what an `$expand` of that name brings
+   * into the row. Absent where the type has none, and in an index built
+   * before it was recorded: an expanded entity is then read schema-less.
+   */
+  navigation?: Record<string, NavigationSchema>
+}
+
+/**
+ * A navigation property of an {@link EntitySchema}: the EntityType its
+ * `$expand` brings — a local name, keyed like `MetadataIndex.schemas` — and
+ * `collection: true` where it brings a collection of them (absent for a single
+ * entity, the only kind 1С declares). A `type` the index holds no schema for
+ * reads the expanded value schema-less.
+ *
+ * @public
+ */
+export interface NavigationSchema {
+  type: string
+  collection?: true
 }
 
 /**

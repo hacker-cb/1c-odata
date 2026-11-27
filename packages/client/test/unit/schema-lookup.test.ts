@@ -13,7 +13,14 @@ import { ODataV3Client } from '../../src/index.js'
 import { parseMetadataIndex } from '../../src/load-metadata-index.js'
 import { parseOptsFor, parseV3Collection, parseV3Single } from '../../src/parser.js'
 import type { FilterExpression } from '../../src/query/filter-internal.js'
-import { schemaOfRef, schemaOfSet, schemaOfType, typeNameOfRef, typeNameOfSet } from '../../src/schema-lookup.js'
+import {
+  schemaOfRef,
+  schemaOfSet,
+  schemaOfType,
+  typeNameOfNavigation,
+  typeNameOfRef,
+  typeNameOfSet,
+} from '../../src/schema-lookup.js'
 import type { MetadataIndex } from '../../src/validate.js'
 import { transformDatesToWire } from '../../src/write-transform.js'
 
@@ -79,6 +86,30 @@ describe('schema-lookup', () => {
     expect(typeNameOfRef(undefined, 'StandardODATA.Catalog_X')).toBeUndefined()
     expect(schemaOfSet(undefined, 'Catalog_X')).toBeUndefined()
     expect(schemaOfType(index, undefined)).toBeUndefined()
+  })
+})
+
+describe('typeNameOfNavigation (#283)', () => {
+  const schema = {
+    properties: {},
+    navigation: {
+      Строка: { type: 'Catalog_X_Товары' },
+      Висячая: { type: 'Нет' },
+      Унаследованная: { type: 'toString' },
+    },
+  }
+
+  it("finds a navigation's target by own keys where the index holds its schema", () => {
+    expect(typeNameOfNavigation(index, schema, 'Строка')).toBe('Catalog_X_Товары')
+  })
+
+  it('answers undefined for a name it does not list, an inherited one, a dangling or inherited target, no index', () => {
+    expect(typeNameOfNavigation(index, schema, 'Другая')).toBeUndefined()
+    expect(typeNameOfNavigation(index, schema, 'constructor')).toBeUndefined()
+    expect(typeNameOfNavigation(index, schema, 'Висячая')).toBeUndefined()
+    expect(typeNameOfNavigation(index, schema, 'Унаследованная')).toBeUndefined()
+    expect(typeNameOfNavigation(index, { properties: {} }, 'Строка')).toBeUndefined()
+    expect(typeNameOfNavigation(undefined, schema, 'Строка')).toBeUndefined()
   })
 })
 

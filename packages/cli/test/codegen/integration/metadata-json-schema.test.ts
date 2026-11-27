@@ -123,4 +123,31 @@ describe('__metadata.json schemas section', () => {
     const meta = JSON.parse(r.files.get('__metadata.json') ?? '{}')
     expect(meta.entitySetToType).toEqual({ Catalog_X: 'Catalog_X' })
   })
+
+  it('emits navigation after valueStorages — a 1С navigation as its target type alone (#283)', () => {
+    const edmx = `<?xml version="1.0"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="3.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="StandardODATA" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <EntityType Name="Catalog_X">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+        <Property Name="File" Type="Edm.Stream" Nullable="true"/>
+        <Property Name="File_Base64Data" Type="Edm.Binary" Nullable="true"/>
+        <Property Name="File_Type" Type="Edm.String" Nullable="true"/>
+        <Property Name="Владелец_Key" Type="Edm.Guid" Nullable="true"/>
+        <NavigationProperty Name="Владелец" Relationship="StandardODATA.Catalog_X_Владелец" FromRole="Begin" ToRole="End"/>
+      </EntityType>
+      <Association Name="Catalog_X_Владелец">
+        <End Role="Begin" Type="StandardODATA.Catalog_X" Multiplicity="*"/>
+        <End Role="End" Type="StandardODATA.Catalog_X" Multiplicity="0..1"/>
+      </Association>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`
+    const json = generate({ metadata: edmx }).files.get('__metadata.json') ?? '{}'
+    const meta = JSON.parse(json)
+    expect(Object.keys(meta.schemas.Catalog_X)).toEqual(['properties', 'valueStorages', 'navigation'])
+    expect(meta.schemas.Catalog_X.navigation).toEqual({ Владелец: { type: 'Catalog_X' } })
+  })
 })

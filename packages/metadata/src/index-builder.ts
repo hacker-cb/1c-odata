@@ -3,12 +3,14 @@ import {
   DEFAULT_SHAPE,
   type EntitySchema,
   type MetadataIndex,
+  type NavigationSchema,
   type PropertySchema,
 } from '@1c-odata/client'
 import { setOwn } from '@1c-odata/client/internal'
 import { computeClosure } from './analysis/closure.js'
 import { detectValueStorage } from './analysis/value-storage.js'
 import type { EdmxModel } from './parser/ast.js'
+import { navigationTargetEnd } from './parser/edmx-parser.js'
 
 /**
  * Build per-property constraint records for every EntityType + ComplexType.
@@ -36,7 +38,37 @@ function buildSchemas(model: EdmxModel, keep?: (typeName: string) => boolean): R
     }
     setOwn(out, t.name, schema)
   }
+  addNavigation(model, out)
   return out
+}
+
+/**
+ * Record each EntityType's navigation properties in its schema — after every
+ * schema exists, a target may come later in the EDMX. Only a navigation whose
+ * target resolves to a type `schemas` holds is written (the filter's closure
+ * keeps every target of a kept entity): one naming no schema would read
+ * schema-less either way. `collection: true` where the target end's
+ * multiplicity is `*`; 1С declares every navigation `0..1`, so none carries it.
+ * The key goes after `valueStorages`, leaving the rest of `__metadata.json`
+ * byte-for-byte as it was.
+ */
+function addNavigation(model: EdmxModel, schemas: Record<string, EntitySchema>): void {
+  const prefix = `${model.schemaNamespace}.`
+  const assocByName = new Map(model.associations.map((a) => [a.name, a]))
+  for (const t of model.entityTypes) {
+    if (!Object.hasOwn(schemas, t.name)) continue
+    const navigation: Record<string, NavigationSchema> = {}
+    let any = false
+    for (const np of t.navigationProperties) {
+      const end = navigationTargetEnd(np, assocByName)
+      if (end === undefined || !end.type.startsWith(prefix)) continue
+      const target = end.type.slice(prefix.length)
+      if (!Object.hasOwn(schemas, target)) continue
+      setOwn(navigation, np.name, end.multiplicity === '*' ? { type: target, collection: true } : { type: target })
+      any = true
+    }
+    if (any) (schemas[t.name] as EntitySchema).navigation = navigation
+  }
 }
 
 /**

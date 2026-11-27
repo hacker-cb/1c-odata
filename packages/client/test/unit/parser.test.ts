@@ -569,6 +569,100 @@ describe('schema-aware parsing', () => {
     expect(r.Owner.Дата).toBeInstanceOf(Date) // regex heuristic still applies
   })
 
+  describe('an expanded entity is parsed with its target schema (#283)', () => {
+    const navIndex: MetadataIndex = {
+      schemaNamespace: 'StandardODATA',
+      schemas: {
+        Document_X: {
+          properties: {
+            Ref_Key: { type: 'Edm.Guid', nullable: false },
+            Контрагент_Key: { type: 'Edm.Guid', nullable: true },
+          },
+          navigation: {
+            Контрагент: { type: 'Catalog_Контрагенты' },
+            Строки: { type: 'Catalog_Контрагенты', collection: true },
+            Висячая: { type: 'Catalog_Нет' },
+          },
+        },
+        Catalog_Контрагенты: {
+          properties: {
+            Ref_Key: { type: 'Edm.Guid', nullable: false },
+            Код: { type: 'Edm.Int64', nullable: false },
+            Дата: { type: 'Edm.DateTime', nullable: true },
+            Описание: { type: 'Edm.String', nullable: true },
+            Файл_Base64Data: { type: 'Edm.Binary', nullable: true },
+            Файл_Type: { type: 'Edm.String', nullable: true },
+          },
+          valueStorages: ['Файл'],
+        },
+      },
+      entitySetToType: { Document_X: 'Document_X', Catalog_Контрагенты: 'Catalog_Контрагенты' },
+    }
+    const single = (row: Record<string, unknown>, int64Mode: 'number' | 'bigint' | 'string' = 'number') =>
+      parseV3Single<Record<string, Record<string, unknown>>>(JSON.stringify(row), {
+        serverTimezone: 'UTC',
+        typeHint: 'Document_X',
+        metadataIndex: navIndex,
+        shape: { int64Mode },
+      })
+
+    it('converts Edm.Int64, Edm.DateTime and groups ValueStorage of the expanded entity', () => {
+      const r = single({
+        Ref_Key: 'g',
+        Контрагент: {
+          Ref_Key: 'k',
+          Код: '5',
+          Дата: '2025-03-16T00:00:00',
+          Описание: '2025-03-16T00:00:00',
+          Файл_Base64Data: 'aGk=',
+          Файл_Type: 'image/png',
+        },
+      })
+      expect(r.Контрагент).toEqual({
+        Ref_Key: 'k',
+        Код: 5,
+        Дата: new Date('2025-03-16T00:00:00Z'),
+        // An Edm.String looking like a date stays a string: the schema, not the heuristic, decides.
+        Описание: '2025-03-16T00:00:00',
+        Файл: { contentType: 'image/png', base64Data: 'aGk=' },
+      })
+      expect(single({ Контрагент: { Код: '5' } }, 'bigint').Контрагент?.Код).toBe(5n)
+      expect(single({ Контрагент: { Код: '5' } }, 'string').Контрагент?.Код).toBe('5')
+    })
+
+    it('refuses an Edm.Int64 or an Edm.DateTime of the expanded entity that breaks its schema', () => {
+      expect(() => single({ Контрагент: { Код: '12x' } })).toThrow(ParseError)
+      expect(() => single({ Контрагент: { Код: '12x' } })).toThrow(/Edm\.Int64 field Код/)
+      expect(() => single({ Контрагент: { Дата: '2026-02-30T00:00:00' } })).toThrow(/Edm\.DateTime field Дата/)
+    })
+
+    it('parses each entity of an expanded collection with the target schema, in a collection response too', () => {
+      const r = parseV3Collection<Record<string, unknown[]>>(
+        JSON.stringify({ value: [{ Строки: [{ Код: '1' }, { Код: '2' }] }] }),
+        { serverTimezone: 'UTC', typeHint: 'Document_X', metadataIndex: navIndex },
+      )
+      expect(r.value[0]?.Строки).toEqual([{ Код: 1 }, { Код: 2 }])
+    })
+
+    it('keeps null for an expanded reference to nothing', () => {
+      expect(single({ Контрагент: null }).Контрагент).toBeNull()
+    })
+
+    it('reads an expanded entity schema-less where the target has no schema, or the index records no navigation', () => {
+      expect(single({ Висячая: { Код: '12x' } }).Висячая).toEqual({ Код: '12x' })
+      const { navigation: _, ...withoutNavigation } = navIndex.schemas.Document_X as NonNullable<
+        MetadataIndex['schemas'][string]
+      >
+      const old: MetadataIndex = { ...navIndex, schemas: { ...navIndex.schemas, Document_X: withoutNavigation } }
+      const r = parseV3Single<Record<string, Record<string, unknown>>>(JSON.stringify({ Контрагент: { Код: '5' } }), {
+        serverTimezone: 'UTC',
+        typeHint: 'Document_X',
+        metadataIndex: old,
+      })
+      expect(r.Контрагент?.Код).toBe('5')
+    })
+  })
+
   it('converts Edm.DateTime sentinel to null when shape.dateMode=date (default)', () => {
     const body = JSON.stringify({
       value: [{ Ref_Key: 'a', Date: '0001-01-01T00:00:00' }],

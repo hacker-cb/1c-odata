@@ -48,6 +48,25 @@ describe('integration: __metadata.json ≡ buildMetadataIndex (single source of 
         }, 120_000)
       }
 
+      // Navigations (#283): every one of the snapshot's NavigationProperties resolves in 1С's EDMX, so each
+      // lands in the index — as its target's local name, never `collection` (1С declares every end `0..1`).
+      it('records every NavigationProperty of the snapshot, a single entity each', () => {
+        const built = buildMetadataIndex(model)
+        const prefix = `${model.schemaNamespace}.`
+        let declared = 0
+        let recorded = 0
+        for (const t of model.entityTypes) {
+          const navigation = built.schemas[t.name]?.navigation ?? {}
+          declared += t.navigationProperties.length
+          recorded += Object.keys(navigation).length
+          for (const np of t.navigationProperties) {
+            expect(navigation[np.name]).toEqual({ type: np.resolvedTargetType?.slice(prefix.length) })
+          }
+        }
+        expect(declared).toBeGreaterThan(5000)
+        expect(recorded).toBe(declared)
+      }, 120_000)
+
       // With `include`, the emitted `__metadata.json` must be narrowed to the
       // SAME dependency closure as the generated `.ts` — i.e. exactly what
       // `buildMetadataIndex(model, { filter })` produces for the same filter,

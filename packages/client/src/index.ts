@@ -67,6 +67,7 @@ export { normalizeBaseUrl } from './url-builder.js'
 export type {
   EntitySchema,
   MetadataIndex,
+  NavigationSchema,
   PropertySchema,
   ValidationErrorOptions,
   ValidationIssue,
