@@ -35,6 +35,7 @@ describe('readFormat (#289)', () => {
     [['Ref_Key', 'Файл'], MINIMALMETADATA_JSON],
     [['Файл_Base64Data'], MINIMALMETADATA_JSON],
     [[' Файл_Type '], MINIMALMETADATA_JSON],
+    [['Ref_Key,Файл'], MINIMALMETADATA_JSON],
     [['Ref_Key'], NOMETADATA_JSON],
     [['Владелец/Файл'], NOMETADATA_JSON],
   ])('a row of a type with a storage, $select %j → %s', (select, format) => {
@@ -47,6 +48,10 @@ describe('readFormat (#289)', () => {
     [['Ref_Key', 'Логотип/*'], MINIMALMETADATA_JSON],
     [['Ref_Key', 'Логотип/Файл'], MINIMALMETADATA_JSON],
     [['Ref_Key', 'Логотип/Файл_Base64Data'], MINIMALMETADATA_JSON],
+    [['Ref_Key', 'Логотип/**'], MINIMALMETADATA_JSON],
+    [['*'], MINIMALMETADATA_JSON],
+    [['**'], MINIMALMETADATA_JSON],
+    [['Ref_Key,Логотип/Файл'], MINIMALMETADATA_JSON],
     [['Ref_Key', 'Логотип/Ref_Key'], NOMETADATA_JSON],
     [['Ref_Key'], NOMETADATA_JSON],
   ])('an $expand reaching a type with a storage, $select %j → %s', (select, format) => {
@@ -60,6 +65,27 @@ describe('readFormat (#289)', () => {
     expect(readFormat(index, 'Catalog_Файлы', { select: ['Владелец/Логотип'], expand: ['Владелец/Логотип'] })).toBe(
       MINIMALMETADATA_JSON,
     )
+    // `Владелец` named whole keeps the `Логотип` expanded inside it whole too.
+    expect(readFormat(index, 'Catalog_Файлы', { select: ['Владелец'], expand: ['Владелец/Логотип'] })).toBe(
+      MINIMALMETADATA_JSON,
+    )
     expect(readFormat(index, 'Catalog_Контрагенты', { expand: ['Висячая', 'Нет', ''] })).toBe(NOMETADATA_JSON)
+  })
+
+  it('reads `*` in an $expand as every navigation of its level, and a comma inside an entry as a list', () => {
+    expect(readFormat(index, 'Catalog_Контрагенты', { select: ['Ref_Key'], expand: ['*'] })).toBe(NOMETADATA_JSON)
+    expect(readFormat(index, 'Catalog_Контрагенты', { expand: ['*'] })).toBe(MINIMALMETADATA_JSON)
+    expect(readFormat(index, 'Catalog_Файлы', { select: ['Ref_Key'], expand: ['Владелец/*'] })).toBe(NOMETADATA_JSON)
+    // `Владелец/*` keeps `Владелец` whole, the entities expanded inside it included.
+    expect(readFormat(index, 'Catalog_Файлы', { expand: ['Владелец/*'], select: ['Ref_Key', 'Владелец/*'] })).toBe(
+      MINIMALMETADATA_JSON,
+    )
+    expect(readFormat(index, 'Catalog_Файлы', { expand: ['Владелец/*'], select: ['Владелец/Логотип'] })).toBe(
+      MINIMALMETADATA_JSON,
+    )
+    expect(readFormat(index, 'Catalog_Контрагенты', { select: ['Ref_Key'], expand: ['Висячая,Логотип'] })).toBe(
+      NOMETADATA_JSON,
+    )
+    expect(readFormat(index, 'Catalog_Контрагенты', { expand: ['Висячая,Логотип'] })).toBe(MINIMALMETADATA_JSON)
   })
 })

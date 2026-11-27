@@ -5,10 +5,9 @@ import { InvalidArgumentError } from '../errors.js'
 import type { ODataV3FunctionsBase, WithInstanceRef } from '../functions.js'
 import { requestWithRetry } from '../http/retry.js'
 import { request, requestStream } from '../http/transport.js'
-import { NOMETADATA_JSON } from '../read-format.js'
 import { RegisterHelper } from '../register.js'
 import { schemaOfSet } from '../schema-lookup.js'
-import { type EntityKey, normalizeBaseUrl } from '../url-builder.js'
+import { type EntityKey, NOMETADATA_JSON, normalizeBaseUrl } from '../url-builder.js'
 import { type EntitySchema, type MetadataIndex, ValidationError, validateEntity } from '../validate.js'
 import { bigintToStringReplacer, transformDatesToWire, transformDateValuesUntyped } from '../write-transform.js'
 import type { ClientOptions, RequestOptions } from './options.js'
@@ -273,7 +272,7 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
       {
         method: 'GET',
         url,
-        headers: { ...this.baseHeaders(), Accept: accept },
+        headers: this.readHeaders(accept),
         ...(callOpts.signal !== undefined ? { signal: callOpts.signal } : {}),
       },
       this.callTransportOpts(callOpts),
@@ -309,9 +308,13 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     // once it conflicts with the one undici computes — e.g. behind a ProxyAgent.
     // For a body-less write we keep an explicit `Content-Length: 0` (there is no
     // body for undici to measure), which 1С's IIS host wants to avoid a 411.
-    const libraryManaged: Record<string, string> =
-      transformed !== undefined ? { 'Content-Type': 'application/json' } : { 'Content-Length': '0' }
-    const headers = mergeHeadersCaseInsensitive({ ...this.baseHeaders(), Accept: accept }, extraHeaders, libraryManaged)
+    // A reply `readFormat` asked `minimalmetadata` for is library-managed too: a `create()` carries it in
+    // `Accept` alone, and a `withHeader('Accept', …)` over it would cost the ValueStorage its `_Type` (#289).
+    const libraryManaged: Record<string, string> = {
+      ...(transformed !== undefined ? { 'Content-Type': 'application/json' } : { 'Content-Length': '0' }),
+      ...(accept !== NOMETADATA_JSON ? { Accept: accept } : {}),
+    }
+    const headers = mergeHeadersCaseInsensitive(this.baseHeaders(), extraHeaders, libraryManaged)
     if (transformed !== undefined) {
       // Content-Length is platform-managed on a body write — drop any caller-set
       // one (from withHeader/extraHeaders) so the forbidden header undici can
@@ -391,7 +394,7 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
       {
         method: 'GET',
         url,
-        headers: { ...this.baseHeaders(), Accept: accept },
+        headers: this.readHeaders(accept),
         ...(callOpts.signal !== undefined ? { signal: callOpts.signal } : {}),
       },
       this.callTransportOpts(callOpts),
@@ -430,6 +433,17 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
       this.callTransportOpts(callOpts),
     )
     return result.response
+  }
+
+  /**
+   * The headers of a GET: {@link baseHeaders}, its `Accept` replaced —
+   * case-insensitively — only where `readFormat` asked for another format than
+   * the default; a default read sends `baseHeaders()` exactly as it did.
+   */
+  private readHeaders(accept: string): Record<string, string> {
+    return accept === NOMETADATA_JSON
+      ? this.baseHeaders()
+      : mergeHeadersCaseInsensitive(this.baseHeaders(), { Accept: accept })
   }
 
   protected baseHeaders(): Record<string, string> {

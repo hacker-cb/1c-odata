@@ -3,8 +3,17 @@
 import { InvalidArgumentError } from './errors.js'
 import { formatNumberLiteral } from './format-number.js'
 import type { QueryBuilder } from './query/builder.js'
-import { NOMETADATA_JSON } from './read-format.js'
 import { formatInZone } from './timezone.js'
+
+/** The JSON the client reads by default: no annotations at all. */
+export const NOMETADATA_JSON = 'application/json;odata=nometadata'
+
+/**
+ * The JSON a read asks for where its reply carries a ValueStorage
+ * (`readFormat`): in `nometadata` 1С sends a storage's `<X>_Base64Data` but
+ * withholds its `<X>_Type` (#289).
+ */
+export const MINIMALMETADATA_JSON = 'application/json;odata=minimalmetadata'
 
 /**
  * An entity key: a `Ref_Key` GUID string, or a composite key — an object of
@@ -182,8 +191,10 @@ export function formatOrderBy(orderBy: readonly { field: string; dir?: 'asc' | '
 /**
  * The names of a `$select` / `$expand` list, trimmed, blank ones dropped. An
  * entry untyped code left `undefined` or `null` is blank too, as `join` wrote it.
+ *
+ * @internal
  */
-function nonBlank(names: readonly string[] | undefined): readonly string[] {
+export function nonBlank(names: readonly string[] | undefined): readonly string[] {
   if (names === undefined || names.length === 0) return []
   return names.map((n) => String(n ?? '').trim()).filter((n) => n !== '')
 }

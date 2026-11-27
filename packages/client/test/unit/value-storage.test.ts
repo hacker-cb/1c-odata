@@ -133,9 +133,18 @@ describe('a read whose reply carries a ValueStorage asks for minimalmetadata (#2
         record(request)
         return HttpResponse.json({ 'odata.metadata': `${baseUrl}/$metadata#Catalog_Файлы`, value: [row] })
       }),
-      http.get(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(/, ({ request }) => (record(request), single())),
-      http.post(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B$/, ({ request }) => (record(request), single())),
-      http.patch(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(/, ({ request }) => (record(request), single())),
+      http.get(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(/, ({ request }) => {
+        record(request)
+        return single()
+      }),
+      http.post(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B$/, ({ request }) => {
+        record(request)
+        return single()
+      }),
+      http.patch(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(/, ({ request }) => {
+        record(request)
+        return single()
+      }),
     )
   })
   const client = (index?: MetadataIndex) =>
@@ -161,6 +170,15 @@ describe('a read whose reply carries a ValueStorage asks for minimalmetadata (#2
       ['GET', MINIMAL, MINIMAL],
       ['PATCH', MINIMAL, MINIMAL],
       ['POST', null, MINIMAL],
+    ])
+  })
+
+  it('keeps minimalmetadata on create() over a withHeader(Accept), and raw() in nometadata', async () => {
+    await client(metadataIndex).entity('Catalog_Файлы').withHeader('accept', NONE).create({})
+    await client(metadataIndex).query('Catalog_Файлы').raw()
+    expect(seen).toEqual([
+      ['POST', null, MINIMAL],
+      ['GET', NONE, NONE],
     ])
   })
 

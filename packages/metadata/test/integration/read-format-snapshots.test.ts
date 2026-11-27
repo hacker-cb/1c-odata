@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { MetadataIndex } from '@1c-odata/client'
-import { MINIMALMETADATA_JSON, NOMETADATA_JSON, readFormat } from '@1c-odata/client/internal'
+import { MINIMALMETADATA_JSON, NOMETADATA_JSON, readFormat, typeNameOfSet } from '@1c-odata/client/internal'
 import { describe, expect, it } from 'vitest'
 import { buildMetadataIndex, parseEdmx } from '../../src/index.js'
 
@@ -38,8 +38,7 @@ describe('integration: readFormat over the snapshot indexes (#289)', () => {
   for (const c of CASES) {
     describe(c.file, () => {
       const index: MetadataIndex = buildMetadataIndex(parseEdmx(readFileSync(resolve(snapshotsDir, c.file), 'utf8')))
-      const typeOf = (set: string) =>
-        Object.hasOwn(index.entitySetToType, set) ? index.entitySetToType[set] : undefined
+      const typeOf = (set: string) => typeNameOfSet(index, set)
 
       it('reads a set with a storage in minimalmetadata — a whole row, its base or a half selected', () => {
         const type = typeOf(c.storage.set)

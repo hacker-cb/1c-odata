@@ -32,21 +32,9 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
     return metadataIndex !== undefined && entity !== undefined ? { metadataIndex, entity } : undefined
   }
 
-  /**
-   * The JSON format this query reads in — `minimalmetadata` where its reply
-   * carries a ValueStorage, whose `_Type` 1С withholds in `nometadata` (#289).
-   */
-  private format(): string {
-    const index = this.client.metadataIndex
-    return readFormat(index, typeNameOfSet(index, this.entitySet), {
-      select: this.state.select,
-      expand: this.state.expand,
-    })
-  }
-
   /** Execute the query and return parsed `{ value, count?, odataMetadata }`. */
   async get(opts: RequestOptions = {}): Promise<{ odataMetadata: string; value: T[]; count?: number }> {
-    const format = this.format()
+    const format = queryFormat(this.client, this)
     const url = buildV3CollectionUrl(this.client.baseUrl, this, format)
     const raw = await this.client.transportGet(url, opts, format)
     return parseV3Collection<T>(raw.body, parseOptsFor(this.client, this.entitySet))
@@ -54,9 +42,8 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
 
   /** Escape hatch — return native `Response` without parsing. */
   async raw(opts: RequestOptions = {}): Promise<Response> {
-    const format = this.format()
-    const url = buildV3CollectionUrl(this.client.baseUrl, this, format)
-    return this.client.transportFetch(url, opts, format)
+    const url = buildV3CollectionUrl(this.client.baseUrl, this)
+    return this.client.transportFetch(url, opts)
   }
 
   /**
@@ -137,4 +124,14 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
     Object.assign(this.state, other.state)
     return this
   }
+}
+
+/**
+ * The JSON format a query reads in — `minimalmetadata` where its reply carries
+ * a ValueStorage, whose `_Type` 1С withholds in `nometadata` (#289). `raw()`
+ * keeps `nometadata`: its caller reads the body as it always came.
+ */
+function queryFormat(client: ODataV3Client<unknown>, q: V3QueryBuilder<unknown>): string {
+  const index = client.metadataIndex
+  return readFormat(index, typeNameOfSet(index, q.entitySet), { select: q.state.select, expand: q.state.expand })
 }

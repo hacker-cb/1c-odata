@@ -1,21 +1,10 @@
 // packages/client/src/read-format.ts
 
 import { schemaOfType, typeNameOfNavigation } from './schema-lookup.js'
+import { MINIMALMETADATA_JSON, NOMETADATA_JSON, nonBlank } from './url-builder.js'
 import type { EntitySchema, MetadataIndex } from './validate.js'
 
-/** The JSON the client reads by default: no annotations at all. */
-export const NOMETADATA_JSON = 'application/json;odata=nometadata'
-
-/**
- * The JSON a read asks for where its reply carries a ValueStorage: in
- * `nometadata` 1С sends a storage's `<X>_Base64Data` but withholds its
- * `<X>_Type`, so the parser could never group the two into `<X>` (#289).
- * `minimalmetadata` brings `_Type` at the price of an `odata.metadata` in the
- * root and a `<Nav>@navigationLinkUrl` per navigation in each row — both
- * dropped by the parser — measured at +5–45 % on sets with storages and up to
- * +130 % on registers, which is why it is asked for only where needed.
- */
-export const MINIMALMETADATA_JSON = 'application/json;odata=minimalmetadata'
+export { MINIMALMETADATA_JSON, NOMETADATA_JSON }
 
 /** The `$select` / `$expand` of a read — the query's, or none for a single entity. */
 export interface ReadShape {
@@ -25,15 +14,25 @@ export interface ReadShape {
 
 /**
  * The JSON format to read a reply of `typeName` in — `$format` and `Accept`
- * alike: {@link MINIMALMETADATA_JSON} where the index says the reply carries a
- * ValueStorage, {@link NOMETADATA_JSON} otherwise, and always without an index
- * or for a type it does not hold (a register virtual table among them).
+ * alike. In `nometadata` 1С sends a ValueStorage's `<X>_Base64Data` but
+ * withholds its `<X>_Type`, so the parser could never group the two into `<X>`
+ * (#289); `minimalmetadata` brings `_Type` at the price of an `odata.metadata`
+ * in the root and a `<Nav>@navigationLinkUrl` per navigation in each row, both
+ * dropped by the parser — measured at +5–45 % on sets with storages and up to
+ * +130 % on registers, which is why it is asked for only where a storage is in
+ * the reply. Without an index, or for a type it does not hold (a register
+ * virtual table among them): {@link NOMETADATA_JSON}.
  *
- * A storage is in the reply where the row's type has one and the `$select` is
- * empty, `*` / `**`, or names a storage's base or either half; or where an
- * `$expand` path reaches (through `EntitySchema.navigation`) a type that has
- * one and the `$select` keeps that entity whole (it is empty, or names the path
- * itself or `<path>/*`) or names a storage of it (`<path>/<base or half>`).
+ * A storage is in the reply where an entity of it comes back with one:
+ * - the row, where its type has a storage and the `$select` is empty, holds
+ *   `*` / `**`, or names a storage's base or either half;
+ * - an entity an `$expand` path reaches through `EntitySchema.navigation` (`*`
+ *   reaching every navigation of its level), where its type has a storage and
+ *   the `$select` keeps it whole — is empty, holds a root `*` / `**`, or names
+ *   the path, one of its ancestors, or `<that>/*` / `<that>/**` — or names a
+ *   storage of it (`<path>/<base or half>`).
+ * Where it is unclear whether 1С sends a storage, the heavier format is asked
+ * for: it costs bytes, the other costs the field.
  */
 export function readFormat(
   index: MetadataIndex | undefined,
@@ -45,38 +44,69 @@ export function readFormat(
   const select = names(shape.select)
   if (carriesStorage(root, select, '')) return MINIMALMETADATA_JSON
   for (const path of names(shape.expand)) {
-    let schema: EntitySchema | undefined = root
-    let prefix = ''
-    for (const segment of path.split('/')) {
-      const target = typeNameOfNavigation(index, schema, segment)
-      schema = schemaOfType(index, target)
-      if (schema === undefined) break
-      prefix = prefix === '' ? segment : `${prefix}/${segment}`
-      if (carriesStorage(schema, select, prefix)) return MINIMALMETADATA_JSON
-    }
+    const segments = path.split('/').map((s) => s.trim())
+    if (expandCarriesStorage(index, root, segments, '', select)) return MINIMALMETADATA_JSON
   }
   return NOMETADATA_JSON
 }
 
+/** Whether an entity the `$expand` path `segments` reaches from `schema` comes back with a storage. */
+function expandCarriesStorage(
+  index: MetadataIndex,
+  schema: EntitySchema,
+  segments: readonly string[],
+  prefix: string,
+  select: readonly string[],
+): boolean {
+  const [segment, ...rest] = segments
+  if (segment === undefined || segment === '') return false
+  const navs = segment === '*' ? Object.keys(schema.navigation ?? {}) : [segment]
+  for (const nav of navs) {
+    const target = schemaOfType(index, typeNameOfNavigation(index, schema, nav))
+    if (target === undefined) continue
+    const path = prefix === '' ? nav : `${prefix}/${nav}`
+    if (carriesStorage(target, select, path) || expandCarriesStorage(index, target, rest, path, select)) return true
+  }
+  return false
+}
+
 /**
- * Whether the entity at `prefix` (`''` for the row itself, else an `$expand`
+ * Whether the entity at `path` (`''` for the row itself, else an `$expand`
  * path) comes back with one of `schema`'s storages under `select`.
  */
-function carriesStorage(schema: EntitySchema, select: readonly string[], prefix: string): boolean {
+function carriesStorage(schema: EntitySchema, select: readonly string[], path: string): boolean {
   const storages = schema.valueStorages ?? []
   if (storages.length === 0) return false
-  if (select.length === 0) return true
-  const at = prefix === '' ? '' : `${prefix}/`
-  if (prefix !== '' && select.includes(prefix)) return true
+  if (select.length === 0 || keptWhole(select, path)) return true
+  const at = path === '' ? '' : `${path}/`
   const level = select
     .filter((n) => n.startsWith(at) && !n.slice(at.length).includes('/'))
     .map((n) => n.slice(at.length))
-  if (level.includes('*') || (prefix === '' && level.includes('**'))) return true
   return storages.some((b) => level.includes(b) || level.includes(`${b}_Base64Data`) || level.includes(`${b}_Type`))
 }
 
-/** The names of a `$select` / `$expand` list, trimmed, blank ones dropped — as the URL writes them. */
+/** Whether `select` keeps the entity at `path` whole: a root wildcard, or the path or an ancestor named bare or with `/*` / `/**`. */
+function keptWhole(select: readonly string[], path: string): boolean {
+  if (select.includes('*') || select.includes('**')) return true
+  if (path === '') return false
+  const segments = path.split('/')
+  for (let i = 1; i <= segments.length; i++) {
+    const q = segments.slice(0, i).join('/')
+    if (select.includes(q) || select.includes(`${q}/*`) || select.includes(`${q}/**`)) return true
+  }
+  return false
+}
+
+/**
+ * The names of a `$select` / `$expand` list as 1С reads them from the URL: the
+ * list's entries (`nonBlank`, as the URL writes them) joined by commas, so an
+ * entry holding several (`'Ref_Key,Файл'`) is several.
+ */
 function names(list: readonly string[] | undefined): readonly string[] {
-  if (list === undefined) return []
-  return list.map((n) => String(n ?? '').trim()).filter((n) => n !== '')
+  return nonBlank(list).flatMap((n) =>
+    n
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s !== ''),
+  )
 }
