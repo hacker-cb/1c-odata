@@ -15,6 +15,7 @@ const CASES = [
   {
     file: 'trade_v11.5.xml',
     storage: { set: 'Catalog_ВариантыАнализаЦелевыхПоказателей', base: 'ЗначениеАнализа' },
+    tabular: { set: 'Document_ПланПродаж', part: 'Товары', base: 'ДополнительныеПараметры' },
     none: [
       'Document_РеализацияТоваровУслуг',
       'InformationRegister_КурсыВалют',
@@ -47,6 +48,15 @@ describe('integration: readFormat over the snapshot indexes (#289)', () => {
         expect(readFormat(index, type, { select: ['Ref_Key', c.storage.base] })).toBe(MINIMALMETADATA_JSON)
         expect(readFormat(index, type, { select: [`${c.storage.base}_Base64Data`] })).toBe(MINIMALMETADATA_JSON)
         expect(readFormat(index, type, { select: ['Ref_Key'] })).toBe(NOMETADATA_JSON)
+      })
+
+      it('reads a document whose tabular rows carry a storage in minimalmetadata (#290)', () => {
+        if (!('tabular' in c) || c.tabular === undefined) return
+        const { set, part, base } = c.tabular
+        const type = typeOf(set)
+        expect(readFormat(index, type)).toBe(MINIMALMETADATA_JSON)
+        expect(readFormat(index, type, { select: ['Ref_Key', `${part}/${base}`] })).toBe(MINIMALMETADATA_JSON)
+        expect(readFormat(index, type, { select: ['Ref_Key', 'Date'] })).toBe(NOMETADATA_JSON)
       })
 
       it('leaves documents, registers and virtual tables without storages in nometadata', () => {

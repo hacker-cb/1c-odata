@@ -198,3 +198,33 @@ describe('buildMetadataIndex — navigation properties (#283)', () => {
     )
   })
 })
+
+describe('buildMetadataIndex — a ComplexType records its storages too (#290)', () => {
+  const edmx = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="3.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="StandardODATA" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <EntityType Name="Document_X">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+        <Property Name="Товары" Type="Collection(StandardODATA.Document_X_Товары_RowType)" Nullable="true"/>
+      </EntityType>
+      <ComplexType Name="Document_X_Товары_RowType">
+        <Property Name="LineNumber" Type="Edm.Int64" Nullable="false"/>
+        <Property Name="Параметры" Type="Edm.Stream" Nullable="true"/>
+        <Property Name="Параметры_Base64Data" Type="Edm.Binary" Nullable="true"/>
+        <Property Name="Параметры_Type" Type="Edm.String" Nullable="true"/>
+      </ComplexType>
+      <EntityContainer Name="StandardODATA" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="Document_X" EntityType="StandardODATA.Document_X"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`
+
+  it("lists a tabular part row type's ValueStorage bases, as an EntityType's", () => {
+    const index = buildMetadataIndex(parseEdmx(edmx))
+    expect(index.schemas.Document_X_Товары_RowType?.valueStorages).toEqual(['Параметры'])
+    expect(index.schemas.Document_X).not.toHaveProperty('valueStorages')
+  })
+})

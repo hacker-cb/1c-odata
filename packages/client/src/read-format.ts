@@ -1,6 +1,6 @@
 // packages/client/src/read-format.ts
 
-import { schemaOfType, typeNameOfNavigation } from './schema-lookup.js'
+import { schemaOfRef, schemaOfType, typeNameOfNavigation } from './schema-lookup.js'
 import { MINIMALMETADATA_JSON, NOMETADATA_JSON, nonBlank } from './url-builder.js'
 import type { EntitySchema, MetadataIndex } from './validate.js'
 
@@ -42,7 +42,7 @@ export function readFormat(
   const root = schemaOfType(index, typeName)
   if (index === undefined || root === undefined) return NOMETADATA_JSON
   const select = names(shape.select)
-  if (carriesStorage(root, select, '')) return MINIMALMETADATA_JSON
+  if (carriesStorage(index, root, select, '')) return MINIMALMETADATA_JSON
   for (const path of names(shape.expand)) {
     const segments = path.split('/').map((s) => s.trim())
     if (expandCarriesStorage(index, root, segments, '', select)) return MINIMALMETADATA_JSON
@@ -68,24 +68,73 @@ function expandCarriesStorage(
     const target = schemaOfType(index, typeNameOfNavigation(index, schema, nav))
     if (target === undefined) continue
     const path = prefix === '' ? nav : `${prefix}/${nav}`
-    if (carriesStorage(target, select, path) || expandCarriesStorage(index, target, rest, path, select)) return true
+    if (carriesStorage(index, target, select, path) || expandCarriesStorage(index, target, rest, path, select))
+      return true
   }
   return false
 }
 
 /**
  * Whether the entity at `path` (`''` for the row itself, else an `$expand`
- * path) comes back with one of `schema`'s storages under `select`.
+ * path) comes back with one of `schema`'s storages under `select` — its own,
+ * or one of a tabular part's rows (#290): a property of type
+ * `Collection(<RowType>)` whose row type has storages, kept whole by a
+ * `$select` that keeps the entity whole (save a root `**`, which leaves the
+ * tabular parts out), names the part bare or with `/*`, or names a storage of
+ * its rows (`Товары/<base or half>`).
  */
-function carriesStorage(schema: EntitySchema, select: readonly string[], path: string): boolean {
+function carriesStorage(index: MetadataIndex, schema: EntitySchema, select: readonly string[], path: string): boolean {
+  if (storageAt(schema, select, path, select.length === 0 || keptWhole(select, path))) return true
+  for (const [part, rows] of tabularParts(index, schema)) {
+    const at = path === '' ? part : `${path}/${part}`
+    const whole =
+      select.length === 0 ||
+      select.includes('*') ||
+      (path !== '' && keptWhole(select, path)) ||
+      select.includes(at) ||
+      select.includes(`${at}/*`)
+    if (storageAt(rows, select, at, whole)) return true
+  }
+  return false
+}
+
+/** Whether `schema` (at `path`) has a storage that comes back: all of them where `whole`, else one `select` names. */
+function storageAt(schema: EntitySchema, select: readonly string[], path: string, whole: boolean): boolean {
   const storages = schema.valueStorages ?? []
   if (storages.length === 0) return false
-  if (select.length === 0 || keptWhole(select, path)) return true
+  if (whole) return true
   const at = path === '' ? '' : `${path}/`
   const level = select
     .filter((n) => n.startsWith(at) && !n.slice(at.length).includes('/'))
     .map((n) => n.slice(at.length))
   return storages.some((b) => level.includes(b) || level.includes(`${b}_Base64Data`) || level.includes(`${b}_Type`))
+}
+
+/** The tabular parts of `schema` — properties typed `Collection(<a type the index holds>)` — with their row schemas. */
+function tabularParts(index: MetadataIndex, schema: EntitySchema): [string, EntitySchema][] {
+  const out: [string, EntitySchema][] = []
+  for (const [name, prop] of Object.entries(schema.properties)) {
+    if (!prop.type.startsWith('Collection(')) continue
+    const rows = schemaOfRef(index, prop.type)
+    if (rows !== undefined) out.push([name, rows])
+  }
+  return out
+}
+
+/**
+ * The schema a `$select` path segment leads to from `schema`: a navigation's
+ * target (`Владелец`), else a tabular part's row type (`Товары`) — `undefined`
+ * where it is neither.
+ */
+function schemaOfSegment(
+  index: MetadataIndex,
+  schema: EntitySchema | undefined,
+  segment: string,
+): EntitySchema | undefined {
+  const target = schemaOfType(index, typeNameOfNavigation(index, schema, segment))
+  if (target !== undefined || schema === undefined || !Object.hasOwn(schema.properties, segment)) return target
+  const type = schema.properties[segment]?.type
+  return type?.startsWith('Collection(') === true ? schemaOfRef(index, type) : undefined
 }
 
 /** Whether `select` keeps the entity at `path` whole: a root wildcard, or the path or an ancestor named bare or with `/*` / `/**`. */
@@ -118,8 +167,9 @@ function names(list: readonly string[] | undefined): readonly string[] {
  * A query's `$select` as it goes on the wire, where the index holds its type
  * (#286): each name as 1С reads it — an entry holding several (`'Ref_Key,Файл'`)
  * is several, each trimmed, a path's segments too — and a ValueStorage's base,
- * of the row (`Файл`) or of an entity an `$expand` path reaches through
- * `EntitySchema.navigation` (`Владелец/Файл`), as its two halves
+ * of the row (`Файл`), of an entity an `$expand` path reaches through
+ * `EntitySchema.navigation` (`Владелец/Файл`) or of a tabular part's rows
+ * (`Товары/Файл`, #290), as its two halves
  * (`Файл_Base64Data`, `Файл_Type`), since 1С returns a storage only as those;
  * a name not repeated. Codegen declares the base alone, so a typed `select`
  * names it. `undefined` — the names go as given — without an index, for a type
@@ -143,7 +193,7 @@ export function wireSelect(
     const segments = name.split('/').map((s) => s.trim())
     const last = segments.pop() as string
     let schema: EntitySchema | undefined = root
-    for (const segment of segments) schema = schemaOfType(index, typeNameOfNavigation(index, schema, segment))
+    for (const segment of segments) schema = schemaOfSegment(index, schema, segment)
     const at = segments.length === 0 ? '' : `${segments.join('/')}/`
     if (schema?.valueStorages?.includes(last) === true) {
       add(`${at}${last}_Base64Data`)
