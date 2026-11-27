@@ -128,10 +128,10 @@ export function buildV3CollectionUrl(
   base: string,
   q: QueryBuilder<unknown>,
   format = NOMETADATA_JSON,
-  wire?: SelectWireNames,
+  select?: readonly string[],
 ): string {
   const path = `${base}/${encodeSegment(q.entitySet)}`
-  const params = buildQueryParams(q, wire)
+  const params = buildQueryParams(q, select)
   // Always prepend $format — `readFormat`'s, which the request's `Accept` repeats.
   const allParams = [qp('$format', format), ...params]
   return `${path}?${allParams.join('&')}`
@@ -164,9 +164,9 @@ export function buildV3KeyUrl(
  * `$skip` / `$inlinecount` stay off; so does `$format`, `/$count` answering
  * text/plain.
  */
-export function buildV3CountUrl(base: string, q: QueryBuilder<unknown>, wire?: SelectWireNames): string {
+export function buildV3CountUrl(base: string, q: QueryBuilder<unknown>, select?: readonly string[]): string {
   const path = `${base}/${encodeSegment(q.entitySet)}/$count`
-  const params = buildQueryParams(q, wire, { count: true })
+  const params = buildQueryParams(q, select, { count: true })
   if (params.length === 0) return path
   return `${path}?${params.join('&')}`
 }
@@ -204,35 +204,9 @@ export function nonBlank(names: readonly string[] | undefined): readonly string[
   return names.map((n) => String(n ?? '').trim()).filter((n) => n !== '')
 }
 
-/**
- * What a `$select` name becomes on the wire — the name itself, or, where it
- * names a ValueStorage, the storage's two halves. Given by the caller that
- * holds the schema (`V3QueryBuilder`); none sends every name as given.
- */
-export type SelectWireNames = (name: string) => readonly string[]
-
-/**
- * The `$select` names as 1С reads them — an entry holding several names
- * (`'Ref_Key,Файл'`) is several — each through `wire`, a name not repeated.
- */
-function selectNames(names: readonly string[], wire: SelectWireNames | undefined): readonly string[] {
-  if (wire === undefined) return names
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const name of names.flatMap((entry) => entry.split(',').map((n) => n.trim()))) {
-    if (name === '') continue
-    for (const n of wire(name)) {
-      if (seen.has(n)) continue
-      seen.add(n)
-      out.push(n)
-    }
-  }
-  return out
-}
-
 function buildQueryParams(
   q: QueryBuilder<unknown>,
-  wire: SelectWireNames | undefined,
+  select: readonly string[] | undefined,
   opts: { count?: boolean } = {},
 ): string[] {
   const s = q.state
@@ -240,9 +214,10 @@ function buildQueryParams(
   if (s.filter) params.push(qp('$filter', s.filter._expr))
   // An empty list — or one of blank names only — sends no option: 1С reads
   // `$select=` / `$expand=` as their absence anyway (as `ReadFiOptions.select`).
-  const select = selectNames(nonBlank(s.select), wire)
+  // `select`, where given, is the query's `$select` as the caller holding the schema wrote it (`wireSelect`).
+  const selectNames = nonBlank(select ?? s.select)
   const expand = nonBlank(s.expand)
-  if (select.length > 0) params.push(qp('$select', select.join(',')))
+  if (selectNames.length > 0) params.push(qp('$select', selectNames.join(',')))
   if (expand.length > 0) params.push(qp('$expand', expand.join(',')))
   if (!opts.count) {
     if (s.orderBy) params.push(qp('$orderby', formatOrderBy(s.orderBy)))

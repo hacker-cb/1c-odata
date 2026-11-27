@@ -231,13 +231,35 @@ describe('select() of a ValueStorage field asks 1С for its halves (#286)', () =
     expect(r.value[0]).toEqual({ Ref_Key: 'g', ФайлХранилище: { contentType: 'image/png', base64Data: 'aGk=' } })
   })
 
-  it('names a half once where the select already names it; count() and raw() send the same $select', async () => {
+  it('names a half once where the select already names it; count() sends the same $select, raw() the one given', async () => {
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', metadataIndex })
     const q = c.query('Catalog_Файлы').select('ФайлХранилище_Type', 'ФайлХранилище')
     await q.get()
     await q.count()
     await q.raw()
-    expect(seen).toEqual(Array(3).fill('ФайлХранилище_Type,ФайлХранилище_Base64Data'))
+    expect(seen).toEqual([
+      'ФайлХранилище_Type,ФайлХранилище_Base64Data',
+      'ФайлХранилище_Type,ФайлХранилище_Base64Data',
+      'ФайлХранилище_Type,ФайлХранилище',
+    ])
+  })
+
+  it('reads the reply of an untrimmed name in minimalmetadata, as the $select it sends', async () => {
+    const formats: (string | null)[] = []
+    server.use(
+      http.get(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B$/, ({ request }) => {
+        const url = new URL(request.url)
+        seen.push(url.searchParams.get('$select'))
+        formats.push(url.searchParams.get('$format'))
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    await new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', metadataIndex })
+      .query('Catalog_Файлы')
+      .select(' ФайлХранилище ')
+      .get()
+    expect(seen).toEqual(['ФайлХранилище_Base64Data,ФайлХранилище_Type'])
+    expect(formats).toEqual(['application/json;odata=minimalmetadata'])
   })
 
   it('reads an entry holding several names as 1С does', async () => {

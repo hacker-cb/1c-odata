@@ -115,27 +115,42 @@ function names(list: readonly string[] | undefined): readonly string[] {
 }
 
 /**
- * What a `$select` name of a query on `typeName` becomes on the wire (#286):
- * a ValueStorage's base — of the row (`Файл`) or of an entity an `$expand`
- * path reaches through `EntitySchema.navigation` (`Владелец/Файл`) — as its two
- * halves (`Файл_Base64Data`, `Файл_Type`), since 1С returns a storage only as
- * those; any other name as given. Codegen declares the base alone, so a typed
- * `select` names it. `undefined` without an index or for a type it does not
- * hold: every name goes as given.
+ * A query's `$select` as it goes on the wire, where the index holds its type
+ * (#286): each name as 1С reads it — an entry holding several (`'Ref_Key,Файл'`)
+ * is several, each trimmed, a path's segments too — and a ValueStorage's base,
+ * of the row (`Файл`) or of an entity an `$expand` path reaches through
+ * `EntitySchema.navigation` (`Владелец/Файл`), as its two halves
+ * (`Файл_Base64Data`, `Файл_Type`), since 1С returns a storage only as those;
+ * a name not repeated. Codegen declares the base alone, so a typed `select`
+ * names it. `undefined` — the names go as given — without an index, for a type
+ * it does not hold, or where nothing but separators was selected.
  */
-export function selectWireNames(
+export function wireSelect(
   index: MetadataIndex | undefined,
   typeName: string | undefined,
-): ((name: string) => readonly string[]) | undefined {
+  select: readonly string[] | undefined,
+): readonly string[] | undefined {
   const root = schemaOfType(index, typeName)
   if (index === undefined || root === undefined) return undefined
-  return (name) => {
-    const segments = name.split('/')
+  const out: string[] = []
+  const seen = new Set<string>()
+  const add = (n: string): void => {
+    if (seen.has(n)) return
+    seen.add(n)
+    out.push(n)
+  }
+  for (const name of names(select)) {
+    const segments = name.split('/').map((s) => s.trim())
     const last = segments.pop() as string
     let schema: EntitySchema | undefined = root
-    for (const segment of segments) schema = schemaOfType(index, typeNameOfNavigation(index, schema, segment.trim()))
-    if (schema?.valueStorages?.includes(last.trim()) !== true) return [name]
+    for (const segment of segments) schema = schemaOfType(index, typeNameOfNavigation(index, schema, segment))
     const at = segments.length === 0 ? '' : `${segments.join('/')}/`
-    return [`${at}${last.trim()}_Base64Data`, `${at}${last.trim()}_Type`]
+    if (schema?.valueStorages?.includes(last) === true) {
+      add(`${at}${last}_Base64Data`)
+      add(`${at}${last}_Type`)
+    } else {
+      add(`${at}${last}`)
+    }
   }
+  return out.length > 0 ? out : undefined
 }
