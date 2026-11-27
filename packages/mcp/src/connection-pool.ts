@@ -120,7 +120,9 @@ interface CacheSlot {
  * the entry; a removed connection drops it and fails as an unknown one would.
  * A password the source no longer answers for keeps an entry whose descriptor
  * is unchanged: a keychain that is locked or briefly unreachable reads as no
- * password, and must not break a connection that works.
+ * password, and must not break a connection that works. The price: a password
+ * another process deleted while the descriptor stands keeps working here until
+ * the entry is rebuilt (a descriptor change, {@link refresh}, a restart).
  */
 export class ConnectionPool implements ReadPool {
   private readonly source: ConnectionSource
