@@ -526,9 +526,24 @@ interface RefOps {
  */
 function intLiteral(v: number, argument: string): string {
   if (!Number.isSafeInteger(v)) {
-    throw new InvalidArgumentError(`"${argument}" must be an integer; received ${String(v)}`, { argument, received: v })
+    throw new InvalidArgumentError(`"${argument}" must be an integer; received ${shownArgument(v)}`, {
+      argument,
+      received: v,
+    })
   }
   return formatNumberLiteral(v, argument)
+}
+
+/**
+ * An argument as the message shows it — never through `String()` on an object,
+ * which untyped code may hand over with a `toString` that is not callable
+ * (`{ toString: null }`) and so fail the message itself with a `TypeError`.
+ */
+function shownArgument(v: unknown): string {
+  if (typeof v === 'string') return JSON.stringify(v.length > 50 ? `${v.slice(0, 50)}…` : v)
+  if (typeof v === 'number' || typeof v === 'bigint' || typeof v === 'boolean') return String(v)
+  if (v === null || v === undefined) return String(v)
+  return `${typeof v === 'object' ? 'an' : 'a'} ${typeof v}`
 }
 
 /** The units `dateadd` / `datedifference` take — the `DateOps` signature's list. */
