@@ -156,6 +156,24 @@ describe('withDataDirLock', () => {
     },
   )
 
+  it('stops refreshing a lock another holder took over', async () => {
+    await withDataDirLock(
+      dir,
+      async () => {
+        plantLock({ pid: process.ppid, hostname: hostname() }, 30_000)
+        await new Promise((resolve) => setTimeout(resolve, 80))
+        expect(Date.now() - statSync(lockPath).mtimeMs).toBeGreaterThan(20_000)
+      },
+      { timings: { ...fast, heartbeatMs: 20 } },
+    )
+  })
+
+  it('releases under the takeover lock, and leaves none behind', async () => {
+    await withDataDirLock(dir, async () => undefined)
+    expect(existsSync(`${lockPath}.takeover`)).toBe(false)
+    expect(existsSync(lockPath)).toBe(false)
+  })
+
   it('a holder whose lock was taken over writes nothing more: assertHeld throws', async () => {
     await withDataDirLock(dir, async (lock) => {
       lock.assertHeld()

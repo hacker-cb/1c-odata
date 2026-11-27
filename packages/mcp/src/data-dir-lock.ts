@@ -142,7 +142,11 @@ export async function withDataDirLock<T>(
     heldHere.delete(token)
     throw err
   }
-  const heartbeat = setInterval(() => touch(lockPath), timings.heartbeatMs)
+  const heartbeat = setInterval(() => {
+    // Refresh only a lock still this holder's: a lock taken over is another's to keep fresh, or to let go stale.
+    if (stillHeld(lockPath, token)) touch(lockPath)
+    else clearInterval(heartbeat)
+  }, timings.heartbeatMs)
   heartbeat.unref()
   const lock: DataDirLock = {
     assertHeld() {
@@ -344,23 +348,43 @@ function stillHeld(lockPath: string, token: string): boolean {
   return true
 }
 
-/** Delete the lock where it is still this holder's; never throws — it runs in a `finally`. */
+/**
+ * Delete the lock where it is still this holder's; never throws — it runs in a
+ * `finally`. The read and the delete happen under the takeover lock, so no
+ * takeover can replace the lock in between and have its new owner's deleted.
+ * Where the guard stays taken (a takeover under way, a dead one's left), it
+ * goes ahead without it rather than keep the lock.
+ */
 function release(lockPath: string, token: string): void {
-  for (let attempt = 0; attempt < RELEASE_ATTEMPTS; attempt++) {
+  const guard = `${lockPath}${TAKEOVER_SUFFIX}`
+  let guarded = false
+  for (let attempt = 0; attempt < RELEASE_ATTEMPTS && !guarded; attempt++) {
     try {
-      const held = readLock(lockPath)
-      // Gone, or another's now (this process stalled past staleness): nothing of this holder's to delete.
-      if (held === undefined || (held.owner !== undefined && held.owner.token !== token)) return
-      if (held.owner !== undefined) {
-        unlinkSync(lockPath)
-        return
-      }
-      // Busy for a moment (Windows): read again.
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
-      if (!isBusy(err)) return // unreadable: this process's next lock takes it over as its own
+      guarded = tryCreate(guard, String(process.pid))
+    } catch {
+      break
     }
-    pause(RELEASE_RETRY_MS)
+    if (!guarded) pause(RELEASE_RETRY_MS)
+  }
+  try {
+    for (let attempt = 0; attempt < RELEASE_ATTEMPTS; attempt++) {
+      try {
+        const held = readLock(lockPath)
+        // Gone, or another's now (this process stalled past staleness): nothing of this holder's to delete.
+        if (held === undefined || (held.owner !== undefined && held.owner.token !== token)) return
+        if (held.owner !== undefined) {
+          unlinkSync(lockPath)
+          return
+        }
+        // Busy for a moment (Windows): read again.
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+        if (!isBusy(err)) return // unreadable: this process's next lock takes it over as its own
+      }
+      pause(RELEASE_RETRY_MS)
+    }
+  } finally {
+    if (guarded) bestEffortUnlink(guard)
   }
 }
 
