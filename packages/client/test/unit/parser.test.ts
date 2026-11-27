@@ -583,3 +583,40 @@ describe('V3 parser — date-times parseInZone used to drop or shift (#193)', ()
     expect(r.Note).toBe('2026-13-45T99:00:00')
   })
 })
+
+describe('V3 parser — a `__proto__` key in the body is the row’s own field (#275)', () => {
+  const ownProto = (o: object): unknown => Object.getOwnPropertyDescriptor(o, '__proto__')?.value
+
+  it('a collection row keeps its keys and its Object prototype', () => {
+    const r = parseV3Collection<Record<string, unknown>>('{"value":[{"__proto__":{"x":1},"a":2}]}', {
+      serverTimezone: TZ,
+    })
+    const row = r.value[0] as Record<string, unknown>
+    expect(Object.keys(row)).toEqual(['__proto__', 'a'])
+    expect(Object.getPrototypeOf(row)).toBe(Object.prototype)
+    expect(row.x).toBeUndefined()
+    expect(ownProto(row)).toEqual({ x: 1 })
+    expect(Object.hasOwn(row, 'a') && Object.hasOwn(row, 'a')).toBe(true)
+  })
+
+  it('a single entity and a nested object do too', () => {
+    const row = parseV3Single<Record<string, unknown>>(
+      '{"odata.metadata":"m","__proto__":"s","Nested":{"__proto__":{"y":1}},"Rows":[{"__proto__":{"z":1}}]}',
+      { serverTimezone: TZ },
+    )
+    expect(Object.keys(row)).toEqual(['__proto__', 'Nested', 'Rows'])
+    expect(ownProto(row)).toBe('s')
+    const nested = row.Nested as Record<string, unknown>
+    expect(Object.getPrototypeOf(nested)).toBe(Object.prototype)
+    expect(ownProto(nested)).toEqual({ y: 1 })
+    expect(nested.y).toBeUndefined()
+    const tab = (row.Rows as Record<string, unknown>[])[0] as Record<string, unknown>
+    expect(ownProto(tab)).toEqual({ z: 1 })
+    expect(tab.z).toBeUndefined()
+  })
+
+  it('serializes back with the field', () => {
+    const r = parseV3Collection('{"value":[{"__proto__":{"x":1}}]}', { serverTimezone: TZ })
+    expect(JSON.stringify(r.value[0])).toBe('{"__proto__":{"x":1}}')
+  })
+})

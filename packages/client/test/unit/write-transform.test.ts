@@ -208,3 +208,17 @@ describe('bigintToStringReplacer', () => {
     )
   })
 })
+
+describe('transformDatesToWire — a `__proto__` key is written as the payload’s own field (#275)', () => {
+  it('keeps the field and the Object prototype, at the top and in a tabular row', () => {
+    const body = JSON.parse('{"__proto__":{"x":1},"Сумма":1,"Товары":[{"__proto__":{"y":1},"LineNumber":1}]}')
+    const out = transformDatesToWire(body, documentX, TZ, baseMetadata, 'date')
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype)
+    expect(Object.keys(out)).toEqual(['__proto__', 'Сумма', 'Товары'])
+    expect((out as { x?: unknown }).x).toBeUndefined()
+    const row = (out.Товары as Record<string, unknown>[])[0] as Record<string, unknown>
+    expect(Object.getPrototypeOf(row)).toBe(Object.prototype)
+    expect((row as { y?: unknown }).y).toBeUndefined()
+    expect(JSON.stringify(out)).toBe('{"__proto__":{"x":1},"Сумма":1,"Товары":[{"__proto__":{"y":1},"LineNumber":1}]}')
+  })
+})

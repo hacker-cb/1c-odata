@@ -1,4 +1,5 @@
 import type { DateMode } from './connection.js'
+import { setOwn } from './own-key.js'
 import { schemaOfRef } from './schema-lookup.js'
 import { formatInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
@@ -147,27 +148,29 @@ export function transformDatesToWire(
 ): Record<string, unknown> {
   if (dateMode === 'string') return body
 
+  // Every key of the body is written as the payload's own field — `__proto__` included (a row read back
+  // carries it as one; plain assignment would swap the payload's prototype for it and drop the field).
   const out: Record<string, unknown> = {}
   for (const [name, v] of Object.entries(body)) {
     const propType = schema.properties[name]?.type
 
     if (propType === 'Edm.DateTime') {
       if (v === undefined) continue
-      out[name] = transformDateTime(v, tz)
+      setOwn(out, name, transformDateTime(v, tz))
       continue
     }
 
     // Unknown field (newer server schema) — value heuristic, same as the
     // schema-less write path.
     if (propType === undefined) {
-      out[name] = transformDateValuesUntyped(v, tz)
+      setOwn(out, name, transformDateValuesUntyped(v, tz))
       continue
     }
 
     // `Collection(Edm.DateTime)` not handled — 0 empirical occurrences in real 1С EDMX.
     // See packages/cli/src/codegen/emitter/entity.ts for the full design rationale.
     if (Array.isArray(v) && propType?.startsWith('Collection(')) {
-      out[name] = transformCollection(v, propType, tz, metadataIndex, dateMode)
+      setOwn(out, name, transformCollection(v, propType, tz, metadataIndex, dateMode))
       continue
     }
 
@@ -180,11 +183,11 @@ export function transformDatesToWire(
       !propType.startsWith('Collection(')
     ) {
       // Nested ComplexType — propType is `<ns>.SomeComplex`
-      out[name] = transformNestedComplex(v as Record<string, unknown>, propType, tz, metadataIndex, dateMode)
+      setOwn(out, name, transformNestedComplex(v as Record<string, unknown>, propType, tz, metadataIndex, dateMode))
       continue
     }
 
-    out[name] = v
+    setOwn(out, name, v)
   }
 
   // Split each grouped ValueStorage back into its two wire halves — symmetric

@@ -2,6 +2,7 @@
 
 import { type DataShape, DEFAULT_SHAPE } from './connection.js'
 import { InvalidArgumentError, ParseError } from './errors.js'
+import { setOwn } from './own-key.js'
 import { schemaOfType, typeNameOfRef, typeNameOfSet } from './schema-lookup.js'
 import { parseInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
@@ -213,9 +214,11 @@ function mapEntity(obj: Record<string, unknown>, opts: ParseOptions): Record<str
   const schema = schemaOfType(opts.metadataIndex, opts.typeHint)
   const shape: DataShape | undefined = opts.shape ?? opts.metadataIndex?.shape
 
+  // Every key the body sent becomes the row's own field — `__proto__` included (`JSON.parse` makes it an own
+  // key; plain assignment would swap the row's prototype for it).
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(obj)) {
-    out[k] = mapValue(v, k, schema, shape, opts)
+    setOwn(out, k, mapValue(v, k, schema, shape, opts))
   }
 
   // Group ValueStorage triples: <X>_Base64Data + <X>_Type → ValueStorage.
@@ -226,9 +229,9 @@ function mapEntity(obj: Record<string, unknown>, opts: ParseOptions): Record<str
       const b64 = out[`${base}_Base64Data`]
       const ct = out[`${base}_Type`]
       if (typeof b64 === 'string' && typeof ct === 'string') {
-        out[base] = { contentType: ct, base64Data: b64 }
+        setOwn(out, base, { contentType: ct, base64Data: b64 })
       } else if (b64 === null || ct === null) {
-        out[base] = null
+        setOwn(out, base, null)
       }
       delete out[`${base}_Base64Data`]
       delete out[`${base}_Type`]
