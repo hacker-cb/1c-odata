@@ -1,5 +1,31 @@
 # @1c-odata/client
 
+## 0.12.0
+
+### Minor Changes
+
+- [#262](https://github.com/hacker-cb/1c-odata/pull/262) [`b941e19`](https://github.com/hacker-cb/1c-odata/commit/b941e19ad30478fa98642a609b5d20692e6dc175) Thanks [@hacker-cb](https://github.com/hacker-cb)! - A collection response without a `value` array is a `ParseError`, not an empty result ([#255](https://github.com/hacker-cb/1c-odata/issues/255)).
+
+  `query().get()` / `stream()`, the register virtual tables (`balance()`, `turnovers()`, `sliceLast()`, …) and read functions through `client.functions` read a 200 body with no `value` array — a gateway's `{"error": …}`, a truncated or foreign body — as "no rows". They now fail with a `ParseError` naming what came instead: the first keys of the body (`got no "value" — keys "error"`), or the kind of `value` it held — never the body's values. A row of `value` that is not an object (`null`, a number) is a `ParseError` too, where `null` failed with a `TypeError` and a number read as an empty row.
+
+  1С sends every collection with `value`, an empty one as `"value": []` (checked on entity sets and on every register virtual table of both test bases), so nothing changes for a response from 1С itself.
+
+  **Migration:** none, unless code relied on such a body reading as empty — catch `ParseError` there.
+
+- [#260](https://github.com/hacker-cb/1c-odata/pull/260) [`b80c9e8`](https://github.com/hacker-cb/1c-odata/commit/b80c9e85a963feca8bbd7d26c8580b10efbb59cd) Thanks [@hacker-cb](https://github.com/hacker-cb)! - A metadata index whose entity set names a type it does not hold is refused at load, and no lookup reads an inherited key as a schema ([#258](https://github.com/hacker-cb/1c-odata/issues/258)).
+
+  - **`parseMetadataIndex` / `loadMetadataIndex` throw a `MetadataError`** for an `entitySetToType` entry whose type is not an own key of `schemas` — `Invalid metadata at <source> $.entitySetToType.<Set>: type "<Type>" is not in $.schemas`. It used to load, and a type named after an inherited key (`constructor`, `toString`) then failed every read of that set with a `TypeError` on the first field of the first row. An index built by `buildMetadataIndex` / `fetchMetadataIndex` or emitted by `1c-odata generate` never holds such an entry: only a hand-edited or damaged cache does.
+
+    **Migration:** none for a generated or fetched index. A cache that now fails to load is damaged — fetch or generate it again.
+
+  - **Every schema lookup takes own keys only** — reads (`get()`, `stream()`, entity reads, nested tabular parts and complex values), writes (`validateOnWrite`, the `Date` → wire transform, nested values included) and the filter DSL. A set or a type the index does not hold — an inherited name among them — reads and writes schema-less, as without an index, where an index passed straight to the client (not through `parseMetadataIndex`) used to fail with a `TypeError`. On write that includes a nested tabular part or complex value whose type the index does not hold: its `Date`s are written in the server's zone, found by value, where they used to go out as they were (`toJSON()`, UTC).
+
+### Patch Changes
+
+- [#260](https://github.com/hacker-cb/1c-odata/pull/260) [`b80c9e8`](https://github.com/hacker-cb/1c-odata/commit/b80c9e85a963feca8bbd7d26c8580b10efbb59cd) Thanks [@hacker-cb](https://github.com/hacker-cb)! - An integer argument of a filter DSL function (`substring`'s start and length, `dateadd`'s amount) that untyped code passes as an object whose `toString` is not callable — `{ toString: null }` — is refused with the `InvalidArgumentError` it was meant to get, not a `TypeError` raised while writing that error's message. The message shows a string argument quoted and a non-primitive by its type (`received an object`).
+
+- [#262](https://github.com/hacker-cb/1c-odata/pull/262) [`b941e19`](https://github.com/hacker-cb/1c-odata/commit/b941e19ad30478fa98642a609b5d20692e6dc175) Thanks [@hacker-cb](https://github.com/hacker-cb)! - A malformed `odata.count` that is a JSON object carrying a `"toString"` key is refused with the `ParseError` it was meant to get, not a `TypeError` raised while writing that error's message. The message now names the value's kind (`got: an object`, `got: number -1`) where it showed `String(value)`.
+
 ## 0.11.1
 
 ### Patch Changes
