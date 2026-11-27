@@ -76,9 +76,14 @@ export function bigintToStringReplacer(_key: string, v: unknown): unknown {
 
 /** Type guard for the grouped ValueStorage read form `{ contentType, base64Data }`. */
 function isValueStorageObject(v: unknown): v is { contentType: string; base64Data: string } {
-  if (typeof v !== 'object' || v === null) return false
+  if (typeof v !== 'object' || v === null || serializesItself(v)) return false
   const o = v as Record<string, unknown>
   return typeof o.contentType === 'string' && typeof o.base64Data === 'string'
+}
+
+/** Whether `v` has a `toJSON` (own or inherited) — `JSON.stringify` sends what it returns, not `v`'s fields. */
+function serializesItself(v: object): boolean {
+  return typeof (v as { toJSON?: unknown }).toJSON === 'function'
 }
 
 /** Recurse into a Collection(<ns>.Foo) field, transforming each element. */
@@ -202,10 +207,10 @@ export function transformDatesToWire(
  *   other half taken from `<base>`: a row read back with new bytes written
  *   into `<base>_Base64Data` keeps them, not the stale `<base>` beside them;
  * - anything else under `<base>` is left as it came.
- * What is split is what `JSON.stringify` would send — a `toJSON`'s result, or
- * the own enumerable fields, each read once. An object nothing changes in is
- * returned as it came — itself, its prototype (a `toJSON`) included; a changed
- * one is a plain object.
+ * A body, row or value with a `toJSON` serializes itself and is sent as it
+ * serializes — nothing in it is split; any other is split over its own
+ * enumerable fields (what `JSON.stringify` sends), each read once. An object
+ * nothing changes in is returned as it came; a changed one is a plain object.
  *
  * @internal
  */
@@ -215,11 +220,10 @@ export function splitValueStorages(
   metadataIndex: MetadataIndex,
 ): Record<string, unknown> {
   if (!carriesStorage(schema, metadataIndex)) return body
-  // What `JSON.stringify` would send: a `toJSON`'s result where the body has one, else its own enumerable fields —
-  // each read once (a getter is not read twice, a non-enumerable field is not sent).
-  const json = typeof body.toJSON === 'function' ? (body.toJSON as () => unknown)() : body
-  if (typeof json !== 'object' || json === null || Array.isArray(json)) return body
-  const fields = new Map(Object.entries(json as Record<string, unknown>))
+  // A body that serializes itself (`toJSON`, read once) goes as it serializes: nothing in it is split. Any other is
+  // split over its own enumerable fields — what `JSON.stringify` sends — each read once.
+  if (serializesItself(body)) return body
+  const fields = new Map(Object.entries(body))
   let changed = false
   for (const [name, v] of fields) {
     const propType = Object.hasOwn(schema.properties, name) ? schema.properties[name]?.type : undefined

@@ -143,14 +143,18 @@ describe('splitValueStorages — a storage read back is written by its halves (#
     expect(split({ Файл: '' })).toEqual({ Файл: '' })
   })
 
-  it('splits what JSON.stringify would send: a toJSON result, own enumerable fields, each read once', () => {
+  it('leaves what serializes itself as it serializes; splits own enumerable fields, each read once', () => {
     const cached = { contentType: 'image/png', base64Data: 'b2xk' }
     // toJSON leaves the cached storage out: nothing to split, the body goes as it came.
     const onlyComment = { Комментарий: 'x', Файл: cached, toJSON: () => ({ Комментарий: 'x' }) }
     expect(split(onlyComment)).toBe(onlyComment)
-    // toJSON sends it: the split works on what toJSON returns.
+    // A body that serializes itself goes as it serializes, whatever its toJSON returns.
     const withFile = { toJSON: () => ({ Файл: cached }) }
-    expect(split(withFile)).toEqual({ Файл_Type: 'image/png', Файл_Base64Data: 'b2xk' })
+    expect(split(withFile)).toBe(withFile)
+    // So does a value under the base that serializes itself: it is no grouped storage.
+    const raw = { contentType: 'image/png', base64Data: 'aGk=', toJSON: () => 'raw' }
+    const withRaw = { Файл: raw }
+    expect(split(withRaw)).toBe(withRaw)
     // A non-enumerable storage is never sent, so never split.
     const hidden = Object.defineProperty({ Комментарий: 'x' }, 'Файл', { value: cached, enumerable: false })
     expect(split(hidden)).toBe(hidden)

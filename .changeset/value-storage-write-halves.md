@@ -10,6 +10,6 @@ A ValueStorage read back and written again reaches 1С (#293). Since #289 a stor
 
 Reading, a pair whose `<X>_Base64Data` holds bytes beside a `null` `<X>_Type` is no longer folded into `<X>: null` — written back, that `null` would now clear the bytes; such a pair stays the two fields it came as. A `null` `<X>_Base64Data` still reads as `<X>: null`.
 
-The split is a pass of its own (`splitValueStorages`): a body it changes nothing in is sent as it came — under `dateMode: 'string'`, a class instance's `toJSON` included.
+The split is a pass of its own (`splitValueStorages`): a body it changes nothing in is sent as it came, and one that serializes itself (`toJSON`) is sent as it serializes.
 
 This holds for a storage of a tabular part's row too (#290). Without an index nothing changes: there is no grouped form to split.
