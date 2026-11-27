@@ -207,8 +207,10 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
   /**
    * Internal: transform a write body into wire form. Three-level rule:
    *
-   * 1. Effective `dateMode: 'string'` → full passthrough (the `DataShape`
-   *    contract promises the write path does not touch Edm.DateTime fields).
+   * 1. Effective `dateMode: 'string'` → dates pass through untouched (the
+   *    `DataShape` contract promises the write path does not touch
+   *    Edm.DateTime fields); with a schema, a grouped ValueStorage is still
+   *    split into its wire halves — that is no date (#293).
    * 2. Schema available (metadataIndex + known entity set) → schema-driven
    *    `transformDatesToWire`: `Date` → naive ISO in `serverTimezone`,
    *    `null` → `ONEC_EMPTY_DATE` sentinel, recursion into tabular parts;
@@ -226,13 +228,13 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
   private transformWriteBody(body: unknown, entitySet: string): unknown {
     if (body === undefined) return undefined
     if (typeof body !== 'object' || body === null) return body
-    if (this.shape?.dateMode === 'string') return body
+    const dateMode = this.shape?.dateMode === 'string' ? 'string' : 'date'
     const idx = this.v3Opts.metadataIndex
     const schema = this.schemaForSet(entitySet)
     if (idx === undefined || schema === undefined) {
-      return transformDateValuesUntyped(body, this.opts.serverTimezone)
+      return dateMode === 'string' ? body : transformDateValuesUntyped(body, this.opts.serverTimezone)
     }
-    return transformDatesToWire(body as Record<string, unknown>, schema, this.opts.serverTimezone, idx, 'date')
+    return transformDatesToWire(body as Record<string, unknown>, schema, this.opts.serverTimezone, idx, dateMode)
   }
 
   query<T = Record<string, unknown>>(entitySet: string): V3QueryBuilder<T> {

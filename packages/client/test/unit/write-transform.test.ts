@@ -124,19 +124,61 @@ describe('transformDatesToWire — ValueStorage round-trip', () => {
     expect(out).not.toHaveProperty('Файл_Type')
   })
 
-  it('leaves a null base value untouched (no split, no crash)', () => {
+  it('writes a null storage as `_Base64Data: null`, `_Type` left out (#293)', () => {
     const out = transformDatesToWire({ Файл: null }, withVs, TZ, baseMetadata, 'date')
-    expect(out.Файл).toBeNull()
-    expect(out).not.toHaveProperty('Файл_Type')
-    expect(out).not.toHaveProperty('Файл_Base64Data')
+    expect(out).toEqual({ Файл_Base64Data: null })
+  })
+
+  it('lets a half the payload names itself win over the grouped field beside it (#293)', () => {
+    // A row read back, new bytes written into the half, the stale grouped value still there.
+    const stale = { contentType: 'image/png', base64Data: 'b2xk' }
+    expect(transformDatesToWire({ Файл: stale, Файл_Base64Data: 'bmV3' }, withVs, TZ, baseMetadata, 'date')).toEqual({
+      Файл_Base64Data: 'bmV3',
+    })
+    expect(transformDatesToWire({ Файл: null, Файл_Type: 'image/jpeg' }, withVs, TZ, baseMetadata, 'date')).toEqual({
+      Файл_Type: 'image/jpeg',
+    })
   })
 })
 
 describe('transformDatesToWire — dateMode=string', () => {
-  it('is no-op in string mode (full passthrough)', () => {
-    const obj = { Date: new Date('2025-03-15T12:00:00Z'), Сумма: 100 }
-    const out = transformDatesToWire(obj, documentX, TZ, baseMetadata, 'string')
-    expect(out).toBe(obj) // same reference
+  it('touches no date: every value passes as it came', () => {
+    const date = new Date('2025-03-15T12:00:00Z')
+    const out = transformDatesToWire(
+      { Date: date, Сумма: 100, Неизвестное: date, Дата: null },
+      documentX,
+      TZ,
+      baseMetadata,
+      'string',
+    )
+    expect(out).toEqual({ Date: date, Сумма: 100, Неизвестное: date, Дата: null })
+    expect(out.Date).toBe(date)
+  })
+
+  it('still writes a ValueStorage — of the row and of a tabular row — by its halves (#293)', () => {
+    const schema: EntitySchema = {
+      properties: {
+        Файл: { type: 'Edm.Stream', nullable: true },
+        Товары: { type: 'Collection(StandardODATA.Строка)', nullable: true },
+      },
+      valueStorages: ['Файл'],
+    }
+    const index = {
+      ...baseMetadata,
+      schemas: { ...baseMetadata.schemas, Строка: { properties: {}, valueStorages: ['Скан'] } },
+    }
+    const out = transformDatesToWire(
+      { Файл: { contentType: 'image/png', base64Data: 'aGk=' }, Товары: [{ Скан: null }] },
+      schema,
+      TZ,
+      index,
+      'string',
+    )
+    expect(out).toEqual({
+      Файл_Type: 'image/png',
+      Файл_Base64Data: 'aGk=',
+      Товары: [{ Скан_Base64Data: null }],
+    })
   })
 })
 

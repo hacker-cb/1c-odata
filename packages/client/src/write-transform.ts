@@ -91,7 +91,7 @@ function transformCollection(
 ): unknown {
   const innerSchema = schemaOfRef(metadataIndex, propType)
   // A row type the index does not hold is written as without an index — `Date`s found by value.
-  if (innerSchema === undefined) return transformDateValuesUntyped(v, tz)
+  if (innerSchema === undefined) return dateMode === 'string' ? v : transformDateValuesUntyped(v, tz)
   return v.map((item) =>
     typeof item === 'object' && item !== null
       ? transformDatesToWire(item as Record<string, unknown>, innerSchema, tz, metadataIndex, dateMode)
@@ -108,7 +108,7 @@ function transformNestedComplex(
   dateMode: DateMode,
 ): unknown {
   const innerSchema = schemaOfRef(metadataIndex, propType)
-  if (innerSchema === undefined) return transformDateValuesUntyped(v, tz)
+  if (innerSchema === undefined) return dateMode === 'string' ? v : transformDateValuesUntyped(v, tz)
   return transformDatesToWire(v, innerSchema, tz, metadataIndex, dateMode)
 }
 
@@ -128,14 +128,19 @@ function transformNestedComplex(
  * Recursive for nested entities (tabular parts and single nested ComplexType).
  *
  * ValueStorage fields: the read side groups `<base>_Base64Data` + `<base>_Type`
- * into a single `{ contentType, base64Data }` object under `<base>`. This
- * splits that object back into the two wire halves (same shape `writeStream`
- * PATCHes), so the read form is a valid write form — a natural read → modify →
- * patch round-trip otherwise sends a body 1С does not understand.
+ * into a single `{ contentType, base64Data }` object under `<base>` (or `null`).
+ * This writes it back as the wire halves 1С edits a storage through (#293),
+ * so the read form is a valid write form:
+ * - `{ contentType, base64Data }` → `<base>_Type` + `<base>_Base64Data`;
+ * - `null` → `<base>_Base64Data: null`, `<base>_Type` left out (1С edits a
+ *   storage through `_Base64Data` alone; its docs name no form for clearing);
+ * - a half the payload names itself wins: `<base>` is dropped, whatever it
+ *   holds — a row read back with new bytes written into `<base>_Base64Data`
+ *   keeps them, not the stale `<base>` beside them;
+ * - anything else under `<base>` is left as it came.
  *
- * In `dateMode: 'string'` mode this function is a no-op — full passthrough
- * (the client also short-circuits before calling it, so ValueStorage splitting
- * does not apply in that advanced raw-wire mode; use `writeStream` instead).
+ * In `dateMode: 'string'` no date is touched — every value passes as it came —
+ * but ValueStorages are split all the same: that is no date.
  *
  * @internal
  */
@@ -146,8 +151,6 @@ export function transformDatesToWire(
   metadataIndex: MetadataIndex,
   dateMode: DateMode,
 ): Record<string, unknown> {
-  if (dateMode === 'string') return body
-
   // Every key of the body is written as the payload's own field — `__proto__` included (a row read back
   // carries it as one; plain assignment would swap the payload's prototype for it and drop the field).
   const out: Record<string, unknown> = {}
@@ -156,14 +159,14 @@ export function transformDatesToWire(
 
     if (propType === 'Edm.DateTime') {
       if (v === undefined) continue
-      setOwn(out, name, transformDateTime(v, tz))
+      setOwn(out, name, dateMode === 'string' ? v : transformDateTime(v, tz))
       continue
     }
 
     // Unknown field (newer server schema) — value heuristic, same as the
     // schema-less write path.
     if (propType === undefined) {
-      setOwn(out, name, transformDateValuesUntyped(v, tz))
+      setOwn(out, name, dateMode === 'string' ? v : transformDateValuesUntyped(v, tz))
       continue
     }
 
@@ -190,16 +193,23 @@ export function transformDatesToWire(
     setOwn(out, name, v)
   }
 
-  // Split each grouped ValueStorage back into its two wire halves — symmetric
-  // with the read-side grouping in parser.ts `mapEntity`. EntityTypes and tabular row types (ComplexTypes, #290)
-  // carry `valueStorages`; a string/undefined value (the user passed wire halves directly, or cleared the field)
-  // is left untouched.
+  // Write each grouped ValueStorage back as its wire halves — symmetric with the read-side grouping in parser.ts
+  // `mapEntity`. EntityTypes and tabular row types (ComplexTypes, #290) carry `valueStorages`. A half the payload
+  // names itself wins over `<base>`; anything else under `<base>` but the grouped object or `null` stays as it came.
   for (const base of schema.valueStorages ?? []) {
     // Own only: a base named `__proto__` the payload does not carry would read the accessor.
-    const grouped = Object.hasOwn(out, base) ? out[base] : undefined
-    if (isValueStorageObject(grouped)) {
-      out[`${base}_Type`] = grouped.contentType
-      out[`${base}_Base64Data`] = grouped.base64Data
+    if (!Object.hasOwn(out, base)) continue
+    const b64Key = `${base}_Base64Data`
+    const typeKey = `${base}_Type`
+    const grouped = out[base]
+    if (Object.hasOwn(out, b64Key) || Object.hasOwn(out, typeKey)) {
+      delete out[base]
+    } else if (isValueStorageObject(grouped)) {
+      setOwn(out, typeKey, grouped.contentType)
+      setOwn(out, b64Key, grouped.base64Data)
+      delete out[base]
+    } else if (grouped === null) {
+      setOwn(out, b64Key, null)
       delete out[base]
     }
   }

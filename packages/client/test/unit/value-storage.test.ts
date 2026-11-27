@@ -283,3 +283,66 @@ describe('select() of a ValueStorage field asks 1С for its halves (#286)', () =
     expect(seen).toEqual(['ФайлХранилище', 'ФайлХранилище'])
   })
 })
+
+describe('a ValueStorage read back is written by its halves, in every dateMode (#293)', () => {
+  const metadataIndex: MetadataIndex = {
+    schemaNamespace: 'StandardODATA',
+    schemas: {
+      Catalog_Файлы: {
+        properties: {
+          Ref_Key: { type: 'Edm.Guid', nullable: false },
+          Дата: { type: 'Edm.DateTime', nullable: true },
+          ФайлХранилище: { type: 'Edm.Stream', nullable: true },
+          ФайлХранилище_Base64Data: { type: 'Edm.Binary', nullable: true },
+          ФайлХранилище_Type: { type: 'Edm.String', nullable: true },
+        },
+        valueStorages: ['ФайлХранилище'],
+      },
+    },
+    entitySetToType: { Catalog_Файлы: 'Catalog_Файлы' },
+  }
+  let received: unknown
+  beforeEach(() => {
+    received = undefined
+    server.use(
+      http.patch(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(/, async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ Ref_Key: '00000000-0000-0000-0000-00000000000a' })
+      }),
+    )
+  })
+
+  it.each(['date', 'string'] as const)(
+    'dateMode %s: the grouped value goes as `_Type` + `_Base64Data`',
+    async (dateMode) => {
+      const c = new ODataV3Client({
+        baseUrl,
+        auth,
+        serverTimezone: 'Europe/Moscow',
+        metadataIndex,
+        shape: { dateMode },
+      })
+      await c.entity('Catalog_Файлы', '00000000-0000-0000-0000-00000000000a').patch({
+        Дата: '2025-03-15T00:00:00',
+        ФайлХранилище: { contentType: 'image/png', base64Data: 'aGk=' },
+      })
+      expect(received).toEqual({
+        Дата: '2025-03-15T00:00:00',
+        ФайлХранилище_Type: 'image/png',
+        ФайлХранилище_Base64Data: 'aGk=',
+      })
+    },
+  )
+
+  it('a null storage goes as `_Base64Data: null`; a half named beside a stale value wins', async () => {
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', metadataIndex })
+    const e = c.entity('Catalog_Файлы', '00000000-0000-0000-0000-00000000000a')
+    await e.patch({ ФайлХранилище: null })
+    expect(received).toEqual({ ФайлХранилище_Base64Data: null })
+    await e.patch({
+      ФайлХранилище: { contentType: 'image/png', base64Data: 'b2xk' },
+      ФайлХранилище_Base64Data: 'bmV3',
+    } as Record<string, unknown>)
+    expect(received).toEqual({ ФайлХранилище_Base64Data: 'bmV3' })
+  })
+})
