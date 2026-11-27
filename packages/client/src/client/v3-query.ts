@@ -35,14 +35,14 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
   /** Execute the query and return parsed `{ value, count?, odataMetadata }`. */
   async get(opts: RequestOptions = {}): Promise<{ odataMetadata: string; value: T[]; count?: number }> {
     const format = queryFormat(this.client, this)
-    const url = buildV3CollectionUrl(this.client.baseUrl, this, format)
+    const url = buildV3CollectionUrl(this.client.baseUrl, this, format, valueStoragesOf(this.client, this))
     const raw = await this.client.transportGet(url, opts, format)
     return parseV3Collection<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
 
   /** Escape hatch — return native `Response` without parsing. */
   async raw(opts: RequestOptions = {}): Promise<Response> {
-    const url = buildV3CollectionUrl(this.client.baseUrl, this)
+    const url = buildV3CollectionUrl(this.client.baseUrl, this, undefined, valueStoragesOf(this.client, this))
     return this.client.transportFetch(url, opts)
   }
 
@@ -58,7 +58,7 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
    * path in it needs its `expand()`.
    */
   async count(opts: RequestOptions = {}): Promise<number> {
-    const url = buildV3CountUrl(this.client.baseUrl, this)
+    const url = buildV3CountUrl(this.client.baseUrl, this, valueStoragesOf(this.client, this))
     const raw = await this.client.transportGet(url, opts)
     return parseV3Count(raw.body)
   }
@@ -134,4 +134,12 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
 function queryFormat(client: ODataV3Client<unknown>, q: V3QueryBuilder<unknown>): string {
   const index = client.metadataIndex
   return readFormat(index, typeNameOfSet(index, q.entitySet), { select: q.state.select, expand: q.state.expand })
+}
+
+/**
+ * The set's ValueStorage bases, which a `$select` names by their halves
+ * (#286) — none without an index or for a set it does not list.
+ */
+function valueStoragesOf(client: ODataV3Client<unknown>, q: V3QueryBuilder<unknown>): readonly string[] | undefined {
+  return schemaOfSet(client.metadataIndex, q.entitySet)?.valueStorages
 }
