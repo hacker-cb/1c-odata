@@ -34,6 +34,11 @@ export interface ConnectionSummary {
   serverTimezone: string
   /** Where the password resolves from — never the password itself. */
   passwordSource: SecretSource
+  /**
+   * `'agent'` where an agent added the connection (`add_connection`): its
+   * password never comes from `ONEC_<NAME>_PASSWORD`, set or not.
+   */
+  addedBy?: 'agent'
   /** Whether the schema has already been fetched into the in-memory cache. */
   loaded: boolean
 }
@@ -96,7 +101,8 @@ export class ConnectionPool implements ReadPool {
         baseUrl: c.baseUrl,
         login: c.login,
         serverTimezone: c.serverTimezone,
-        passwordSource: await this.source.secretSource(c.name),
+        passwordSource: await this.source.secretSource(c.name, c),
+        ...(c.addedBy === 'agent' ? { addedBy: c.addedBy } : {}),
         loaded: this.cache.has(c.name),
       })),
     )
@@ -133,9 +139,10 @@ export class ConnectionPool implements ReadPool {
       throw new InvalidArgumentError(`No connection named "${name}"`, { argument: 'connection' })
     }
 
-    const secret = await this.source.getSecret(name)
+    // The descriptor read above: the password is resolved for the target it goes to.
+    const secret = await this.source.getSecret(name, stored)
     if (secret === null) {
-      const hint = this.source.missingSecretHint?.(name)
+      const hint = this.source.missingSecretHint?.(name, stored)
       throw new InvalidArgumentError(`No password for "${name}".${hint !== undefined ? ` ${hint}` : ''}`, {
         argument: 'connection',
       })

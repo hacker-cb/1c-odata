@@ -5,7 +5,7 @@ import { loadConfig, type StoredConnection } from '../config.js'
 import type { ConnectionPool } from '../connection-pool.js'
 import {
   assertAddable,
-  assertEnvPasswordStaysPutOnAdd,
+  assertAddTargetAllowedOnAdd,
   assertNoEnvPassword,
   removeConnection,
   setConnectionLabel,
@@ -60,11 +60,11 @@ async function addConnection(
   // Preflight the duplicate check BEFORE verifying, so a password is never sent
   // to baseUrl only to be rejected as "already exists" afterwards.
   assertAddable(opts.dataDir, connection, overwrite === true)
-  assertEnvPasswordStaysPutOnAdd(
+  assertAddTargetAllowedOnAdd(
     opts.dataDir,
     connection,
     { baseUrl, login },
-    { create: false, storesPassword: hasPassword },
+    { byAgent: true, storesPassword: hasPassword },
   )
   // Verify before persisting when a password is available. The password is used
   // verbatim here so verify matches exactly what gets stored/used.
@@ -81,7 +81,7 @@ async function addConnection(
     ...(hasPassword ? { password } : {}),
     insecure: opts.insecure ?? false,
     overwrite: overwrite === true,
-    createUnderEnvPassword: false,
+    byAgent: true,
     signal,
   })
   pool.refresh(connection)
@@ -125,7 +125,7 @@ async function verifyCredentialChange(
   signal: AbortSignal,
 ): Promise<boolean> {
   const store = new SecretStore({ dataDir: opts.dataDir, insecure: opts.insecure ?? false })
-  const effectivePassword = change.password ?? (await store.read(connection))?.password
+  const effectivePassword = change.password ?? (await store.read(connection, existing))?.password
   if (effectivePassword === undefined) return false
   await verifyConnectivity({
     baseUrl: existing.baseUrl,
@@ -177,7 +177,7 @@ async function applyCredentialChange(
     throw new InvalidArgumentError(`No connection named "${connection}"`, { argument: 'connection' })
   }
   // Before verifying: the new pair must not be checked, and reported verified, when reads would not use it.
-  assertNoEnvPassword(connection)
+  assertNoEnvPassword(connection, existing)
   const verified = await verifyCredentialChange(opts, existing, connection, change, signal)
   const result = await updateConnectionCredentials({
     dataDir: opts.dataDir,
@@ -203,7 +203,7 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
     {
       title: 'Add or update a connection',
       description:
-        'Add or update a 1С OData connection. Writes the non-secret descriptor (baseUrl/login/timezone/label) to config; a supplied password is stored securely and is never returned by any tool. Where ONEC_<NAME>_PASSWORD is set for the name, this tool refuses to create the connection (a person adds it with the CLI `1c-odata-mcp add`), to change its baseUrl/login, or to store a password for it. ⚠ Passing `password` here places it in the model context and transcript — prefer the CLI (`1c-odata-mcp add`) or the ONEC_<NAME>_PASSWORD env var; omit it to save only the non-secret config.',
+        'Add or update a 1С OData connection. Writes the non-secret descriptor (baseUrl/login/timezone/label) to config; a supplied password is stored securely and is never returned by any tool. It never points an existing connection at another baseUrl or login — a person re-points one with the CLI `1c-odata-mcp add <name> --force` — and a connection it creates never takes its password from ONEC_<NAME>_PASSWORD (that variable is for a server a person chose): give it a password here or with set_credentials. Where ONEC_<NAME>_PASSWORD is set for the name, this tool refuses to create the connection (a person adds it with the CLI `1c-odata-mcp add`) or to store a password for it. ⚠ Passing `password` here places it in the model context and transcript — prefer the CLI (`1c-odata-mcp add`) or the ONEC_<NAME>_PASSWORD env var; omit it to save only the non-secret config.',
       inputSchema: {
         connection: z
           .string()
@@ -223,7 +223,12 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
           .string()
           .optional()
           .describe('Password — see the security note in this tool description. Optional.'),
-        overwrite: z.boolean().optional().describe('Replace an existing connection (default false)'),
+        overwrite: z
+          .boolean()
+          .optional()
+          .describe(
+            'Replace an existing connection with the same baseUrl and login — its timezone, label or password (default false)',
+          ),
       },
     },
     async (args, { signal }) => toolResult(() => addConnection(opts, pool, args, signal)),

@@ -24,7 +24,7 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 | `get_entity` | Fetch a single entity by `Ref_Key`. |
 | `count` | Count rows matching an optional `$filter`. |
 | `register_query` | Register virtual tables: balance / turnovers / slices / accounting (read-only analytics). `select` picks fields and, on the aggregating tables of some 1С configurations (БП turnovers — not УТ `ТоварыНаСкладах` balance), also rolls the rows up; `filter` narrows the resulting rows; `orderBy` sorts on the server (with `top` — a top-N). Paged by 1С itself: each call reads one page (`skip` / `top`) and, in a parallel request, 1С's `total` (with `select`, rolled up — below the rows where 1С returns them un-rolled); on a big table a page still costs seconds, since 1С computes the whole virtual table every time. |
-| `add_connection` | Add/update a connection (writes config; optional `label` + password; password stored securely, never returned). |
+| `add_connection` | Add a connection, or update one keeping its base URL and login (writes config; optional `label` + password; password stored securely, never returned). Never re-points an existing connection; one it creates never takes `ONEC_<NAME>_PASSWORD`. |
 | `set_credentials` | Change a connection's login and/or password in place (keeps URL/timezone/label; password never returned). |
 | `set_label` | Set or clear a connection's display label (empty clears it → falls back to the name). |
 | `remove_connection` | Remove a connection and delete its stored password. |
@@ -78,6 +78,19 @@ outranks a stored password, so pointing that connection at another base URL or l
 `set_credentials`) are refused — the env password would otherwise go to the new target, or the change would never be
 used; unset the variable first. An agent cannot create a connection under a name whose password is in such a variable
 (`add_connection` refuses it): that one is added through the CLI `add`.
+
+**Where an agent may send a password.** Every MCP process shares one data directory, while
+`ONEC_<NAME>_PASSWORD` is set per process — an agent in a process without the variable could otherwise write a
+target that a process holding it would send the password to. So, whatever its own environment holds:
+
+- `add_connection` never points an existing connection at another base URL or login; a person re-points one with
+  the CLI `add <name> --force`. An overwrite keeping both (a timezone, a label, a password) is taken.
+- A connection `add_connection` creates — a new name, or one re-created after `remove_connection` — is marked
+  `"addedBy": "agent"` in `config.json`, and **never takes its password from `ONEC_<NAME>_PASSWORD`**, in any
+  process: give it a password through `add_connection` / `set_credentials`, or have a person re-add it with the
+  CLI `add --force`, which drops the mark. `list` and `list_connections` show the mark.
+- Mixed versions: an MCP process older than this rule neither writes nor keeps the mark — update every process
+  that shares the data directory.
 
 ### 2. Register the server with your MCP client
 
@@ -160,9 +173,11 @@ nothing else would expand `~` in their `args` / `env`:
 are not expanded and stay a "not absolute" error.
 
 - **`config.json`** — connection descriptors *without* passwords (base URL, login, timezone, optional display
-  label, optional shape). Safe to read / surface to an LLM.
+  label, optional shape, and `"addedBy": "agent"` on a connection an agent added). Safe to read / surface to an
+  LLM.
 - **Passwords** — resolved in priority order **env → OS keychain → `credentials.json` (0600)**:
-  - **`ONEC_<NAME>_PASSWORD`** always wins — use it for CI / secret managers / agent configs. The name is the
+  - **`ONEC_<NAME>_PASSWORD`** always wins — use it for CI / secret managers / agent configs — except on a
+    connection an agent added (`"addedBy": "agent"`), which never takes it. The name is the
     connection name upper-cased with every run of non-`[A-Z0-9]` characters collapsed to a single `_`
     (leading/trailing `_` stripped): `my-base` → `ONEC_MY_BASE_PASSWORD`, `tvip-trade` →
     `ONEC_TVIP_TRADE_PASSWORD`, `bp_v3` → `ONEC_BP_V3_PASSWORD`.

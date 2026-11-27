@@ -60,7 +60,7 @@ async function verifyBeforeSave(
 ): Promise<boolean> {
   if (opts.noVerify === true) return true
   const store = new SecretStore({ dataDir: opts.dataDir, insecure: opts.insecure ?? false })
-  const effectivePassword = pw?.value ?? (await store.read(opts.name))?.password
+  const effectivePassword = pw?.value ?? (await store.read(opts.name, existing))?.password
   if (effectivePassword === undefined) return true
   process.stdout.write('Verifying connection… ')
   try {
@@ -109,7 +109,7 @@ export async function runSetCredentials(opts: SetCredentialsOptions): Promise<vo
   if (existing === undefined) {
     throw new InvalidArgumentError(`No connection named "${opts.name}"`, { argument: 'name' })
   }
-  assertNoEnvPassword(opts.name)
+  assertNoEnvPassword(opts.name, existing)
   const newLogin = opts.login?.trim()
   const hasLogin = newLogin !== undefined && newLogin !== ''
   if (opts.login !== undefined && !hasLogin) {

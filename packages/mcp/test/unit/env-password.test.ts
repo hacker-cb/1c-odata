@@ -106,7 +106,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
           overwrite: true,
         })
         expect(res.isError).toBe(true)
-        expect(res.text).toContain('ONEC_C_PASSWORD')
+        expect(res.text).toContain('1c-odata-mcp add c --force')
       }
       await close()
       expect(fetched).toEqual([])
@@ -184,11 +184,19 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       expect(stored().config).toMatchObject({ baseUrl: OLD, serverTimezone: 'UTC' })
     })
 
-    it('without the env var, overwrites as before: the stored password is cleared', async () => {
+    it('refuses another target without the env var too: another process may hold it (#253)', async () => {
       const { call, close } = await tools()
       const res = await call('add_connection', { connection: 'c', baseUrl: NEW, login: 'u', overwrite: true })
       await close()
-      expect(res.isError).toBe(false)
+      expect(res.isError).toBe(true)
+      expect(res.text).toContain('1c-odata-mcp add c --force')
+      expect(fetched).toEqual([])
+      expect(stored().config).toMatchObject({ baseUrl: OLD, login: 'u' })
+      await expectStoredPasswordKept()
+    })
+
+    it('the CLI add --force still re-points one without the env var: the stored password is cleared', async () => {
+      await runAdd({ dataDir: dir, insecure: true, name: 'c', url: NEW, login: 'u', force: true })
       expect(stored().config?.baseUrl).toBe(NEW)
       expect(await stored().secret.read('c')).toBeNull()
     })
@@ -246,7 +254,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
         serverTimezone: 'UTC',
         insecure: true,
         overwrite: true,
-        createUnderEnvPassword: false,
+        byAgent: true,
       })
       await removed
       await expect(readded).rejects.toThrow(/ONEC_C_PASSWORD/)

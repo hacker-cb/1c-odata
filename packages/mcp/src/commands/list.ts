@@ -1,5 +1,5 @@
 import { connectionLabel, loadConfig } from '../config.js'
-import { SecretStore } from '../secret-store.js'
+import { passwordEnvVar, SecretStore } from '../secret-store.js'
 
 export interface ListOptions {
   dataDir: string
@@ -20,13 +20,17 @@ export async function runList(opts: ListOptions): Promise<void> {
   for (const name of names) {
     const c = config.connections[name]
     if (c === undefined) continue
-    const source = await store.source(name)
+    const source = await store.source(name, c)
     const label = connectionLabel(name, c)
     process.stdout.write(`  ${name}\n`)
     if (label !== name) process.stdout.write(`    label:    ${label}\n`)
     process.stdout.write(`    url:      ${c.baseUrl}\n`)
     process.stdout.write(`    login:    ${c.login}\n`)
     process.stdout.write(`    timezone: ${c.serverTimezone}\n`)
-    process.stdout.write(`    password: ${source}\n\n`)
+    process.stdout.write(`    password: ${source}\n`)
+    if (c.addedBy === 'agent') {
+      process.stdout.write(`    added by: an agent (add_connection) — ${passwordEnvVar(name)} is not used for it\n`)
+    }
+    process.stdout.write('\n')
   }
 }
