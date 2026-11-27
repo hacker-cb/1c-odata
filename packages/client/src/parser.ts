@@ -79,8 +79,8 @@ const INT64_WIRE = /^-?\d+$/
  *   - When `metadataIndex` + `typeHint` present: Edm.Int64 → bigint/number per
  *     `shape.int64Mode` (a value that is neither null, a decimal integer
  *     string within the 64-bit range nor a safe-integer JSON number is a
- *     `ParseError` in both, untouched in `'string'`); ValueStorage triples → ValueStorage object (or null on
- *     null halves; halves removed from output regardless)
+ *     `ParseError` in both, untouched in `'string'`); a ValueStorage pair → ValueStorage object (or null on
+ *     a null half), its halves removed; a half sent without its pair stays as it came
  *
  * In `dateMode='string'` mode parser passes Edm.DateTime through as wire string —
  * no sentinel handling, no tz conversion. User responsibility via parseInZone helper.
@@ -221,20 +221,26 @@ function mapEntity(obj: Record<string, unknown>, opts: ParseOptions): Record<str
     setOwn(out, k, mapValue(v, k, schema, shape, opts))
   }
 
-  // Group ValueStorage triples: <X>_Base64Data + <X>_Type → ValueStorage.
-  // Null halves: collapse to out[base] = null and remove flat halves
-  // (they're not declared in emitted TS — leaving them would leak).
+  // Group ValueStorage triples: <X>_Base64Data + <X>_Type → ValueStorage, a null half → out[base] = null; the
+  // flat halves go once grouped (emitted TS does not declare them). Only a pair is grouped: a half the body
+  // sent alone (`$select` named one) — or a pair of values neither form fits — stays the field it came as, where
+  // removing it lost the value the caller asked for.
   if (schema !== undefined) {
     for (const base of schema.valueStorages ?? []) {
-      const b64 = out[`${base}_Base64Data`]
-      const ct = out[`${base}_Type`]
+      const b64Key = `${base}_Base64Data`
+      const ctKey = `${base}_Type`
+      if (!Object.hasOwn(out, b64Key) || !Object.hasOwn(out, ctKey)) continue
+      const b64 = out[b64Key]
+      const ct = out[ctKey]
       if (typeof b64 === 'string' && typeof ct === 'string') {
         setOwn(out, base, { contentType: ct, base64Data: b64 })
       } else if (b64 === null || ct === null) {
         setOwn(out, base, null)
+      } else {
+        continue
       }
-      delete out[`${base}_Base64Data`]
-      delete out[`${base}_Type`]
+      delete out[b64Key]
+      delete out[ctKey]
     }
   }
 
@@ -271,10 +277,15 @@ function mapValue(
   // path (write-transform.ts), which already recurses with the nested type.
   if (Array.isArray(v)) {
     const childOpts = withNestedTypeHint(opts, propType)
+    // An array inside the array (no OData V3 collection holds one) is read as an array again, never handed
+    // to `mapEntity`, which would turn it into an object keyed `"0"`, `"1"`, …. The field's declared type
+    // describes the items of this array, not those of one nested in it: that one is read schema-less.
     return v.map((item) =>
-      typeof item === 'object' && item !== null
-        ? mapEntity(item as Record<string, unknown>, childOpts)
-        : mapValue(item, fieldName, schema, shape, opts),
+      Array.isArray(item)
+        ? mapValue(item, fieldName, undefined, shape, opts)
+        : typeof item === 'object' && item !== null
+          ? mapEntity(item as Record<string, unknown>, childOpts)
+          : mapValue(item, fieldName, schema, shape, opts),
     )
   }
   if (typeof v === 'object' && v !== null) {
