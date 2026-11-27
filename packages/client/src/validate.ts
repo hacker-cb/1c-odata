@@ -158,27 +158,37 @@ export function validateEntity(
 ): ValidationResult {
   const errors: ValidationIssue[] = []
   const valueStorageMembers = collectValueStorageMembers(schema)
-  const ignoreMissing = opts.missing === 'ignore'
   for (const [name, prop] of Object.entries(schema.properties)) {
     if (valueStorageMembers.has(name)) continue
-    // A name `Object.prototype` carries (`__proto__`, `constructor`, …) counts only as the payload's own field:
-    // one the payload lacks would read `Object.prototype` / `Object` and pass a `required` check. Every other
-    // name reads as before — a getter or a field a `toJSON` adds included.
-    // With `missing: 'ignore'` a payload carries only its own enumerable fields — what `JSON.stringify` sends — so
-    // an inherited getter is no field of it.
-    if (ignoreMissing && !Object.prototype.propertyIsEnumerable.call(entity, name)) continue
-    const v = Object.hasOwn(Object.prototype, name) && !Object.hasOwn(entity, name) ? undefined : entity[name]
-    if (v === undefined && ignoreMissing) continue
-    if (v === null && prop.type === 'Edm.DateTime' && opts.dateMode === 'date') continue
-    if (v === undefined || v === null) {
-      if (!prop.nullable) errors.push({ kind: 'required', field: name })
-      continue
-    }
-    if (typeof v === 'string' && prop.maxLength !== undefined && v.length > prop.maxLength) {
-      errors.push({ kind: 'maxLength', field: name, value: v, max: prop.maxLength })
-    }
+    const issue = fieldIssue(entity, name, prop, opts)
+    if (issue !== undefined) errors.push(issue)
   }
   return errors.length === 0 ? { ok: true } : { ok: false, errors }
+}
+
+/** The issue of one schema field of `entity`, if any — `validateEntity`'s rules for that field. */
+function fieldIssue(
+  entity: Record<string, unknown>,
+  name: string,
+  prop: PropertySchema,
+  opts: ValidateEntityOptions,
+): ValidationIssue | undefined {
+  const ignoreMissing = opts.missing === 'ignore'
+  // With `missing: 'ignore'` a payload carries only its own enumerable fields — what `JSON.stringify` sends — so
+  // an inherited getter is no field of it.
+  if (ignoreMissing && !Object.prototype.propertyIsEnumerable.call(entity, name)) return undefined
+  // A name `Object.prototype` carries (`__proto__`, `constructor`, …) counts only as the payload's own field:
+  // one the payload lacks would read `Object.prototype` / `Object` and pass a `required` check. Every other
+  // name reads as before — a getter or a field a `toJSON` adds included.
+  const v = Object.hasOwn(Object.prototype, name) && !Object.hasOwn(entity, name) ? undefined : entity[name]
+  if (v === undefined && ignoreMissing) return undefined
+  // A null date goes as the empty date of 1С under `dateMode: 'date'` — the usual way to clear one.
+  if (v === null && prop.type === 'Edm.DateTime' && opts.dateMode === 'date') return undefined
+  if (v === undefined || v === null) return prop.nullable ? undefined : { kind: 'required', field: name }
+  if (typeof v === 'string' && prop.maxLength !== undefined && v.length > prop.maxLength) {
+    return { kind: 'maxLength', field: name, value: v, max: prop.maxLength }
+  }
+  return undefined
 }
 
 /** Property names belonging to a ValueStorage triple — excluded from validation. */
