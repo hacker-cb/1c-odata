@@ -84,8 +84,11 @@ function connectionOf(stored: StoredConnection, password: string): Connection {
  */
 function descriptorKey(stored: StoredConnection): string {
   const { baseUrl, auth, serverTimezone, shape } = connectionOf(stored, '')
+  // `shape` is JSON from config.json: a hand-written `null` is no shape, as the client takes it.
   const sortedShape =
-    shape === undefined ? null : Object.fromEntries(Object.entries(shape).sort(([a], [b]) => a.localeCompare(b)))
+    shape === undefined || shape === null
+      ? null
+      : Object.fromEntries(Object.entries(shape).sort(([a], [b]) => a.localeCompare(b)))
   return JSON.stringify([baseUrl, auth.username, serverTimezone, sortedShape])
 }
 
@@ -96,9 +99,14 @@ interface CacheSlot {
   descriptor: string
   /** The password it was built with — held as the client holds it: never logged, listed or put in an error. */
   password: string
-  /** The {@link ConnectionPool.get} call whose source reads it was built from, in the order they started. */
-  read: number
 }
+
+/**
+ * How many times one {@link ConnectionPool.get} reads its source while other
+ * calls keep replacing or dropping the slot under it, before it goes on with
+ * its last read.
+ */
+const MAX_SOURCE_READS = 3
 
 /**
  * Lazily resolves connections into ready clients and caches the schema in
@@ -132,8 +140,6 @@ export class ConnectionPool implements ReadPool {
   private downloads = new AbortController()
   /** The builds still in flight — what {@link abortDownloads} drops from the cache. */
   private readonly building = new Set<Promise<PoolEntry>>()
-  /** How many {@link get} calls have started reading their source — what orders their reads. */
-  private reads = 0
 
   constructor(source: ConnectionSource, opts: ConnectionPoolOptions = {}) {
     this.source = source
@@ -147,10 +153,9 @@ export class ConnectionPool implements ReadPool {
    * removed by another process — are dropped here.
    */
   async list(): Promise<ConnectionSummary[]> {
-    const read = ++this.reads
     const bases = await this.source.listBases()
     const listed = new Set(bases.map((c) => c.name))
-    for (const [name, slot] of this.cache) if (!listed.has(name) && slot.read < read) this.cache.delete(name)
+    for (const name of this.cache.keys()) if (!listed.has(name)) this.cache.delete(name)
     // Sort here (not in the source) so every source yields a stable ordering.
     // Each password source may hit the keychain/DB independently — fan out.
     const summaries = await Promise.all(
@@ -168,12 +173,21 @@ export class ConnectionPool implements ReadPool {
     return summaries.sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  /** Whether `name`'s cached entry was built from `stored` and the password the source now gives it. */
+  /**
+   * Whether `name`'s cached entry was built from `stored` and the password the
+   * source now gives it — `false` where that password cannot be read: a listing
+   * never fails on one connection's secret.
+   */
   private async isCurrent(name: string, stored: StoredConnection): Promise<boolean> {
     const slot = this.cache.get(name)
     if (slot === undefined || slot.descriptor !== descriptorKey(stored)) return false
-    const secret = await this.source.getSecret(name, stored)
-    return secret === null || secret === slot.password
+    let secret: string | null
+    try {
+      secret = await this.source.getSecret(name, stored)
+    } catch {
+      return false
+    }
+    return this.cache.get(name) === slot && (secret === null || secret === slot.password)
   }
 
   /**
@@ -186,26 +200,28 @@ export class ConnectionPool implements ReadPool {
   async get(name: string): Promise<PoolEntry> {
     // Taken before the source reads: a call still reading when abortDownloads runs fails with the rest.
     const signal = this.downloads.signal
-    const read = ++this.reads
-    const stored = await this.source.getBase(name)
-    if (stored === undefined) {
-      this.dropOlder(name, read)
-      throw new InvalidArgumentError(`No connection named "${name}"`, { argument: 'connection' })
+    let stored: StoredConnection | undefined
+    let secret: string | null = null
+    for (let reads = 1; ; reads++) {
+      const seen = this.cache.get(name)
+      stored = await this.source.getBase(name)
+      // The descriptor read above: the password is resolved for the target it goes to.
+      secret = stored === undefined ? null : await this.source.getSecret(name, stored)
+      signal.throwIfAborted()
+      // Another call replaced or dropped the slot while this one read: what it read may be newer — read again.
+      if (this.cache.get(name) === seen || reads === MAX_SOURCE_READS) break
     }
-    // The descriptor read above: the password is resolved for the target it goes to.
-    const secret = await this.source.getSecret(name, stored)
-    signal.throwIfAborted()
 
     // From here to the cache write nothing awaits: concurrent calls see one slot.
+    if (stored === undefined) {
+      this.cache.delete(name)
+      throw new InvalidArgumentError(`No connection named "${name}"`, { argument: 'connection' })
+    }
     const descriptor = descriptorKey(stored)
     const cached = this.cache.get(name)
-    if (cached !== undefined) {
-      // A slot a later call's reads made is newer than what this call read: take it.
-      if (cached.read > read) return cached.entry
-      if (cached.descriptor === descriptor && (secret === null || cached.password === secret)) return cached.entry
-    }
+    if (cached?.descriptor === descriptor && (secret === null || cached.password === secret)) return cached.entry
     if (secret === null) {
-      this.dropOlder(name, read)
+      this.cache.delete(name)
       const hint = this.source.missingSecretHint?.(name, stored)
       throw new InvalidArgumentError(`No password for "${name}".${hint !== undefined ? ` ${hint}` : ''}`, {
         argument: 'connection',
@@ -213,7 +229,7 @@ export class ConnectionPool implements ReadPool {
     }
 
     const pending = this.build(name, connectionOf(stored, secret), signal)
-    const slot: CacheSlot = { entry: pending, descriptor, password: secret, read }
+    const slot: CacheSlot = { entry: pending, descriptor, password: secret }
     this.cache.set(name, slot)
     this.building.add(pending)
     try {
@@ -225,12 +241,6 @@ export class ConnectionPool implements ReadPool {
     } finally {
       this.building.delete(pending)
     }
-  }
-
-  /** Drop `name`'s slot unless a call whose reads started after `read`'s made it. */
-  private dropOlder(name: string, read: number): void {
-    const slot = this.cache.get(name)
-    if (slot !== undefined && slot.read < read) this.cache.delete(name)
   }
 
   /** Build an entry for the connection {@link get} read; `signal` aborts its `$metadata` download. */

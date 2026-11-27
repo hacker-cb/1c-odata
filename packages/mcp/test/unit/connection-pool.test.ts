@@ -236,6 +236,47 @@ describe('ConnectionPool.get — a connection another process changed (#274)', (
     expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(1)
   })
 
+  it('reads a null shape as none', async () => {
+    write('config.json', { connections: { trade: { ...trade, serverTimezone: 'Europe/Moscow', shape: null } } })
+    const serve = pool()
+    await expect(serve.get('trade')).resolves.toBeDefined()
+    expect((await serve.list()).find((c) => c.name === 'trade')?.loaded).toBe(true)
+  })
+
+  it('a listing never fails on one connection whose password cannot be read', async () => {
+    const source = new FileConnectionSource({ dataDir: dir, insecure: true })
+    const serve = new ConnectionPool(source)
+    await serve.get('trade')
+    vi.spyOn(source, 'getSecret').mockRejectedValue(new Error('decrypt failed'))
+    expect((await serve.list()).find((c) => c.name === 'trade')?.loaded).toBe(false)
+  })
+
+  it('a call still reading when the connection is removed fails as unknown instead of caching it again', async () => {
+    const source = new FileConnectionSource({ dataDir: dir, insecure: true })
+    const serve = new ConnectionPool(source)
+    await serve.get('trade')
+    const getSecret = source.getSecret.bind(source)
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    vi.spyOn(source, 'getSecret')
+      .mockImplementationOnce(async (name, base) => {
+        await gate
+        return getSecret(name, base)
+      })
+      .mockImplementation(getSecret)
+    const late = serve.get('trade') // reads the connection, then waits on its password
+    await vi.waitFor(() => expect(source.getSecret).toHaveBeenCalledTimes(1))
+    await removeConnection({ dataDir: dir, name: 'trade', insecure: true })
+    await serve.list() // drops the entry
+    release()
+    await expect(late).rejects.toThrow(/No connection named "trade"/)
+    await change({})
+    await serve.get('trade')
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2)
+  })
+
   it('a call that read the source earlier never replaces an entry built from a later read', async () => {
     const source = new FileConnectionSource({ dataDir: dir, insecure: true })
     const getSecret = source.getSecret.bind(source)
