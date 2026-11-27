@@ -34,8 +34,10 @@ export interface ODataV3ClientOptions extends ClientOptions {
   /**
    * Opt-in: when `true`, every `.create()` / `.patch()` / `.put()` runs
    * `validateEntity` against the corresponding schema BEFORE issuing the
-   * HTTP request — `.patch()` with `partial: true`, checking only the fields
-   * its body carries. Defaults to `false` (no behaviour change).
+   * HTTP request. A field the body leaves out is no issue — 1С fills it (or a
+   * `patch()` keeps it) — and a `null` in a non-nullable `Edm.DateTime` goes as
+   * the empty date unless `dateMode: 'string'`; a carried `null` in another
+   * non-nullable field, or a string past `maxLength`, is. Defaults to `false`.
    */
   validateOnWrite?: boolean
   /**
@@ -182,11 +184,21 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
    *
    * @internal
    */
-  validateBeforeWrite(entitySet: string, body: unknown, partial = false): void {
+  validateBeforeWrite(entitySet: string, body: unknown): void {
     if (!this.v3Opts.validateOnWrite) return
     const schema = this.schemaForSet(entitySet)
     if (schema === undefined) return // no index / forward-compat unknown set — skip
-    const r = validateEntity(body as Record<string, unknown>, schema, { partial })
+    // What is sent is checked: a body's `toJSON` result where it has one.
+    const sent =
+      typeof body === 'object' && body !== null && typeof (body as { toJSON?: unknown }).toJSON === 'function'
+        ? (body as { toJSON: () => unknown }).toJSON()
+        : body
+    // 1С fills a field a write leaves out itself, so a missing one is no issue — `create()`, `patch()` and `put()`
+    // alike (#295); a `null` date goes as the empty date unless dates pass as strings.
+    const r = validateEntity(sent as Record<string, unknown>, schema, {
+      missing: 'ignore',
+      dateMode: this.shape?.dateMode === 'string' ? 'string' : 'date',
+    })
     if (!r.ok) {
       throw new ValidationError(`Validation failed for ${entitySet}: ${r.errors.length} issue(s)`, { issues: r.errors })
     }

@@ -124,32 +124,55 @@ describe('validateEntity — any other name reads as before', () => {
   })
 })
 
-describe('validateEntity — partial (#295)', () => {
+describe('validateEntity — missing and dateMode (#295)', () => {
   const schema: EntitySchema = {
     properties: {
       Code: { type: 'Edm.String', nullable: false, maxLength: 3 },
       Description: { type: 'Edm.String', nullable: false },
+      Дата: { type: 'Edm.DateTime', nullable: false },
     },
   }
 
-  it('skips a field the payload does not carry', () => {
-    expect(validateEntity({ Code: 'Y' }, schema, { partial: true })).toEqual({ ok: true })
-    expect(validateEntity({ Code: 'Y', Description: undefined }, schema, { partial: true })).toEqual({ ok: true })
+  it("missing: 'ignore' skips a field the payload does not carry", () => {
+    expect(validateEntity({ Code: 'Y' }, schema, { missing: 'ignore' })).toEqual({ ok: true })
+    expect(validateEntity({ Code: 'Y', Description: undefined }, schema, { missing: 'ignore' })).toEqual({ ok: true })
   })
 
-  it('checks a field it carries — null where required, past maxLength', () => {
-    expect(validateEntity({ Code: null }, schema, { partial: true })).toEqual({
+  it("missing: 'ignore' still checks a carried field — null where required, past maxLength", () => {
+    expect(validateEntity({ Code: null }, schema, { missing: 'ignore' })).toEqual({
       ok: false,
       errors: [{ kind: 'required', field: 'Code' }],
     })
-    expect(validateEntity({ Code: 'LONG' }, schema, { partial: true })).toEqual({
+    expect(validateEntity({ Code: 'LONG' }, schema, { missing: 'ignore' })).toEqual({
       ok: false,
       errors: [{ kind: 'maxLength', field: 'Code', value: 'LONG', max: 3 }],
     })
   })
 
-  it('without partial, a missing required field is an issue, as before', () => {
-    expect(validateEntity({ Code: 'Y' }, schema)).toEqual({
+  it("reads only own enumerable fields as carried under missing: 'ignore' — an inherited getter is none", () => {
+    class Body {
+      Description = 'd'
+      get Code() {
+        return 'LONG'
+      }
+    }
+    expect(validateEntity(new Body() as unknown as Record<string, unknown>, schema, { missing: 'ignore' })).toEqual({
+      ok: true,
+    })
+  })
+
+  it("a null Edm.DateTime is no issue with dateMode 'date', one with 'string' or none", () => {
+    const body = { Code: 'Y', Description: 'd', Дата: null }
+    expect(validateEntity(body, schema, { dateMode: 'date' })).toEqual({ ok: true })
+    expect(validateEntity(body, schema, { dateMode: 'string' })).toEqual({
+      ok: false,
+      errors: [{ kind: 'required', field: 'Дата' }],
+    })
+    expect(validateEntity(body, schema)).toEqual({ ok: false, errors: [{ kind: 'required', field: 'Дата' }] })
+  })
+
+  it('without options, a missing required field is an issue, as before', () => {
+    expect(validateEntity({ Code: 'Y', Дата: '2025-01-01T00:00:00' }, schema)).toEqual({
       ok: false,
       errors: [{ kind: 'required', field: 'Description' }],
     })

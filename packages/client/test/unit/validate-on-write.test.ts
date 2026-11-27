@@ -89,7 +89,7 @@ describe('ODataV3Client validateOnWrite', () => {
   })
 })
 
-describe('validateOnWrite on a partial update (#295)', () => {
+describe('validateOnWrite: Nullable="false" is not mandatory on write to 1С (#295)', () => {
   const index: MetadataIndex = {
     schemaNamespace: 'StandardODATA',
     schemas: {
@@ -98,15 +98,22 @@ describe('validateOnWrite on a partial update (#295)', () => {
           Ref_Key: { type: 'Edm.Guid', nullable: false },
           Code: { type: 'Edm.String', nullable: false, maxLength: 3 },
           Description: { type: 'Edm.String', nullable: false, maxLength: 25 },
-          Comment: { type: 'Edm.String', nullable: true },
+          ДатаОплаты: { type: 'Edm.DateTime', nullable: false },
         },
       },
     },
     entitySetToType: { Catalog_X: 'Catalog_X' },
   }
   const key = '00000000-0000-0000-0000-000000000001'
-  const client = () =>
-    new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', metadataIndex: index, validateOnWrite: true })
+  const client = (dateMode: 'date' | 'string' = 'date') =>
+    new ODataV3Client({
+      baseUrl,
+      auth,
+      serverTimezone: 'Europe/Moscow',
+      metadataIndex: index,
+      validateOnWrite: true,
+      shape: { dateMode },
+    })
   let sent: unknown[]
   beforeEach(() => {
     sent = []
@@ -117,24 +124,49 @@ describe('validateOnWrite on a partial update (#295)', () => {
     server.use(http.patch(/Catalog_X/, reply), http.put(/Catalog_X/, reply), http.post(/Catalog_X/, reply))
   })
 
-  it('patch() checks only the fields it carries — the absent required ones keep what the server holds', async () => {
-    await client().entity('Catalog_X', key).patch({ Code: 'Y' })
-    expect(sent).toEqual([{ Code: 'Y' }])
+  it('create() without Ref_Key — 1С fills the key, and the other fields left out', async () => {
+    await client().entity('Catalog_X').create({ Description: 'x' })
+    expect(sent).toEqual([{ Description: 'x' }])
   })
 
-  it('patch() still refuses a carried field that breaks the schema — null where required, a string too long', async () => {
+  it('patch() and put() of one field', async () => {
+    await client().entity('Catalog_X', key).patch({ Code: 'Y' })
+    await client()
+      .entity('Catalog_X', key)
+      .put({ Code: 'Y' } as Record<string, unknown>)
+    expect(sent).toEqual([{ Code: 'Y' }, { Code: 'Y' }])
+  })
+
+  it('a null date goes as the empty date of 1С — refused only under dateMode string, where it goes as null', async () => {
+    await client()
+      .entity('Catalog_X', key)
+      .patch({ ДатаОплаты: null } as Record<string, unknown>)
+    expect(sent).toEqual([{ ДатаОплаты: '0001-01-01T00:00:00' }])
+    await expect(
+      client('string')
+        .entity('Catalog_X', key)
+        .patch({ ДатаОплаты: null } as Record<string, unknown>),
+    ).rejects.toThrow(ValidationError)
+  })
+
+  it('refuses a carried null in a non-nullable field, and a string past maxLength', async () => {
     const e = client().entity('Catalog_X', key)
     await expect(e.patch({ Code: null } as Record<string, unknown>)).rejects.toThrow(ValidationError)
     await expect(e.patch({ Code: 'TOOLONG' })).rejects.toThrow(ValidationError)
+    await expect(
+      client()
+        .entity('Catalog_X')
+        .create({ Description: null } as Record<string, unknown>),
+    ).rejects.toThrow(ValidationError)
     expect(sent).toEqual([])
   })
 
-  it('create() and put() still check the whole entity', async () => {
-    await expect(client().entity('Catalog_X').create({ Code: 'Y' })).rejects.toThrow(ValidationError)
+  it('checks what is sent: a toJSON result', async () => {
+    const body = { toJSON: () => ({ Code: null }) }
     await expect(
       client()
         .entity('Catalog_X', key)
-        .put({ Code: 'Y' } as Record<string, unknown>),
+        .patch(body as Record<string, unknown>),
     ).rejects.toThrow(ValidationError)
     expect(sent).toEqual([])
   })
