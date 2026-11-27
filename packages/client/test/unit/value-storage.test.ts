@@ -1,4 +1,4 @@
-import { BasicAuth, InvalidArgumentError, ODataV3Client } from '@1c-odata/client'
+import { BasicAuth, InvalidArgumentError, type MetadataIndex, ODataV3Client } from '@1c-odata/client'
 import { HttpResponse, http } from 'msw'
 import { setupServer } from 'msw/node'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
@@ -92,5 +92,100 @@ describe('ValueStorage property as one 1С name', () => {
     await expect(c.entity('Catalog_Файлы', '00000000-0000-0000-0000-00000000000a').readStream(prop)).rejects.toThrow(
       InvalidArgumentError,
     )
+  })
+})
+
+describe('a read whose reply carries a ValueStorage asks for minimalmetadata (#289)', () => {
+  const metadataIndex: MetadataIndex = {
+    schemaNamespace: 'StandardODATA',
+    schemas: {
+      Catalog_Файлы: {
+        properties: {
+          Ref_Key: { type: 'Edm.Guid', nullable: false },
+          ФайлХранилище_Base64Data: { type: 'Edm.Binary', nullable: true },
+          ФайлХранилище_Type: { type: 'Edm.String', nullable: true },
+        },
+        valueStorages: ['ФайлХранилище'],
+      },
+      Catalog_X: { properties: { Ref_Key: { type: 'Edm.Guid', nullable: false } } },
+    },
+    entitySetToType: { Catalog_Файлы: 'Catalog_Файлы', Catalog_X: 'Catalog_X' },
+  }
+  const MINIMAL = 'application/json;odata=minimalmetadata'
+  const NONE = 'application/json;odata=nometadata'
+  // What 1С sends in minimalmetadata: `odata.metadata`, the storage's `_Type`, a link per navigation.
+  const row = {
+    Ref_Key: '00000000-0000-0000-0000-00000000000a',
+    'Владелец@navigationLinkUrl': "Catalog_Файлы(guid'00000000-0000-0000-0000-00000000000a')/Владелец",
+    ФайлХранилище_Type: 'image/png',
+    ФайлХранилище_Base64Data: 'aGk=',
+  }
+  /** `[method, $format, Accept]` of each request. */
+  const seen: [string, string | null, string | null][] = []
+  beforeEach(() => {
+    seen.length = 0
+    const record = (request: Request) => {
+      seen.push([request.method, new URL(request.url).searchParams.get('$format'), request.headers.get('accept')])
+    }
+    const single = () => HttpResponse.json({ 'odata.metadata': `${baseUrl}/$metadata#Catalog_Файлы/@Element`, ...row })
+    server.use(
+      http.get(/Catalog_(%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B|X)$/, ({ request }) => {
+        record(request)
+        return HttpResponse.json({ 'odata.metadata': `${baseUrl}/$metadata#Catalog_Файлы`, value: [row] })
+      }),
+      http.get(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(/, ({ request }) => {
+        record(request)
+        return single()
+      }),
+      http.post(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B$/, ({ request }) => {
+        record(request)
+        return single()
+      }),
+      http.patch(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\(/, ({ request }) => {
+        record(request)
+        return single()
+      }),
+    )
+  })
+  const client = (index?: MetadataIndex) =>
+    new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', ...(index ? { metadataIndex: index } : {}) })
+  const grouped = {
+    Ref_Key: '00000000-0000-0000-0000-00000000000a',
+    ФайлХранилище: { contentType: 'image/png', base64Data: 'aGk=' },
+  }
+
+  it('reads a set with a storage in minimalmetadata — $format and Accept — and groups it, links dropped', async () => {
+    const r = await client(metadataIndex).query('Catalog_Файлы').get()
+    expect(seen).toEqual([['GET', MINIMAL, MINIMAL]])
+    expect(r.value).toEqual([grouped])
+    expect(r.odataMetadata).toContain('$metadata#Catalog_Файлы')
+  })
+
+  it('reads an entity, and the entity create() / patch() return, of such a type in minimalmetadata', async () => {
+    const e = client(metadataIndex).entity('Catalog_Файлы', '00000000-0000-0000-0000-00000000000a')
+    expect(await e.get()).toEqual(grouped)
+    expect(await e.patch({})).toEqual(grouped)
+    expect(await client(metadataIndex).entity('Catalog_Файлы').create({})).toEqual(grouped)
+    expect(seen).toEqual([
+      ['GET', MINIMAL, MINIMAL],
+      ['PATCH', MINIMAL, MINIMAL],
+      ['POST', null, MINIMAL],
+    ])
+  })
+
+  it('keeps minimalmetadata on create() over a withHeader(Accept), and raw() in nometadata', async () => {
+    await client(metadataIndex).entity('Catalog_Файлы').withHeader('accept', NONE).create({})
+    await client(metadataIndex).query('Catalog_Файлы').raw()
+    expect(seen).toEqual([
+      ['POST', null, MINIMAL],
+      ['GET', NONE, NONE],
+    ])
+  })
+
+  it('stays nometadata for a set without storages, a $select without them, and without an index', async () => {
+    await client(metadataIndex).query('Catalog_X').get()
+    await client(metadataIndex).query('Catalog_Файлы').select('Ref_Key').get()
+    await client().query('Catalog_Файлы').get()
+    expect(seen).toEqual(Array(3).fill(['GET', NONE, NONE]))
   })
 })

@@ -1,8 +1,19 @@
 // packages/client/src/url-builder.ts
+
 import { InvalidArgumentError } from './errors.js'
 import { formatNumberLiteral } from './format-number.js'
 import type { QueryBuilder } from './query/builder.js'
 import { formatInZone } from './timezone.js'
+
+/** The JSON the client reads by default: no annotations at all. */
+export const NOMETADATA_JSON = 'application/json;odata=nometadata'
+
+/**
+ * The JSON a read asks for where its reply carries a ValueStorage
+ * (`readFormat`): in `nometadata` 1С sends a storage's `<X>_Base64Data` but
+ * withholds its `<X>_Type` (#289).
+ */
+export const MINIMALMETADATA_JSON = 'application/json;odata=minimalmetadata'
 
 /**
  * An entity key: a `Ref_Key` GUID string, or a composite key — an object of
@@ -113,11 +124,11 @@ function pathParts(path: string): string[] {
 /**
  * Build a V3 collection URL: `<base>/<EntitySet>?$format=...&$filter=...&...`.
  */
-export function buildV3CollectionUrl(base: string, q: QueryBuilder<unknown>): string {
+export function buildV3CollectionUrl(base: string, q: QueryBuilder<unknown>, format = NOMETADATA_JSON): string {
   const path = `${base}/${encodeSegment(q.entitySet)}`
   const params = buildQueryParams(q)
-  // Always prepend $format
-  const allParams = [qp('$format', 'application/json;odata=nometadata'), ...params]
+  // Always prepend $format — `readFormat`'s, which the request's `Accept` repeats.
+  const allParams = [qp('$format', format), ...params]
   return `${path}?${allParams.join('&')}`
 }
 
@@ -125,10 +136,16 @@ export function buildV3CollectionUrl(base: string, q: QueryBuilder<unknown>): st
  * Build a V3 keyed URL: `<base>/<EntitySet>(<key>)?$format=...`. A `Date` in a
  * composite key is written in `serverTimezone`.
  */
-export function buildV3KeyUrl(base: string, entitySet: string, key: EntityKey, serverTimezone: string): string {
+export function buildV3KeyUrl(
+  base: string,
+  entitySet: string,
+  key: EntityKey,
+  serverTimezone: string,
+  format = NOMETADATA_JSON,
+): string {
   const keyExpr = formatKey(key, serverTimezone)
   const path = `${base}/${encodeSegment(entitySet)}(${keyExpr})`
-  const formatParam = qp('$format', 'application/json;odata=nometadata')
+  const formatParam = qp('$format', format)
   return `${path}?${formatParam}`
 }
 
@@ -174,8 +191,10 @@ export function formatOrderBy(orderBy: readonly { field: string; dir?: 'asc' | '
 /**
  * The names of a `$select` / `$expand` list, trimmed, blank ones dropped. An
  * entry untyped code left `undefined` or `null` is blank too, as `join` wrote it.
+ *
+ * @internal
  */
-function nonBlank(names: readonly string[] | undefined): readonly string[] {
+export function nonBlank(names: readonly string[] | undefined): readonly string[] {
   if (names === undefined || names.length === 0) return []
   return names.map((n) => String(n ?? '').trim()).filter((n) => n !== '')
 }

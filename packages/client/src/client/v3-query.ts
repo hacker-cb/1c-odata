@@ -1,6 +1,7 @@
 import { parseOptsFor, parseV3Collection, parseV3Count } from '../parser.js'
 import { assertPositiveInt, QueryBuilder } from '../query/builder.js'
-import { schemaOfSet } from '../schema-lookup.js'
+import { readFormat } from '../read-format.js'
+import { schemaOfSet, typeNameOfSet } from '../schema-lookup.js'
 import { buildV3CollectionUrl, buildV3CountUrl } from '../url-builder.js'
 import type { EntitySchema, MetadataIndex } from '../validate.js'
 import type { RequestOptions } from './options.js'
@@ -33,8 +34,9 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
 
   /** Execute the query and return parsed `{ value, count?, odataMetadata }`. */
   async get(opts: RequestOptions = {}): Promise<{ odataMetadata: string; value: T[]; count?: number }> {
-    const url = buildV3CollectionUrl(this.client.baseUrl, this)
-    const raw = await this.client.transportGet(url, opts)
+    const format = queryFormat(this.client, this)
+    const url = buildV3CollectionUrl(this.client.baseUrl, this, format)
+    const raw = await this.client.transportGet(url, opts, format)
     return parseV3Collection<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
 
@@ -122,4 +124,14 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
     Object.assign(this.state, other.state)
     return this
   }
+}
+
+/**
+ * The JSON format a query reads in — `minimalmetadata` where its reply carries
+ * a ValueStorage, whose `_Type` 1С withholds in `nometadata` (#289). `raw()`
+ * keeps `nometadata`: its caller reads the body as it always came.
+ */
+function queryFormat(client: ODataV3Client<unknown>, q: V3QueryBuilder<unknown>): string {
+  const index = client.metadataIndex
+  return readFormat(index, typeNameOfSet(index, q.entitySet), { select: q.state.select, expand: q.state.expand })
 }

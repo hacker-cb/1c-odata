@@ -7,7 +7,7 @@ import { requestWithRetry } from '../http/retry.js'
 import { request, requestStream } from '../http/transport.js'
 import { RegisterHelper } from '../register.js'
 import { schemaOfSet } from '../schema-lookup.js'
-import { type EntityKey, normalizeBaseUrl } from '../url-builder.js'
+import { type EntityKey, NOMETADATA_JSON, normalizeBaseUrl } from '../url-builder.js'
 import { type EntitySchema, type MetadataIndex, ValidationError, validateEntity } from '../validate.js'
 import { bigintToStringReplacer, transformDatesToWire, transformDateValuesUntyped } from '../write-transform.js'
 import type { ClientOptions, RequestOptions } from './options.js'
@@ -58,7 +58,7 @@ export interface ODataV3ClientOptions extends ClientOptions {
 }
 
 const V3_BASE_HEADERS = {
-  Accept: 'application/json;odata=nometadata',
+  Accept: NOMETADATA_JSON,
   DataServiceVersion: '3.0',
   MaxDataServiceVersion: '3.0',
 }
@@ -267,12 +267,12 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
    *
    * @internal
    */
-  async transportGet(url: string, callOpts: RequestOptions) {
+  async transportGet(url: string, callOpts: RequestOptions, accept = NOMETADATA_JSON) {
     return requestWithRetry(
       {
         method: 'GET',
         url,
-        headers: this.baseHeaders(),
+        headers: this.readHeaders(accept),
         ...(callOpts.signal !== undefined ? { signal: callOpts.signal } : {}),
       },
       this.callTransportOpts(callOpts),
@@ -294,6 +294,7 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     callOpts: RequestOptions,
     entitySet: string,
     extraHeaders: Record<string, string> = {},
+    accept = NOMETADATA_JSON,
   ): Promise<{ status: number; statusText: string; body: string; headers: Record<string, string> }> {
     const transformed = this.transformWriteBody(body, entitySet)
     // bigint → wire string via replacer (Date can't be fixed here — toJSON
@@ -307,8 +308,12 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     // once it conflicts with the one undici computes — e.g. behind a ProxyAgent.
     // For a body-less write we keep an explicit `Content-Length: 0` (there is no
     // body for undici to measure), which 1С's IIS host wants to avoid a 411.
-    const libraryManaged: Record<string, string> =
-      transformed !== undefined ? { 'Content-Type': 'application/json' } : { 'Content-Length': '0' }
+    // A reply `readFormat` asked `minimalmetadata` for is library-managed too: a `create()` carries it in
+    // `Accept` alone, and a `withHeader('Accept', …)` over it would cost the ValueStorage its `_Type` (#289).
+    const libraryManaged: Record<string, string> = {
+      ...(transformed !== undefined ? { 'Content-Type': 'application/json' } : { 'Content-Length': '0' }),
+      ...(accept !== NOMETADATA_JSON ? { Accept: accept } : {}),
+    }
     const headers = mergeHeadersCaseInsensitive(this.baseHeaders(), extraHeaders, libraryManaged)
     if (transformed !== undefined) {
       // Content-Length is platform-managed on a body write — drop any caller-set
@@ -337,8 +342,9 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     callOpts: RequestOptions,
     entitySet: string,
     extraHeaders: Record<string, string> = {},
+    accept = NOMETADATA_JSON,
   ) {
-    return this.transportWrite('POST', url, body, callOpts, entitySet, extraHeaders)
+    return this.transportWrite('POST', url, body, callOpts, entitySet, extraHeaders, accept)
   }
 
   /** PATCH with JSON body. @internal */
@@ -348,8 +354,9 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     callOpts: RequestOptions,
     entitySet: string,
     extraHeaders: Record<string, string> = {},
+    accept = NOMETADATA_JSON,
   ) {
-    return this.transportWrite('PATCH', url, body, callOpts, entitySet, extraHeaders)
+    return this.transportWrite('PATCH', url, body, callOpts, entitySet, extraHeaders, accept)
   }
 
   /** PUT with JSON body. @internal */
@@ -359,8 +366,9 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     callOpts: RequestOptions,
     entitySet: string,
     extraHeaders: Record<string, string> = {},
+    accept = NOMETADATA_JSON,
   ) {
-    return this.transportWrite('PUT', url, body, callOpts, entitySet, extraHeaders)
+    return this.transportWrite('PUT', url, body, callOpts, entitySet, extraHeaders, accept)
   }
 
   /** DELETE without body — explicit `Content-Length: 0` for IIS. @internal */
@@ -425,6 +433,17 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
       this.callTransportOpts(callOpts),
     )
     return result.response
+  }
+
+  /**
+   * The headers of a GET: {@link baseHeaders}, its `Accept` replaced —
+   * case-insensitively — only where `readFormat` asked for another format than
+   * the default; a default read sends `baseHeaders()` exactly as it did.
+   */
+  private readHeaders(accept: string): Record<string, string> {
+    return accept === NOMETADATA_JSON
+      ? this.baseHeaders()
+      : mergeHeadersCaseInsensitive(this.baseHeaders(), { Accept: accept })
   }
 
   protected baseHeaders(): Record<string, string> {

@@ -67,6 +67,9 @@ export interface CollectionResult<T> {
 
 const DATETIME_FIELD = /^(?:\d{4})-(?:\d{2})-(?:\d{2})T(?:\d{2}):(?:\d{2}):(?:\d{2})(?:\.\d+)?$/
 
+/** The suffix of the annotation `minimalmetadata` adds per navigation property of a row. */
+const NAVIGATION_LINK = '@navigationLinkUrl'
+
 /** The wire form of an `Edm.Int64` 1С sends — a decimal integer string, optionally negative. */
 const INT64_WIRE = /^-?\d+$/
 
@@ -75,7 +78,7 @@ const INT64_WIRE = /^-?\d+$/
  *   - `odata.count` (string in 1С) → `number`
  *   - `Edm.DateTime` strings → `Date` via `parseInZone(v, opts.serverTimezone)`,
  *     except sentinel `0001-01-01T00:00:00` → `null` (sentinel check runs first)
- *   - `@navigationLinkUrl` fields are passed through as strings
+ *   - `<Nav>@navigationLinkUrl` annotations (a `minimalmetadata` reply's) are dropped
  *   - When `metadataIndex` + `typeHint` present: Edm.Int64 → bigint/number per
  *     `shape.int64Mode` (a value that is neither null, a decimal integer
  *     string within the 64-bit range nor a safe-integer JSON number is a
@@ -221,6 +224,9 @@ function mapEntity(obj: Record<string, unknown>, opts: ParseOptions): Record<str
   // key; plain assignment would swap the row's prototype for it).
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(obj)) {
+    // A `<Nav>@navigationLinkUrl` is an annotation of the `minimalmetadata` reply a read of a ValueStorage asks
+    // for (#289), never data: dropped, so a row reads the same in either format.
+    if (k.endsWith(NAVIGATION_LINK)) continue
     setOwn(out, k, mapValue(v, k, schema, shape, opts))
   }
 

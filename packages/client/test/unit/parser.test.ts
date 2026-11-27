@@ -27,6 +27,18 @@ describe('V3 parser', () => {
     expect(() => parseV3Single(body, { serverTimezone: TZ })).toThrow('Expected object at root')
   })
 
+  it('drops every <Nav>@navigationLinkUrl — a row, a single entity, an expanded entity (#289)', () => {
+    const link = { 'Владелец@navigationLinkUrl': "Catalog_X(guid'g')/Владелец" }
+    const r = parseV3Collection<Record<string, unknown>>(
+      JSON.stringify({ value: [{ Ref_Key: 'a', ...link, Владелец: { Ref_Key: 'b', ...link } }] }),
+      { serverTimezone: TZ },
+    )
+    expect(r.value).toEqual([{ Ref_Key: 'a', Владелец: { Ref_Key: 'b' } }])
+    expect(
+      parseV3Single(JSON.stringify({ 'odata.metadata': 'm', Ref_Key: 'a', ...link }), { serverTimezone: TZ }),
+    ).toEqual({ Ref_Key: 'a' })
+  })
+
   it('parseV3Collection converts string odata.count → number', () => {
     const body = JSON.stringify({
       'odata.metadata': 'http://x/$metadata#Catalog_X',
