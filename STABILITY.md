@@ -87,7 +87,7 @@ Layout / naming changes in `@1c-odata/cli/codegen` are a breaking change, versio
 
 Semver-applicable:
 
-- The CLI command set and their primary flags: `add`, `list`, `remove`, `test`, `serve`; `--data-dir`, `--insecure-storage`, `--url`, `--login`, `--timezone` (required with `--url`), `--password-stdin`, `--force`, `--no-verify`.
+- The CLI command set and their primary flags: `add`, `list`, `remove`, `test`, `serve`; `--data-dir`, `--insecure-storage`, `--url`, `--login`, `--timezone` (required with `--url` for a new connection or a new base URL), `--password-stdin`, `--force`, `--no-verify`.
 - The MCP tool names and their input shapes: `list_connections`, `list_entities`, `describe_entity`, `list_enums`, `query`, `get_entity`, `count`, `register_query`, `refresh_metadata`, `add_connection`, `remove_connection`.
 - The on-disk contract: the `config.json` shape (`{ connections: { <name>: { baseUrl, login, serverTimezone, label?, shape?, addedBy? } } }` — `addedBy: "agent"` marks a connection the MCP `add_connection` created, which never takes its password from `ONEC_<NAME>_PASSWORD` and stores it under `<name>@<16 hex of sha256(base URL)>`), the `credentials.json` (0600) fallback format, the data-dir resolution order (`--data-dir` > `ONEC_MCP_DATA_DIR` > per-OS default), and the `ONEC_<NAME>_PASSWORD` env-var naming.
 

@@ -1,7 +1,13 @@
 import { join } from 'node:path'
 import { InvalidArgumentError } from '@1c-odata/client'
 import { assertValidConnectionName, configPath, loadConfig } from '../config.js'
-import { assertAddable, assertAddTargetAllowedOnAdd, upsertConnection, verifyConnectivity } from '../connections.js'
+import {
+  assertAddable,
+  assertAddFieldsOnAdd,
+  assertAddTargetAllowedOnAdd,
+  upsertConnection,
+  verifyConnectivity,
+} from '../connections.js'
 import { errorText } from '../redact.js'
 import { envPassword, passwordEnvVar } from '../secret-store.js'
 import { promptConfirm, promptHidden, promptLine, readPasswordStdin } from './_prompt.js'
@@ -29,7 +35,8 @@ interface ResolvedFields {
   password?: string
   /** Whether the password should be persisted (false when it came from the env var). */
   persistPassword: boolean
-  serverTimezone: string
+  /** Omitted only where an overwrite keeps the base URL, and with it the stored zone. */
+  serverTimezone?: string
   /** Optional display label (omitted ⇒ falls back to the name). */
   label?: string
   overwrite: boolean
@@ -75,13 +82,8 @@ async function gatherNonInteractive(opts: AddOptions): Promise<ResolvedFields> {
   assertAddable(opts.dataDir, name, opts.force === true)
   const login = (opts.login ?? '').trim()
   if (login === '') throw new InvalidArgumentError('--login is required in non-interactive mode', { argument: 'login' })
-  const serverTimezone = (opts.timezone ?? '').trim()
-  if (serverTimezone === '') {
-    throw new InvalidArgumentError(
-      '--timezone is required in non-interactive mode: the IANA zone of the 1С server, e.g. Europe/Moscow. There is no default — a wrong zone silently shifts every DateTime.',
-      { argument: 'timezone' },
-    )
-  }
+  // Required unless --force keeps the base URL (then the stored zone stays): runAdd's preflight decides.
+  const serverTimezone = opts.timezone?.trim()
   warnIfUrlHasUserinfo((opts.url ?? '').trim())
   const resolved = await resolveNonInteractivePassword(opts, name)
   const label = opts.label?.trim()
@@ -91,21 +93,39 @@ async function gatherNonInteractive(opts: AddOptions): Promise<ResolvedFields> {
     login,
     ...(resolved !== undefined ? { password: resolved.value } : {}),
     persistPassword: resolved?.persist ?? false,
-    serverTimezone,
+    ...(serverTimezone !== undefined && serverTimezone !== '' ? { serverTimezone } : {}),
     ...(label !== undefined && label !== '' ? { label } : {}),
     overwrite: opts.force === true,
   }
 }
 
-/** How many blank answers the timezone question takes before giving up (stdin may have run dry). */
+/** How many blank or unknown answers the timezone question takes before giving up (stdin may have run dry). */
 const TIMEZONE_ATTEMPTS = 3
 
-/** Ask for the server timezone — no default offered: a wrong one silently shifts every DateTime. */
+/** Whether `zone` is an IANA timezone — the check `validateConnection` makes. */
+function isIanaTimezone(zone: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Ask for the server timezone — no default offered: a wrong one silently
+ * shifts every DateTime. A blank or unknown zone is asked again, before the
+ * answers that follow are spent.
+ */
 async function promptTimezone(): Promise<string> {
   for (let attempt = 0; attempt < TIMEZONE_ATTEMPTS; attempt++) {
     const answer = (await promptLine('Server timezone (IANA, e.g. Europe/Moscow): ')).trim()
-    if (answer !== '') return answer
-    process.stdout.write('A timezone is required — there is no default.\n')
+    if (answer !== '' && isIanaTimezone(answer)) return answer
+    process.stdout.write(
+      answer === ''
+        ? 'A timezone is required — there is no default.\n'
+        : `"${answer}" is not an IANA timezone (e.g. Europe/Moscow, Asia/Yekaterinburg).\n`,
+    )
   }
   throw new InvalidArgumentError('Server timezone is required (an IANA zone, e.g. Europe/Moscow)', {
     argument: 'timezone',
@@ -190,6 +210,8 @@ function reportSaved(
 export async function runAdd(opts: AddOptions): Promise<void> {
   const fields = opts.url !== undefined ? await gatherNonInteractive(opts) : await gatherInteractive(opts)
   if (fields === null) return
+  // A missing or mistyped zone (or URL) fails here, not after a multi-MB $metadata download.
+  assertAddFieldsOnAdd(opts.dataDir, fields.name, fields)
   // Before verifying, which would already send an env password to the new target.
   assertAddTargetAllowedOnAdd(opts.dataDir, fields.name, fields, {
     byAgent: false,
@@ -202,7 +224,7 @@ export async function runAdd(opts: AddOptions): Promise<void> {
     name: fields.name,
     baseUrl: fields.baseUrl,
     login: fields.login,
-    serverTimezone: fields.serverTimezone,
+    ...(fields.serverTimezone !== undefined ? { serverTimezone: fields.serverTimezone } : {}),
     ...(fields.label !== undefined ? { label: fields.label } : {}),
     ...(fields.persistPassword && fields.password !== undefined && fields.password !== ''
       ? { password: fields.password }

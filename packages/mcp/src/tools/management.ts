@@ -5,6 +5,7 @@ import { loadConfig, type StoredConnection } from '../config.js'
 import type { ConnectionPool } from '../connection-pool.js'
 import {
   assertAddable,
+  assertAddFieldsOnAdd,
   assertAddTargetAllowedOnAdd,
   assertNoEnvPassword,
   removeConnection,
@@ -40,9 +41,9 @@ interface AddConnectionArgs {
   connection: string
   baseUrl: string
   login: string
-  serverTimezone: string
   // `| undefined` (not just optional) to match the zod-inferred args under
   // exactOptionalPropertyTypes — the tool callback always passes every key.
+  serverTimezone?: string | undefined
   label?: string | undefined
   password?: string | undefined
   overwrite?: boolean | undefined
@@ -60,6 +61,8 @@ async function addConnection(
   // Preflight the duplicate check BEFORE verifying, so a password is never sent
   // to baseUrl only to be rejected as "already exists" afterwards.
   assertAddable(opts.dataDir, connection, overwrite === true)
+  // A missing or mistyped zone (or URL) fails here, not after a multi-MB $metadata download.
+  assertAddFieldsOnAdd(opts.dataDir, connection, { baseUrl, login, serverTimezone })
   assertAddTargetAllowedOnAdd(
     opts.dataDir,
     connection,
@@ -76,7 +79,7 @@ async function addConnection(
     name: connection,
     baseUrl,
     login,
-    serverTimezone,
+    ...(serverTimezone !== undefined ? { serverTimezone } : {}),
     ...(label !== undefined ? { label } : {}),
     ...(hasPassword ? { password } : {}),
     insecure: opts.insecure ?? false,
@@ -214,8 +217,9 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
         login: z.string().describe('Basic-auth username'),
         serverTimezone: z
           .string()
+          .optional()
           .describe(
-            'IANA timezone of the 1С server, e.g. "Europe/Moscow". Required, no default: a wrong zone silently shifts every DateTime the base returns or receives.',
+            'IANA zone of the 1С server, e.g. Europe/Moscow, Asia/Yekaterinburg — required for a new connection (no default: a wrong zone silently shifts every DateTime); ask the person if unknown. An overwrite keeping the base URL keeps the stored zone when this is omitted.',
           ),
         label: z
           .string()

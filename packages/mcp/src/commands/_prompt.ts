@@ -20,12 +20,10 @@ export async function readPasswordStdin(): Promise<string> {
 }
 
 /** Ask for a line of input. Returns `opts.default` when the user enters nothing. */
-export async function promptLine(label: string, opts: { default?: string } = {}): Promise<string> {
+export async function promptLine(label: string): Promise<string> {
   const rl = createInterface({ input: stdin, output: stdout })
   try {
-    const answer = (await rl.question(label)).trim()
-    if (answer === '' && opts.default !== undefined) return opts.default
-    return answer
+    return (await rl.question(label)).trim()
   } finally {
     rl.close()
   }

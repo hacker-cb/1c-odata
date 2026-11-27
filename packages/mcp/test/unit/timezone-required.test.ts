@@ -62,6 +62,20 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 
+async function agent() {
+  const server = new McpServer({ name: 'test', version: '0.0.0' })
+  const pool = new ConnectionPool(new FileConnectionSource({ dataDir: dir, insecure: true }))
+  registerManagementTools(server, pool, { dataDir: dir, insecure: true })
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair()
+  const mcp = new Client({ name: 'test-client', version: '0.0.0' })
+  await Promise.all([server.connect(serverSide), mcp.connect(clientSide)])
+  const call = async (args: Record<string, unknown>) => {
+    const res = await mcp.callTool({ name: 'add_connection', arguments: args })
+    return { isError: res.isError === true, text: JSON.stringify(res.content) }
+  }
+  return { call, close: () => Promise.all([mcp.close(), server.close()]) }
+}
+
 describe('serverTimezone has no default (#254)', () => {
   it('add_connection refuses a call without it, before any request, writing nothing', async () => {
     const server = new McpServer({ name: 'test', version: '0.0.0' })
@@ -77,12 +91,12 @@ describe('serverTimezone has no default (#254)', () => {
     const tools = await mcp.listTools()
     await Promise.all([mcp.close(), server.close()])
     expect(res.isError).toBe(true)
-    expect(JSON.stringify(res.content)).toContain('serverTimezone')
+    expect(JSON.stringify(res.content)).toContain('required for the new connection')
     expect(fetched).toEqual([])
     expect(loadConfig(dir).connections.c).toBeUndefined()
-    const schema = tools.tools.find((t) => t.name === 'add_connection')?.inputSchema
-    expect(schema?.required).toContain('serverTimezone')
-    expect(JSON.stringify(schema)).not.toMatch(/default Europe/i)
+    const schema = JSON.stringify(tools.tools.find((t) => t.name === 'add_connection')?.inputSchema)
+    expect(schema).toContain('required for a new connection')
+    expect(schema).not.toMatch(/default Europe/i)
   })
 
   it('add_connection stores the zone it is given', async () => {
@@ -115,7 +129,7 @@ describe('serverTimezone has no default (#254)', () => {
         password: 'pw',
         ...(timezone !== undefined ? { timezone } : {}),
       }),
-    ).rejects.toThrow(/--timezone is required/)
+    ).rejects.toThrow(/server timezone \(serverTimezone \/ --timezone\) is required for the new connection/)
     expect(fetched).toEqual([])
     expect(loadConfig(dir).connections.c).toBeUndefined()
   })
@@ -133,5 +147,80 @@ describe('serverTimezone has no default (#254)', () => {
     prompts.lines = [URL, 'u', '', '', '']
     await expect(runAdd({ dataDir: dir, insecure: true, name: 'c' })).rejects.toThrow(/Server timezone is required/)
     expect(loadConfig(dir).connections.c).toBeUndefined()
+  })
+
+  describe('an overwrite', () => {
+    beforeEach(async () => {
+      prompts.lines = []
+      await runAdd({ dataDir: dir, insecure: true, name: 'c', url: URL, login: 'u', timezone: 'Asia/Yekaterinburg' })
+      fetched = []
+    })
+
+    it('keeping the base URL keeps the stored zone where none is given (add_connection, add --force)', async () => {
+      const { call, close } = await agent()
+      expect((await call({ connection: 'c', baseUrl: URL, login: 'u', label: 'x', overwrite: true })).isError).toBe(
+        false,
+      )
+      await close()
+      expect(loadConfig(dir).connections.c).toMatchObject({ label: 'x', serverTimezone: 'Asia/Yekaterinburg' })
+      await runAdd({ dataDir: dir, insecure: true, name: 'c', url: `${URL}/`, login: 'u2', force: true })
+      expect(loadConfig(dir).connections.c).toMatchObject({ login: 'u2', serverTimezone: 'Asia/Yekaterinburg' })
+    })
+
+    it('moving to another server needs a zone: add --force refuses without one, before any request', async () => {
+      await expect(
+        runAdd({
+          dataDir: dir,
+          insecure: true,
+          name: 'c',
+          url: 'http://other.test/odata/standard.odata',
+          login: 'u',
+          password: 'pw',
+          force: true,
+        }),
+      ).rejects.toThrow(/required for connection "c" when it moves to another server/)
+      expect(fetched).toEqual([])
+      expect(loadConfig(dir).connections.c?.baseUrl).toBe(URL)
+    })
+
+    it('a zone given replaces the stored one', async () => {
+      const { call, close } = await agent()
+      await call({ connection: 'c', baseUrl: URL, login: 'u', serverTimezone: 'Europe/Moscow', overwrite: true })
+      await close()
+      expect(loadConfig(dir).connections.c?.serverTimezone).toBe('Europe/Moscow')
+    })
+  })
+
+  it('a mistyped zone fails before any request (add_connection, add)', async () => {
+    const { call, close } = await agent()
+    const res = await call({
+      connection: 'c',
+      baseUrl: URL,
+      login: 'u',
+      password: 'pw',
+      serverTimezone: 'Europe/Mosocw',
+    })
+    await close()
+    expect(res.isError).toBe(true)
+    expect(res.text).toContain('not a valid IANA timezone')
+    await expect(
+      runAdd({
+        dataDir: dir,
+        insecure: true,
+        name: 'c',
+        url: URL,
+        login: 'u',
+        password: 'pw',
+        timezone: 'Europe/Mosocw',
+      }),
+    ).rejects.toThrow(/not a valid IANA timezone/)
+    expect(fetched).toEqual([])
+  })
+
+  it('the interactive CLI add asks again on an unknown zone', async () => {
+    prompts.lines = [URL, 'u', 'Europe/Mosocw', 'Europe/Moscow', '']
+    await runAdd({ dataDir: dir, insecure: true, name: 'c' })
+    expect(prompts.asked.filter((q) => /timezone/i.test(q))).toHaveLength(2)
+    expect(loadConfig(dir).connections.c?.serverTimezone).toBe('Europe/Moscow')
   })
 })
