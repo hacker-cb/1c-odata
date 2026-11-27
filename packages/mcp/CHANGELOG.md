@@ -1,5 +1,17 @@
 # @1c-odata/mcp
 
+## 0.12.0
+
+### Minor Changes
+
+- [#267](https://github.com/hacker-cb/1c-odata/pull/267) [`8ae52ff`](https://github.com/hacker-cb/1c-odata/commit/8ae52ff25859ad39dfe5ef0be4d3a88cc8515039) Thanks [@hacker-cb](https://github.com/hacker-cb)! - **Breaking:** the server timezone has no default anymore. Before, MCP `add_connection` defaulted `serverTimezone` to `Europe/Moscow`, and so did the CLI `add` (`--timezone`, and the interactive answer). Now the zone is required for a new connection and for an overwrite that moves a connection to another base URL. `add_connection` refuses without it, before any request, and asks the agent to ask the person. `add --url …` refuses without `--timezone`. The interactive `add` offers no answer and asks again on a blank or unknown zone. An overwrite keeping the base URL (`add_connection` with `overwrite`, `add --force`) keeps the stored zone when none is given. A mistyped zone now fails before the `$metadata` download, not after it. The project rule is that `serverTimezone` has no implicit default: a connection added without one for a base outside Moscow time silently shifted every DateTime. Migration: pass `serverTimezone` (an IANA zone, e.g. `"Europe/Moscow"`) to `add_connection` and `--timezone <zone>` to non-interactive `add` when adding a connection. Connections already in `config.json` are unaffected.
+
+### Patch Changes
+
+- Updated dependencies [[`b941e19`](https://github.com/hacker-cb/1c-odata/commit/b941e19ad30478fa98642a609b5d20692e6dc175), [`b80c9e8`](https://github.com/hacker-cb/1c-odata/commit/b80c9e85a963feca8bbd7d26c8580b10efbb59cd), [`b80c9e8`](https://github.com/hacker-cb/1c-odata/commit/b80c9e85a963feca8bbd7d26c8580b10efbb59cd), [`b941e19`](https://github.com/hacker-cb/1c-odata/commit/b941e19ad30478fa98642a609b5d20692e6dc175)]:
+  - @1c-odata/client@0.12.0
+  - @1c-odata/metadata@0.12.0
+
 ## 0.11.1
 
 ### Patch Changes
