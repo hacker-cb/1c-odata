@@ -67,10 +67,11 @@ export interface AddTarget {
  *   a person re-points one with the CLI `add --force`;
  * - an agent creating a connection under a set `ONEC_<NAME>_PASSWORD`: a person
  *   adds that one through the CLI;
- * - where the connection, as the add leaves it, takes its password from
- *   `ONEC_<NAME>_PASSWORD` ({@link connectionEnvPassword}): pointing it
- *   elsewhere (an overwrite clears only the stored password, and the env one
- *   would go to the new server), or storing a password reads would not use.
+ * - pointing elsewhere a connection that takes its password from
+ *   `ONEC_<NAME>_PASSWORD` ({@link connectionEnvPassword}) — an overwrite
+ *   clears only the stored password, and the env one would go to the new server;
+ * - storing a password the connection, as the add leaves it, would not use
+ *   for the env one.
  */
 function assertAddTargetAllowed(
   name: string,
@@ -92,15 +93,20 @@ function assertAddTargetAllowed(
       { argument: changedTargetArgument(existing, next) },
     )
   }
-  // Judged on the connection as written: a person's add drops an agent's mark, so the env var applies to it again.
-  if (connectionEnvPassword(name, add.byAgent ? existing : undefined) === undefined) return
-  if (add.storesPassword) {
+  // A stored password is judged on the connection as written — a person's add
+  // drops an agent's mark, so the env var applies to it again — and a re-point on
+  // the connection as it stands: only a password it takes now would follow it.
+  if (add.storesPassword && connectionEnvPassword(name, add.byAgent ? existing : undefined) !== undefined) {
     throw new InvalidArgumentError(
       `The password of connection "${name}" comes from ${envVar}, which outranks a stored one: reads would keep sending it, not the password given here. Change or unset ${envVar} instead.`,
       { argument: 'password' },
     )
   }
-  if (existing !== undefined && !sameAuthTarget(existing, next)) {
+  if (
+    existing !== undefined &&
+    connectionEnvPassword(name, existing) !== undefined &&
+    !sameAuthTarget(existing, next)
+  ) {
     throw new InvalidArgumentError(
       `The password of connection "${name}" comes from ${envVar}; pointing the connection at another server or login would send that password there. Unset ${envVar} first, or add the new target under another connection name.`,
       { argument: changedTargetArgument(existing, next) },

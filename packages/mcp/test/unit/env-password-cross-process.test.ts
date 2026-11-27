@@ -215,6 +215,16 @@ describe('an agent in a process without ONEC_<NAME>_PASSWORD cannot route it els
     expect(loadConfig(dir).connections.new?.addedBy).toBe('agent')
   })
 
+  it('the CLI add --force re-points an agent’s connection under a set env var: a person chooses where it goes', async () => {
+    const { call, close } = await agent()
+    await call('add_connection', { connection: 'new', baseUrl: EVIL, login: 'u' })
+    await close()
+    processA()
+    await runAdd({ dataDir: dir, insecure: true, name: 'new', url: OLD, login: 'u', force: true })
+    expect(loadConfig(dir).connections.new).toMatchObject({ baseUrl: OLD })
+    expect(sent).toEqual([{ url: `${OLD}/$metadata`, password: ENV_PASSWORD }])
+  })
+
   it('credentials of an agent’s connection change under a set env var: reads would use them, not the env one', async () => {
     const { call, close } = await agent()
     await call('add_connection', { connection: 'new', baseUrl: EVIL, login: 'u' })
