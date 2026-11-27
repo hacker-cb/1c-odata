@@ -4,9 +4,11 @@ import { join } from 'node:path'
 import type { EdmxModel } from '@1c-odata/metadata'
 import { buildMetadataIndex, fetchMetadataXml, parseEdmx } from '@1c-odata/metadata'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { loadConfig } from '../../src/config.js'
 import { ConnectionPool } from '../../src/connection-pool.js'
 import { removeConnection, upsertConnection } from '../../src/connections.js'
 import { FileConnectionSource } from '../../src/file-connection-source.js'
+import { secretKey } from '../../src/secret-store.js'
 
 // Stub the network + parse + index build so get() never touches a real base;
 // keep @1c-odata/client real except the client ctor (InvalidArgumentError, used
@@ -120,6 +122,12 @@ describe('ConnectionPool.get — a connection another process changed (#274)', (
   // client, and the CLI (or another MCP server) changing config.json and the
   // password store behind it — nothing calls refresh() on the first pool.
   const trade = { name: 'trade', baseUrl: 'http://h/odata/standard.odata', login: 'u' }
+  /** The key `trade`'s password lives under, as config.json stands. */
+  const tradeKey = () => {
+    const conn = loadConfig(dir).connections.trade
+    if (conn === undefined) throw new Error('trade missing')
+    return secretKey('trade', conn)
+  }
   const change = (input: Partial<Parameters<typeof upsertConnection>[0]>) =>
     upsertConnection({
       ...trade,
@@ -196,7 +204,8 @@ describe('ConnectionPool.get — a connection another process changed (#274)', (
     await change({ serverTimezone: 'Asia/Novosibirsk' })
     write('credentials.json', {})
     await expect(serve.get('trade')).rejects.toThrow(/No password for "trade"/)
-    write('credentials.json', { trade: 'pw' })
+    // Under the key the changed connection reads — its target's (#272).
+    write('credentials.json', { [tradeKey()]: 'pw' })
     await expect(serve.get('trade')).resolves.not.toBe(built)
     expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2)
   })

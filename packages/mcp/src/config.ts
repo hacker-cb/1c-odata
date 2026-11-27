@@ -35,15 +35,58 @@ export interface StoredConnection {
    * hand-written / older config).
    */
   addedBy?: 'agent'
+  /**
+   * `'target'` where a person's connection keeps its password under its
+   * target's key, `<name>+<16 hex of sha256(base URL)>` (#272) — every
+   * connection a person adds or changes from this version on. Absent on a
+   * person's connection ⇒ the password lives under `<name>`, as before; the
+   * next change of the connection moves it. An agent's connection (`addedBy`)
+   * is always keyed to its target and never carries it.
+   */
+  passwordKey?: 'target'
 }
 
 /**
- * A connection's base URL as its auth target: trimmed, without userinfo,
- * normalized. The one form a target is compared and keyed by — the add guards
- * and the key an agent's stored password lives under.
+ * A connection's base URL as its auth target: trimmed, without userinfo, its
+ * scheme and host lower-cased and a default port (`:80` for http, `:443` for
+ * https) dropped, without a trailing slash. The path is kept as written — a 1С
+ * publication path may be Cyrillic, and percent-encoding it would make another
+ * string of the same target. The one form a target is compared and keyed by —
+ * the add guards and the key a stored password lives under.
  */
 export function targetBaseUrl(baseUrl: string): string {
-  return normalizeBaseUrl(stripUrlUserinfo(baseUrl.trim()))
+  return normalizeBaseUrl(canonicalOrigin(stripUrlUserinfo(baseUrl.trim())))
+}
+
+/**
+ * `url` with its scheme and host's ASCII letters lower-cased and a default port
+ * dropped; anything not `scheme://authority…` as is. Only ASCII is folded: a
+ * Unicode host lower-cased by JavaScript may name another DNS name than the one
+ * the request resolves (a final sigma), so it stays as written — another key,
+ * never another server.
+ */
+function canonicalOrigin(url: string): string {
+  // The authority ends at `\\` too: a URL parser reads it as `/` in an http(s) URL.
+  const match = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/\\?#]*)(.*)$/s.exec(url)
+  if (match === null) return url
+  const scheme = (match[1] ?? '').toLowerCase()
+  const authority = match[2] ?? ''
+  const rest = match[3] ?? ''
+  // The port follows the last ':' outside an IPv6 literal's brackets.
+  const afterBracket = authority.includes(']') ? authority.slice(authority.lastIndexOf(']')) : authority
+  const portText = /:(\d*)$/.exec(afterBracket)?.[1]
+  const host = foldAscii(
+    portText !== undefined ? authority.slice(0, authority.length - portText.length - 1) : authority,
+  )
+  // As a number: `:0443` is port 443, as a URL parser reads it.
+  const port = portText !== undefined && portText !== '' ? String(Number(portText)) : undefined
+  const isDefault = (scheme === 'http' && port === '80') || (scheme === 'https' && port === '443')
+  return `${scheme}://${port !== undefined && !isDefault ? `${host}:${port}` : host}${rest}`
+}
+
+/** `text` with its ASCII letters lower-cased, every other character as is. */
+function foldAscii(text: string): string {
+  return text.replace(/[A-Z]+/g, (letters) => letters.toLowerCase())
 }
 
 /** Shape of `<dataDir>/config.json`. */
@@ -261,6 +304,7 @@ function normalizeEntry(conn: unknown): StoredConnection | undefined {
     ...(label !== '' ? { label } : {}),
     ...(c.shape !== undefined ? { shape: c.shape } : {}),
     ...(c.addedBy === 'agent' ? { addedBy: 'agent' as const } : {}),
+    ...(c.addedBy !== 'agent' && c.passwordKey === 'target' ? { passwordKey: 'target' as const } : {}),
   }
 }
 

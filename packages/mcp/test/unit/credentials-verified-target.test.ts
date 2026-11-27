@@ -11,7 +11,7 @@ import { ConnectionPool } from '../../src/connection-pool.js'
 import { updateConnectionCredentials, upsertConnection } from '../../src/connections.js'
 import { withDataDirLock } from '../../src/data-dir-lock.js'
 import { FileConnectionSource } from '../../src/file-connection-source.js'
-import { SecretStore } from '../../src/secret-store.js'
+import { NAME_KEY_OWNER, SecretStore } from '../../src/secret-store.js'
 import { registerManagementTools } from '../../src/tools/management.js'
 
 // Isolate from the real OS keychain.
@@ -95,6 +95,9 @@ function repointElsewhere(baseUrl: string, login = 'u'): void {
 }
 
 const secret = () => new FileConnectionSource({ dataDir: dir, insecure: true }).getSecret('prod')
+/** The password stored for `prod` on `baseUrl` — what a reader of a config pointing there gets. */
+const secretOn = (baseUrl: string) =>
+  new SecretStore({ dataDir: dir, insecure: true }).stored('prod', { baseUrl, passwordKey: 'target' })
 
 describe('a credential change verified on one target is not stored for another (#273)', () => {
   it('CLI set-credentials: refused where the connection was re-pointed during the verify', async () => {
@@ -104,7 +107,8 @@ describe('a credential change verified on one target is not stored for another (
     repointElsewhere(T)
     oneC.release()
     await expect(run).rejects.toThrow(/changed while its credentials were being verified.*t\.test.*Nothing was changed/)
-    expect(await secret()).toBe('old-secret')
+    expect(await secretOn(S)).toBe('old-secret')
+    expect(await secretOn(T)).toBeNull()
     expect(loadConfig(dir).connections.prod?.baseUrl).toBe(T)
   })
 
@@ -124,7 +128,8 @@ describe('a credential change verified on one target is not stored for another (
     const result = await call
     expect(result.isError).toBe(true)
     expect(JSON.stringify(result.content)).toMatch(/changed while its credentials were being verified/)
-    expect(await secret()).toBe('old-secret')
+    expect(await secretOn(S)).toBe('old-secret')
+    expect(await secretOn(T)).toBeNull()
     await mcp.close()
   })
 
@@ -195,7 +200,7 @@ describe('a credential change verified on one target is not stored for another (
       await new SecretStore({ dataDir: dir, insecure: true }).write(
         'bare',
         'appeared',
-        loadConfig(dir).connections.bare,
+        loadConfig(dir).connections.bare ?? NAME_KEY_OWNER,
       )
     })
     await expect(run).rejects.toThrow(/its stored password was changed/)

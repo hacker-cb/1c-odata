@@ -68,7 +68,7 @@ const envPassword = () => vi.stubEnv('ONEC_C_PASSWORD', 'from-env')
 /** The stored password of `c` is still the one it was added with — read past the env var. */
 async function expectStoredPasswordKept() {
   vi.stubEnv('ONEC_C_PASSWORD', '')
-  expect((await stored().secret.read('c'))?.password).toBe('stored')
+  expect((await stored().secret.read('c', loadConfig(dir).connections['c']))?.password).toBe('stored')
 }
 
 const stored = () => ({
@@ -133,10 +133,15 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
     })
 
     it('keeps the stored password over an overwrite to the same, differently written target', async () => {
-      // Without the env var too: the stored password is cleared only for another target.
+      // Without the env var too: the stored password is cleared only for another target. The hand-written
+      // trailing slash is the same target, so the same key (#272) as the password beforeEach stored.
       writeFileSync(
         join(dir, 'config.json'),
-        JSON.stringify({ connections: { c: { baseUrl: `${OLD}/`, login: 'u', serverTimezone: 'Europe/Moscow' } } }),
+        JSON.stringify({
+          connections: {
+            c: { baseUrl: `${OLD}/`, login: 'u', serverTimezone: 'Europe/Moscow', passwordKey: 'target' },
+          },
+        }),
         { mode: 0o600 },
       )
       const { call, close } = await tools()
@@ -149,7 +154,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       })
       await close()
       expect(res.isError).toBe(false)
-      expect((await stored().secret.read('c'))?.password).toBe('stored')
+      expect((await stored().secret.read('c', loadConfig(dir).connections['c']))?.password).toBe('stored')
     })
 
     it('reads a stored target as stored and normalized: a hand-written trailing slash is the same target', async () => {
@@ -206,7 +211,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
     it('the CLI add --force still re-points one without the env var: the stored password is cleared', async () => {
       await runAdd({ timezone: 'UTC', dataDir: dir, insecure: true, name: 'c', url: NEW, login: 'u', force: true })
       expect(stored().config?.baseUrl).toBe(NEW)
-      expect(await stored().secret.read('c')).toBeNull()
+      expect(await stored().secret.read('c', loadConfig(dir).connections['c'])).toBeNull()
     })
   })
 
@@ -305,7 +310,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       const { SecretStore: Store } = await import('../../src/secret-store.js')
       const env = Object.create({ ONEC_C_PASSWORD: 'inherited' }) as NodeJS.ProcessEnv
       const store = new Store({ dataDir: dir, insecure: true, env })
-      expect(await store.source('c')).toBe('file')
+      expect(await store.source('c', loadConfig(dir).connections['c'])).toBe('file')
     })
   })
 
@@ -328,7 +333,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       expect(res.isError).toBe(false)
       expect(fetched).toHaveLength(1)
       expect(stored().config?.login).toBe('u2')
-      expect((await stored().secret.read('c'))?.password).toBe('new')
+      expect((await stored().secret.read('c', loadConfig(dir).connections['c']))?.password).toBe('new')
     })
   })
 
