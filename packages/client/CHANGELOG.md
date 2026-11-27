@@ -1,5 +1,87 @@
 # @1c-odata/client
 
+## 0.13.0
+
+### Minor Changes
+
+- [#288](https://github.com/hacker-cb/1c-odata/pull/288) [`7e7129d`](https://github.com/hacker-cb/1c-odata/commit/7e7129dde5374ec09c9c2c8fba490d6157507269) Thanks [@hacker-cb](https://github.com/hacker-cb)! - An entity an `$expand` brings is parsed with the schema of its own type, as the row is ([#283](https://github.com/hacker-cb/1c-odata/issues/283)). The index held no navigation properties, so the parser found no type for an expanded field and read the entity schema-less: under the default `int64Mode: 'number'` an `Edm.Int64` stayed the wire string (`"5"`, where codegen types the field `number`), a malformed one (`"12x"`) passed unchecked, `Edm.DateTime` went by the string heuristic alone, and a ValueStorage pair stayed flat.
+
+  `buildMetadataIndex` (so `fetchMetadataIndex`, `createDynamicClient` and codegen's `__metadata.json`) now records each EntityType's navigation properties in a new optional field, `EntitySchema.navigation` — `{ [name]: { type, collection? } }`, `type` being the target's local name and `collection: true` only for a to-many end, which 1С never declares. Only a navigation whose target the index holds is written; the key goes after `valueStorages`, the rest of `__metadata.json` stays byte-for-byte as it was (+7–11 % in size for a full base). `parseMetadataIndex` / `loadMetadataIndex` refuse a malformed `navigation` with `MetadataError`; one naming a type the index lacks reads that expanded value schema-less instead of failing the index. `NavigationSchema` is exported as a type.
+
+  The parser resolves an expanded field through it: an expanded entity, and each entity of an expanded collection, reads with its target's schema, exactly as a row does — `Edm.Int64` converted per `int64Mode` and, in `'number'` / `'bigint'`, refused when it is no 64-bit integer; `Edm.DateTime` converted by the schema and, in `dateMode: 'date'`, refused when it names no real date-time; an `Edm.String` that looks like a date left a string; ValueStorage grouped. The `'string'` modes pass values through untouched, as they do for the row.
+
+  **Migration:** regenerate `__metadata.json` (`1c-odata generate`) or refetch a cached index to get the new behaviour — an index without `navigation` still loads and reads expanded entities schema-less, as before. With a new index, code that read an expanded `Edm.Int64` as a string gets a `number` (or `bigint`) now, and a reply whose expanded entity breaks its schema is a `ParseError`.
+
+- [#277](https://github.com/hacker-cb/1c-odata/pull/277) [`6818921`](https://github.com/hacker-cb/1c-odata/commit/6818921ad2784f919841b6625822015309a4019b) Thanks [@hacker-cb](https://github.com/hacker-cb)! - An `Edm.Int64` value that is no 64-bit integer fails a read with a `ParseError` under the default `int64Mode: 'number'` too, where it read silently as whatever `Number` made of it — `12x` → `NaN`, `1.5` → `1.5`, `0x1f` → `31`, `''` → `0` — and a JSON number passed through as-is, a fraction included ([#276](https://github.com/hacker-cb/1c-odata/issues/276)).
+
+  The check is the one `'bigint'` now applies: the wire value must be `null`, a string matching `-?\d+` within the signed 64-bit range, or a JSON number that is a safe integer (a server or proxy sending a whole `Edm.Int64` as a number still reads); anything else — a fraction, a number past the safe range, a boolean, an object — is a `ParseError` naming the field and the value. `-0` reads as `0`. `int64Mode: 'string'` passes the wire value through untouched, as before. 1С sends `Edm.Int64` as a decimal integer string, so nothing changes for a response from 1С itself.
+
+  The check runs wherever an entity is parsed — a read, and the entity `create()` / `patch()` / `put()` gets back: there such a value is a `ParseError` after the server has written, as a malformed `Edm.DateTime` already was.
+
+  **Migration:** none for a response from 1С. Code that read any other value through an `Edm.Int64` field — `NaN`, a fraction, `0` for an empty string, a hexadecimal one — gets a `ParseError` there now: catch it, or read the field with `int64Mode: 'string'` and convert it itself. A write that fails this way has reached the server: do not retry a `create()` on it blindly.
+
+- [#294](https://github.com/hacker-cb/1c-odata/pull/294) [`f433f82`](https://github.com/hacker-cb/1c-odata/commit/f433f820d62bf16f5af7f3d43ded47e8ed21148f) Thanks [@hacker-cb](https://github.com/hacker-cb)! - A ValueStorage in a tabular part's row arrives as `{ contentType, base64Data }` (or `null`), as codegen types it ([#290](https://github.com/hacker-cb/1c-odata/issues/290)). `buildMetadataIndex` listed `valueStorages` for EntityTypes only, while 1С declares storages in tabular row types too (`<Doc>_<Part>_RowType`, a ComplexType — 86 of them in УТ 11.5, 314 tabular parts with one in БП 3.0); the parser reads a row by that type, so its halves stayed flat — and under `nometadata` the `_Type` never came ([#289](https://github.com/hacker-cb/1c-odata/issues/289)).
+
+  - `buildMetadataIndex` (so `fetchMetadataIndex`, `createDynamicClient` and codegen's `__metadata.json`) lists `valueStorages` for ComplexTypes too — `__metadata.json` gains the key on those row types, nothing else changes.
+  - A read asks for `minimalmetadata` ([#289](https://github.com/hacker-cb/1c-odata/issues/289)) where a tabular part with a storage comes back: an empty `$select`, `*` (not `**`, which leaves tabular parts out), the part named bare or with `/*` / `/**`, or `<Part>/<base or half>`.
+  - A `$select` of `<Part>/<base>` is written as its two halves ([#286](https://github.com/hacker-cb/1c-odata/issues/286)) — through an untyped query: a codegen-typed `select()` takes the entity's own keys, the part (`Товары`) among them, not a path.
+
+  Codegen's types do not change: a tabular row was already typed with the storage as `ValueStorage | null`.
+
+  **Migration:** regenerate `__metadata.json` (or refetch a cached index). A tabular row that carried `<X>_Base64Data` as a plain field carries `<X>` instead.
+
+- [#291](https://github.com/hacker-cb/1c-odata/pull/291) [`4f500c9`](https://github.com/hacker-cb/1c-odata/commit/4f500c90f226f96d103f0daf032b131fa4047e06) Thanks [@hacker-cb](https://github.com/hacker-cb)! - A ValueStorage field read from 1С arrives as `{ contentType, base64Data }` (or `null`), as its type says ([#289](https://github.com/hacker-cb/1c-odata/issues/289)). The client reads every reply as `application/json;odata=nometadata`, and in that format 1С sends a storage's `<X>_Base64Data` but withholds its `<X>_Type` — even in a whole row — so the parser never had the pair to group: `<X>` read `undefined` on every real base (and up to v0.12.0 the half was dropped too).
+
+  With a `metadataIndex`, a read whose reply carries a storage now asks for `application/json;odata=minimalmetadata` instead — in `$format` and `Accept` alike — which brings `_Type`:
+
+  - a query (`get()`, `stream()`) of a type with `valueStorages` whose `$select` is empty, holds `*` / `**`, or names a storage's base or one of its halves;
+  - a query whose `$expand` reaches such a type (through `EntitySchema.navigation`; a `*` ending the path reaches every navigation of its level) with the `$select` keeping that entity whole — empty, a root `*` / `**`, the path or an ancestor named bare or with `/*` / `/**` — or naming a storage of it;
+  - `entity(…).get()` of such a type, and the entity its `create()` / `patch()` / `put()` return — there the format is library-managed, as `Content-Type` is: a `withHeader('Accept', …)` does not override it.
+
+  Where it is unclear whether 1С sends a storage, the heavier format is asked for.
+
+  Every other read — no index, a type without storages, a `$select` without them, register virtual tables, `raw()` — stays `nometadata`, its request byte-for-byte as before. The parser drops the `<Nav>@navigationLinkUrl` annotations `minimalmetadata` adds (one per navigation property of a row, an expanded entity's included), and keeps the root `odata.metadata` out of the row as it already did, so a row reads the same in either format — a query's `odataMetadata` now carries that URI where it was empty. 1С sends no such annotation in `nometadata` — not even beside an empty expanded reference — so a `nometadata` row from 1С is unchanged; another server's would lose them.
+
+  A storage in a tabular part's row (`<Doc>_<Part>_RowType`) still arrives flat — `<X>_Base64Data` alone — until [#290](https://github.com/hacker-cb/1c-odata/issues/290).
+
+  **Cost:** a read of a type with storages is heavier on the wire — measured on live УТ 11.5 / БП 3.0 at +5 % to +45 %, the navigation links accounting for most of it. A `$select` that leaves storages out keeps the lighter format.
+
+  **Migration:** none in code. A row of such a type no longer carries `<X>_Base64Data` as a plain field where it did; read `<X>.base64Data`. Without an index nothing changes: the halves stay flat, `_Base64Data` alone.
+
+### Patch Changes
+
+- [#277](https://github.com/hacker-cb/1c-odata/pull/277) [`6818921`](https://github.com/hacker-cb/1c-odata/commit/6818921ad2784f919841b6625822015309a4019b) Thanks [@hacker-cb](https://github.com/hacker-cb)! - An `Edm.Int64` value that is no 64-bit integer fails a read with a `ParseError` under `int64Mode: 'bigint'`, not a bare `SyntaxError` from `BigInt` ([#276](https://github.com/hacker-cb/1c-odata/issues/276)).
+
+  `BigInt('12x')` threw a native `SyntaxError` that went past every `ODataError` / `ParseError` handler; `''` and `' 0x1f '` read silently as `0n` and `31n`, a value past the signed 64-bit range as a `bigint` no `Edm.Int64` holds, and a JSON number reached the `bigint`-typed field as a `number`, a fraction included. The wire value must now be `null`, a string matching `-?\d+` within `-2^63 … 2^63-1` — what 1С sends — or a JSON number that is a safe integer, which converts to a `bigint` like the string would. Anything else is a `ParseError` naming the field and the value (`Edm.Int64 field LineNumber: expected a 64-bit integer string, a safe integer or null, got string "12x"`).
+
+  The check runs wherever an entity is parsed, the entity a `create()` / `patch()` / `put()` gets back included.
+
+  **Migration:** none for a response from 1С. Code that caught `SyntaxError` around a read catches `ParseError` instead; code that read padded or hexadecimal values through it reads the field with `int64Mode: 'string'` and converts it itself.
+
+- [#285](https://github.com/hacker-cb/1c-odata/pull/285) [`60c8278`](https://github.com/hacker-cb/1c-odata/commit/60c82789df54ae352e6c58c4da9a772a52ee0270) Thanks [@hacker-cb](https://github.com/hacker-cb)! - An array inside an array of a response is read as an array, where the parser turned it into an object keyed `"0"`, `"1"`, …. OData V3 has no collection of collections and 1С sends none, so nothing changes for a response from 1С.
+
+- [#281](https://github.com/hacker-cb/1c-odata/pull/281) [`5749192`](https://github.com/hacker-cb/1c-odata/commit/574919252281f4250df34e8f3711fd7f729250c7) Thanks [@hacker-cb](https://github.com/hacker-cb)! - A key named `__proto__` — in a response body, a write payload or an EDMX — is an own field of the object it belongs to, never its prototype ([#275](https://github.com/hacker-cb/1c-odata/issues/275)).
+
+  The parser copied each field of a row into `{}` by assignment, so a body like `{"value":[{"__proto__":{"x":1},"a":2}]}` gave a row with the keys `['a']` whose `row.x` was `1`; nested objects and tabular rows did the same, and so did the write transform on a payload carrying such a field. `buildMetadataIndex` wrote type, property and entity-set names the same way, so an EDMX type named `__proto__` replaced the prototype of `schemas` and left `entitySetToType` naming a type `parseMetadataIndex` then refused, failing the whole index.
+
+  Such a key is now defined as an ordinary own field. Rows, payloads, `schemas`, `entitySetToType` and each type's `properties` keep their plain `Object` prototype — `row.hasOwnProperty` works as before — and the field serializes back as it came (`enums` stays the null-prototype dictionary it was). Nothing changes for 1С, which sends no such names: `__metadata.json` of a real base is byte-for-byte the same.
+
+  `validateOnWrite` (`validateEntity`) counts a property whose name `Object.prototype` carries (`__proto__`, `constructor`, …) only as the payload's own field: a non-nullable one the payload lacked read `Object.prototype` / `Object` and passed its `required` check. Every other name reads as before.
+
+  `buildMetadataIndex` lists in `entitySetToType` only the sets whose type `schemas` holds. An EntitySet whose type lies in another namespace or is missing from the EDMX was listed under a type no schema stands for, and `parseMetadataIndex` refuses such an index whole — a `__metadata.json` codegen emitted for that EDMX would not load. Such a set reads and writes schema-less either way; 1С's EDMX has none, so the index of a real base does not change.
+
+- [#292](https://github.com/hacker-cb/1c-odata/pull/292) [`829bfc5`](https://github.com/hacker-cb/1c-odata/commit/829bfc5f5dcb6596a7ba81a1d15d126ff3e8277e) Thanks [@hacker-cb](https://github.com/hacker-cb)! - `select()` of a ValueStorage field brings its value ([#286](https://github.com/hacker-cb/1c-odata/issues/286)). Codegen declares a storage as the one field `<X>` (`ValueStorage | null`), so a typed `.select('ФайлХранилище')` sent `$select=ФайлХранилище` — a name 1С returns nothing for: it answers only `<X>_Base64Data` and `<X>_Type`, and the field read `undefined`.
+
+  With a `metadataIndex`, a query's `get()` / `stream()` writes a storage's base named in `select` as its two halves (`ФайлХранилище_Base64Data,ФайлХранилище_Type`) — the row's, or one an `$expand` path reaches through `EntitySchema.navigation` (`Владелец/Файл` → `Владелец/Файл_Base64Data,Владелец/Файл_Type`); the reply comes in `minimalmetadata` ([#289](https://github.com/hacker-cb/1c-odata/issues/289)) and the parser groups the halves back into `<X>`. `count()` sends the same `$select` (it returns no rows). Names are read as 1С reads them — an entry holding several (`'Ref_Key, ФайлХранилище'`) is several, names and path segments trimmed — and a half already named is not named twice. `raw()` sends the `$select` as given, as before. Without an index, or for a set it does not list, the names go as given. A storage of a tabular part's row (`Товары/<X>`) goes as given until [#290](https://github.com/hacker-cb/1c-odata/issues/290).
+
+- [#288](https://github.com/hacker-cb/1c-odata/pull/288) [`7e7129d`](https://github.com/hacker-cb/1c-odata/commit/7e7129dde5374ec09c9c2c8fba490d6157507269) Thanks [@hacker-cb](https://github.com/hacker-cb)! - A single-entity response whose body is a JSON array — `entity(…).get()`, the entity `create()` / `patch()` / `put()` get back, the read behind `expectVersion` — is a `ParseError` ("Expected object at root"), where `[]` read as an entity with no fields and `[{…}]` as one keyed `"0"`. 1С answers with an object, so nothing changes for a response from 1С itself; a proxy or a misrouted request answering `200` with an array no longer passes as an entity.
+
+- [#285](https://github.com/hacker-cb/1c-odata/pull/285) [`60c8278`](https://github.com/hacker-cb/1c-odata/commit/60c82789df54ae352e6c58c4da9a772a52ee0270) Thanks [@hacker-cb](https://github.com/hacker-cb)! - A ValueStorage half that a response carries without its pair stays in the row as the field it came as ([#284](https://github.com/hacker-cb/1c-odata/issues/284)). The parser grouped `<X>_Base64Data` + `<X>_Type` into `<X>` only when both were strings (or into `null` when one was `null`), yet removed both halves every time — so an untyped `client.query('Catalog_X').select('Файл_Base64Data')` with a loaded metadata index returned a row with neither `Файл` nor `Файл_Base64Data`: the bytes asked for were gone.
+
+  The halves are now grouped only as a pair: both present, both strings → `{ contentType, base64Data }`; both present, one `null` → `null`. A half sent alone — or a pair of values neither form fits — is left as it came.
+
+  This reaches whole-entity reads too: the client asks 1С for `odata=nometadata` JSON, in which 1С sends a ValueStorage's `<X>_Base64Data` but not its `<X>_Type`. Up to v0.12.0 every such row lost both halves silently — the stored bytes never reached the caller; it now carries `<X>_Base64Data` as a plain field, and `<X>` is not set. Grouping a whole row into `<X>` needs the `_Type` 1С withholds there — [#289](https://github.com/hacker-cb/1c-odata/issues/289).
+
 ## 0.12.0
 
 ### Minor Changes
