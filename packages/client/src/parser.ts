@@ -79,8 +79,8 @@ const INT64_WIRE = /^-?\d+$/
  *   - When `metadataIndex` + `typeHint` present: Edm.Int64 → bigint/number per
  *     `shape.int64Mode` (a value that is neither null, a decimal integer
  *     string within the 64-bit range nor a safe-integer JSON number is a
- *     `ParseError` in both, untouched in `'string'`); ValueStorage triples → ValueStorage object (or null on
- *     null halves; halves removed from output regardless)
+ *     `ParseError` in both, untouched in `'string'`); a ValueStorage pair → ValueStorage object (or null on
+ *     a null half), its halves removed; a half sent without its pair stays as it came
  *
  * In `dateMode='string'` mode parser passes Edm.DateTime through as wire string —
  * no sentinel handling, no tz conversion. User responsibility via parseInZone helper.
@@ -278,11 +278,14 @@ function mapValue(
   if (Array.isArray(v)) {
     const childOpts = withNestedTypeHint(opts, propType)
     // An array inside the array (no OData V3 collection holds one) is read as an array again, never handed
-    // to `mapEntity`, which would turn it into an object keyed `"0"`, `"1"`, ….
+    // to `mapEntity`, which would turn it into an object keyed `"0"`, `"1"`, …. The field's declared type
+    // describes the items of this array, not those of one nested in it: that one is read schema-less.
     return v.map((item) =>
-      typeof item === 'object' && item !== null && !Array.isArray(item)
-        ? mapEntity(item as Record<string, unknown>, childOpts)
-        : mapValue(item, fieldName, schema, shape, opts),
+      Array.isArray(item)
+        ? mapValue(item, fieldName, undefined, shape, opts)
+        : typeof item === 'object' && item !== null
+          ? mapEntity(item as Record<string, unknown>, childOpts)
+          : mapValue(item, fieldName, schema, shape, opts),
     )
   }
   if (typeof v === 'object' && v !== null) {

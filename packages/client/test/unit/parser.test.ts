@@ -378,43 +378,43 @@ describe('schema-aware parsing', () => {
     const metadataIndex: MetadataIndex = {
       schemaNamespace: 'StandardODATA',
       schemas: {
-        Catalog_X: {
+        Catalog_Файлы: {
           properties: {
             Ref_Key: { type: 'Edm.Guid', nullable: false },
-            File: { type: 'Edm.Stream', nullable: true },
-            File_Base64Data: { type: 'Edm.Binary', nullable: true },
-            File_Type: { type: 'Edm.String', nullable: true },
+            Файл: { type: 'Edm.Stream', nullable: true },
+            Файл_Base64Data: { type: 'Edm.Binary', nullable: true },
+            Файл_Type: { type: 'Edm.String', nullable: true },
           },
-          valueStorages: ['File'],
+          valueStorages: ['Файл'],
         },
       },
-      entitySetToType: { Catalog_X: 'Catalog_X' },
+      entitySetToType: { Catalog_Файлы: 'Catalog_Файлы' },
     }
     const single = (row: Record<string, unknown>) =>
       parseV3Single<Record<string, unknown>>(JSON.stringify(row), {
         serverTimezone: 'UTC',
-        typeHint: 'Catalog_X',
+        typeHint: 'Catalog_Файлы',
         metadataIndex,
       })
 
     it.each([
-      ['File_Base64Data', 'aGVsbG8='],
-      ['File_Type', 'image/png'],
-      ['File_Base64Data', null],
-      ['File_Type', null],
+      ['Файл_Base64Data', 'aGVsbG8='],
+      ['Файл_Type', 'image/png'],
+      ['Файл_Base64Data', null],
+      ['Файл_Type', null],
     ])('keeps %s = %j sent alone as the field it came as', (key, value) => {
       const r = single({ Ref_Key: 'g', [key]: value })
       expect(r).toEqual({ Ref_Key: 'g', [key]: value })
     })
 
     it('keeps a pair neither form fits as it came', () => {
-      const r = single({ Ref_Key: 'g', File_Base64Data: 1, File_Type: 'image/png' })
-      expect(r).toEqual({ Ref_Key: 'g', File_Base64Data: 1, File_Type: 'image/png' })
+      const r = single({ Ref_Key: 'g', Файл_Base64Data: 1, Файл_Type: 'image/png' })
+      expect(r).toEqual({ Ref_Key: 'g', Файл_Base64Data: 1, Файл_Type: 'image/png' })
     })
 
     it('still groups a pair with one null half into null', () => {
-      const r = single({ Ref_Key: 'g', File_Base64Data: null, File_Type: 'image/png' })
-      expect(r).toEqual({ Ref_Key: 'g', File: null })
+      const r = single({ Ref_Key: 'g', Файл_Base64Data: null, Файл_Type: 'image/png' })
+      expect(r).toEqual({ Ref_Key: 'g', Файл: null })
     })
   })
 
@@ -431,7 +431,28 @@ describe('schema-aware parsing', () => {
       [1, 'a'],
       [{ k: 'v' }, []],
     ])
-    expect(Array.isArray((r.Grid as unknown[])[0])).toBe(true)
+  })
+
+  it('reads an object inside a nested array schema-less — the collection type describes only its own items', () => {
+    const metadataIndex: MetadataIndex = {
+      schemaNamespace: 'StandardODATA',
+      schemas: {
+        Document_X: {
+          properties: {
+            Товары: { type: 'Collection(StandardODATA.Document_X_Товары_RowType)', nullable: true },
+          },
+        },
+        Document_X_Товары_RowType: { properties: { Код: { type: 'Edm.Int64', nullable: false } } },
+      },
+      entitySetToType: { Document_X: 'Document_X' },
+    }
+    const body = JSON.stringify({ Товары: [{ Код: '5' }, [{ Код: 'ABC' }]] })
+    const r = parseV3Single<{ Товары: unknown }>(body, {
+      serverTimezone: 'UTC',
+      typeHint: 'Document_X',
+      metadataIndex,
+    })
+    expect(r.Товары).toEqual([{ Код: 5 }, [{ Код: 'ABC' }]])
   })
 
   it('falls back to date-regex heuristic when no metadataIndex', () => {
