@@ -13,7 +13,9 @@ import type { EntitySchema, MetadataIndex } from './validate.js'
  * set and no type. A name the index does not hold resolves to `undefined`, and
  * the caller goes on schema-less, as it does without an index.
  *
- * @internal
+ * Reached through `@1c-odata/client/internal` (the MCP schema tools look
+ * names up by it too), so these functions carry no internal tag: `stripInternal`
+ * would drop them from that entrypoint's types.
  */
 export function schemaOfType(index: MetadataIndex | undefined, typeName: string | undefined): EntitySchema | undefined {
   if (index === undefined || typeName === undefined || !Object.hasOwn(index.schemas, typeName)) return undefined
@@ -25,8 +27,6 @@ export function schemaOfType(index: MetadataIndex | undefined, typeName: string 
  * a set it does not list (a virtual-table path such as
  * `Register_X/SliceLast()` among them), or for a set whose type it holds no
  * schema for.
- *
- * @internal
  */
 export function typeNameOfSet(index: MetadataIndex | undefined, entitySet: string): string | undefined {
   if (index === undefined || !Object.hasOwn(index.entitySetToType, entitySet)) return undefined
@@ -36,8 +36,6 @@ export function typeNameOfSet(index: MetadataIndex | undefined, entitySet: strin
 
 /**
  * The EntityType schema of `entitySet` — {@link typeNameOfSet}, then its schema.
- *
- * @internal
  */
 export function schemaOfSet(index: MetadataIndex | undefined, entitySet: string): EntitySchema | undefined {
   return schemaOfType(index, typeNameOfSet(index, entitySet))
@@ -49,8 +47,6 @@ export function schemaOfSet(index: MetadataIndex | undefined, entitySet: string)
  * `undefined` for a primitive (`Edm.*`, `Collection(Edm.*)`), or a type absent
  * from the index: the caller then reads the value schema-less rather than with
  * another type's schema.
- *
- * @internal
  */
 export function typeNameOfRef(index: MetadataIndex | undefined, typeRef: string | undefined): string | undefined {
   if (index === undefined || typeRef === undefined) return undefined
@@ -65,8 +61,6 @@ export function typeNameOfRef(index: MetadataIndex | undefined, typeRef: string 
 /**
  * The schema a declared property type refers to — {@link typeNameOfRef}, then
  * its schema.
- *
- * @internal
  */
 export function schemaOfRef(index: MetadataIndex | undefined, typeRef: string | undefined): EntitySchema | undefined {
   return schemaOfType(index, typeNameOfRef(index, typeRef))

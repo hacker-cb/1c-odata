@@ -86,3 +86,40 @@ describe('ValidationError', () => {
     expect(err.name).toBe('ValidationError')
   })
 })
+
+describe('validateEntity — own fields only (#275)', () => {
+  // A schema built by buildMetadataIndex from an EDMX naming a property `__proto__` holds it as an own key.
+  const schema = JSON.parse(
+    '{"properties":{"__proto__":{"type":"Edm.String","nullable":false},"constructor":{"type":"Edm.String","nullable":false}}}',
+  ) as EntitySchema
+
+  it('a missing non-nullable `__proto__` / `constructor` is required, not read off Object.prototype', () => {
+    expect(validateEntity({}, schema)).toEqual({
+      ok: false,
+      errors: [
+        { kind: 'required', field: '__proto__' },
+        { kind: 'required', field: 'constructor' },
+      ],
+    })
+  })
+
+  it('the same fields present as own keys pass', () => {
+    expect(validateEntity(JSON.parse('{"__proto__":"a","constructor":"b"}'), schema)).toEqual({ ok: true })
+  })
+})
+
+describe('validateEntity — any other name reads as before', () => {
+  const schema: EntitySchema = { properties: { Code: { type: 'Edm.String', nullable: false } } }
+
+  it('a required field a getter or toJSON supplies still passes', () => {
+    class Body {
+      get Code(): string {
+        return 'USD'
+      }
+      toJSON(): unknown {
+        return { Code: this.Code }
+      }
+    }
+    expect(validateEntity(new Body() as unknown as Record<string, unknown>, schema)).toEqual({ ok: true })
+  })
+})

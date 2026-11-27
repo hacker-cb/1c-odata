@@ -1,7 +1,17 @@
 import type { MetadataIndex } from '@1c-odata/client'
+import { schemaOfType } from '@1c-odata/client/internal'
 import { classifyEntity, type EdmxModel, tailName } from '@1c-odata/metadata'
 
 /** Pure schema-query helpers shared by the schema tools — no I/O, easy to test. */
+
+/**
+ * An entity type's name without its kind prefix (`Catalog_Валюты` → `Валюты`);
+ * a type of no known kind keeps its whole name — `tailName` would cut it at
+ * its first underscore (`__proto__` → `_proto__`). Every 1С type has a kind.
+ */
+function shortName(entityType: string): string {
+  return classifyEntity(entityType) === null ? entityType : tailName(entityType)
+}
 
 export interface EntityListItem {
   entitySet: string
@@ -21,7 +31,7 @@ export function selectEntities(
       entitySet,
       entityType,
       kind: classifyEntity(entityType),
-      name: tailName(entityType),
+      name: shortName(entityType),
     }))
     .filter((e) => (opts.kind === undefined ? true : e.kind === opts.kind))
     .filter((e) =>
@@ -59,23 +69,24 @@ export interface EntityDescription {
  * from the {@link EdmxModel}. Throws when the name resolves to neither.
  */
 export function describeEntity(index: MetadataIndex, edmx: EdmxModel, entity: string): EntityDescription {
-  // hasOwn guards: `entity` is a tool argument and these maps are plain objects,
-  // so a key like "__proto__"/"constructor" would otherwise resolve up the
-  // prototype chain to a non-string and crash the type/name logic below.
+  // `entity` is a tool argument and these maps are plain objects: own keys only, so a key like
+  // "__proto__"/"constructor" never resolves up the prototype chain. Schemas go through the client's own-key
+  // lookup (the one the read and write paths use). A set is looked up by its own key alone, whether or not the
+  // index holds its type's schema: list_entities lists every set, and each one it lists describes.
   const mappedType = Object.hasOwn(index.entitySetToType, entity) ? index.entitySetToType[entity] : undefined
   let entityType: string
   let entitySet: string | null
   if (mappedType !== undefined) {
     entitySet = entity
     entityType = mappedType
-  } else if (Object.hasOwn(index.schemas, entity)) {
+  } else if (schemaOfType(index, entity) !== undefined) {
     entityType = entity
     entitySet = Object.keys(index.entitySetToType).find((s) => index.entitySetToType[s] === entity) ?? null
   } else {
     throw new Error(`Unknown entity "${entity}". Use list_entities to discover names.`)
   }
 
-  const schema = Object.hasOwn(index.schemas, entityType) ? index.schemas[entityType] : undefined
+  const schema = schemaOfType(index, entityType)
   const properties: EntityProperty[] = Object.entries(schema?.properties ?? {}).map(([propName, p]) => ({
     name: propName,
     type: p.type,
@@ -92,7 +103,7 @@ export function describeEntity(index: MetadataIndex, edmx: EdmxModel, entity: st
     entitySet,
     entityType,
     kind: classifyEntity(entityType),
-    name: tailName(entityType),
+    name: shortName(entityType),
     keys: edmxType?.key ?? [],
     properties,
     navigationProperties,

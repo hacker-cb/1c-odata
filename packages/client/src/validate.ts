@@ -101,7 +101,10 @@ export function validateEntity(entity: Record<string, unknown>, schema: EntitySc
   const valueStorageMembers = collectValueStorageMembers(schema)
   for (const [name, prop] of Object.entries(schema.properties)) {
     if (valueStorageMembers.has(name)) continue
-    const v = entity[name]
+    // A name `Object.prototype` carries (`__proto__`, `constructor`, …) counts only as the payload's own field:
+    // one the payload lacks would read `Object.prototype` / `Object` and pass a `required` check. Every other
+    // name reads as before — a getter or a field a `toJSON` adds included.
+    const v = Object.hasOwn(Object.prototype, name) && !Object.hasOwn(entity, name) ? undefined : entity[name]
     if (v === undefined || v === null) {
       if (!prop.nullable) errors.push({ kind: 'required', field: name })
       continue

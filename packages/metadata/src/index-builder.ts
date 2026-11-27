@@ -5,6 +5,7 @@ import {
   type MetadataIndex,
   type PropertySchema,
 } from '@1c-odata/client'
+import { setOwn } from '@1c-odata/client/internal'
 import { computeClosure } from './analysis/closure.js'
 import { detectValueStorage } from './analysis/value-storage.js'
 import type { EdmxModel } from './parser/ast.js'
@@ -16,6 +17,8 @@ import type { EdmxModel } from './parser/ast.js'
  * by the runtime client for response validation / shaping.
  */
 function buildSchemas(model: EdmxModel, keep?: (typeName: string) => boolean): Record<string, EntitySchema> {
+  // Names from the EDMX are written as own keys (`setOwn`): a type or property named `__proto__` is an entry,
+  // not the dictionary's prototype.
   const out: Record<string, EntitySchema> = {}
   for (const t of [...model.entityTypes, ...model.complexTypes]) {
     if (keep !== undefined && !keep(t.name)) continue
@@ -23,7 +26,7 @@ function buildSchemas(model: EdmxModel, keep?: (typeName: string) => boolean): R
     for (const p of t.properties) {
       const ps: PropertySchema = { type: p.type, nullable: p.nullable }
       if (p.maxLength !== undefined) ps.maxLength = p.maxLength
-      props[p.name] = ps
+      setOwn(props, p.name, ps)
     }
     const schema: EntitySchema = { properties: props }
     // Only EntityTypes have value storages (ComplexTypes don't have them in practice)
@@ -31,7 +34,7 @@ function buildSchemas(model: EdmxModel, keep?: (typeName: string) => boolean): R
       const valueStoragesSet = detectValueStorage(t)
       if (valueStoragesSet.size > 0) schema.valueStorages = [...valueStoragesSet].sort()
     }
-    out[t.name] = schema
+    setOwn(out, t.name, schema)
   }
   return out
 }
@@ -40,14 +43,19 @@ function buildSchemas(model: EdmxModel, keep?: (typeName: string) => boolean): R
  * Build a runtime lookup map from EntitySet name to EntityType local name.
  * The EDMX `EntitySet.EntityType` attribute is fully qualified (e.g.
  * `StandardODATA.Catalog_X`); strip the schema-namespace prefix.
+ *
+ * Only sets whose type `schemas` holds — the filter's closure among them: a set
+ * whose type lies in another namespace or is missing from the EDMX would name
+ * a type no schema stands for, and `parseMetadataIndex` refuses such an index
+ * whole. Without a schema the set reads and writes schema-less either way.
  */
-function buildEntitySetToType(model: EdmxModel, keep?: (typeName: string) => boolean): Record<string, string> {
+function buildEntitySetToType(model: EdmxModel, schemas: Record<string, EntitySchema>): Record<string, string> {
   const prefix = `${model.schemaNamespace}.`
   const out: Record<string, string> = {}
   for (const set of model.entityContainer.entitySets) {
     const localName = set.entityType.startsWith(prefix) ? set.entityType.slice(prefix.length) : set.entityType
-    if (keep !== undefined && !keep(localName)) continue
-    out[set.name] = localName
+    if (!Object.hasOwn(schemas, localName)) continue
+    setOwn(out, set.name, localName)
   }
   return out
 }
@@ -131,10 +139,11 @@ export function buildMetadataIndex(model: EdmxModel, opts: BuildMetadataIndexOpt
     const closure = computeClosure(model, opts.filter)
     keep = (typeName) => closure.entities.has(typeName) || closure.complexTypes.has(typeName)
   }
+  const schemas = buildSchemas(model, keep)
   return {
     schemaNamespace: model.schemaNamespace,
-    schemas: buildSchemas(model, keep),
-    entitySetToType: buildEntitySetToType(model, keep),
+    schemas,
+    entitySetToType: buildEntitySetToType(model, schemas),
     shape,
     enums: buildEnums(model),
   }

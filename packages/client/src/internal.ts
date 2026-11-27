@@ -12,4 +12,6 @@
 export { requestWithRetry } from './http/retry.js'
 export type { AttemptTrace, RawResponse, RequestConfig, StreamResponse, TransportOptions } from './http/transport.js'
 export { request, requestStream } from './http/transport.js'
+export { setOwn } from './own-key.js'
 export type { CollectionResult } from './parser.js'
+export { schemaOfRef, schemaOfSet, schemaOfType, typeNameOfRef, typeNameOfSet } from './schema-lookup.js'

@@ -208,3 +208,46 @@ describe('bigintToStringReplacer', () => {
     )
   })
 })
+
+describe('transformDatesToWire — a `__proto__` key is written as the payload’s own field (#275)', () => {
+  it('keeps the field and the Object prototype, at the top and in a tabular row', () => {
+    const body = JSON.parse('{"__proto__":{"x":1},"Сумма":1,"Товары":[{"__proto__":{"y":1},"LineNumber":1}]}')
+    const out = transformDatesToWire(body, documentX, TZ, baseMetadata, 'date')
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype)
+    expect(Object.keys(out)).toEqual(['__proto__', 'Сумма', 'Товары'])
+    expect((out as { x?: unknown }).x).toBeUndefined()
+    const row = (out.Товары as Record<string, unknown>[])[0] as Record<string, unknown>
+    expect(Object.getPrototypeOf(row)).toBe(Object.prototype)
+    expect((row as { y?: unknown }).y).toBeUndefined()
+    expect(JSON.stringify(out)).toBe('{"__proto__":{"x":1},"Сумма":1,"Товары":[{"__proto__":{"y":1},"LineNumber":1}]}')
+  })
+})
+
+describe('transformDatesToWire — a ValueStorage base named `__proto__` (#275)', () => {
+  const schema: EntitySchema = {
+    properties: {
+      __proto___Base64Data: { type: 'Edm.Binary', nullable: true },
+      __proto___Type: { type: 'Edm.String', nullable: true },
+    },
+    valueStorages: ['__proto__'],
+  }
+
+  it('wire halves alone pass through, the accessor never read as the grouped value', () => {
+    const out = transformDatesToWire(
+      { __proto___Type: 'text/plain', __proto___Base64Data: 'QQ==' },
+      schema,
+      TZ,
+      baseMetadata,
+      'date',
+    )
+    expect(out).toEqual({ __proto___Type: 'text/plain', __proto___Base64Data: 'QQ==' })
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype)
+  })
+
+  it('a grouped value under an own `__proto__` key splits into the halves', () => {
+    const body = JSON.parse('{"__proto__":{"contentType":"text/plain","base64Data":"QQ=="}}')
+    const out = transformDatesToWire(body, schema, TZ, baseMetadata, 'date')
+    expect(out).toEqual({ __proto___Type: 'text/plain', __proto___Base64Data: 'QQ==' })
+    expect(Object.hasOwn(out, '__proto__')).toBe(false)
+  })
+})
