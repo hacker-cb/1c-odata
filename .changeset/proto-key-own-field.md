@@ -9,4 +9,6 @@ The parser copied each field of a row into `{}` by assignment, so a body like `{
 
 Such a key is now defined as an ordinary own field. Rows, payloads, `schemas`, `entitySetToType` and each type's `properties` keep their plain `Object` prototype — `row.hasOwnProperty` works as before — and the field serializes back as it came (`enums` stays the null-prototype dictionary it was). Nothing changes for 1С, which sends no such names: `__metadata.json` of a real base is byte-for-byte the same.
 
-`validateOnWrite` (`validateEntity`) reads only the payload's own fields — what is sent: a non-nullable property named `__proto__` or `constructor` that the payload lacks read `Object.prototype` / `Object` and passed its `required` check.
+`validateOnWrite` (`validateEntity`) counts a property whose name `Object.prototype` carries (`__proto__`, `constructor`, …) only as the payload's own field: a non-nullable one the payload lacked read `Object.prototype` / `Object` and passed its `required` check. Every other name reads as before.
+
+`buildMetadataIndex` lists in `entitySetToType` only the sets whose type `schemas` holds. An EntitySet whose type lies in another namespace or is missing from the EDMX was listed under a type no schema stands for, and `parseMetadataIndex` refuses such an index whole — a `__metadata.json` codegen emitted for that EDMX would not load. Such a set reads and writes schema-less either way; 1С's EDMX has none, so the index of a real base does not change.

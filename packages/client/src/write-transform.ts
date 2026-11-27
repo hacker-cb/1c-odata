@@ -195,7 +195,8 @@ export function transformDatesToWire(
   // `valueStorages`; a string/undefined value (the user passed wire halves
   // directly, or cleared the field) is left untouched.
   for (const base of schema.valueStorages ?? []) {
-    const grouped = out[base]
+    // Own only: a base named `__proto__` the payload does not carry would read the accessor.
+    const grouped = Object.hasOwn(out, base) ? out[base] : undefined
     if (isValueStorageObject(grouped)) {
       out[`${base}_Type`] = grouped.contentType
       out[`${base}_Base64Data`] = grouped.base64Data

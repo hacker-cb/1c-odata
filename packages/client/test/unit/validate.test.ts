@@ -107,3 +107,19 @@ describe('validateEntity — own fields only (#275)', () => {
     expect(validateEntity(JSON.parse('{"__proto__":"a","constructor":"b"}'), schema)).toEqual({ ok: true })
   })
 })
+
+describe('validateEntity — any other name reads as before', () => {
+  const schema: EntitySchema = { properties: { Code: { type: 'Edm.String', nullable: false } } }
+
+  it('a required field a getter or toJSON supplies still passes', () => {
+    class Body {
+      get Code(): string {
+        return 'USD'
+      }
+      toJSON(): unknown {
+        return { Code: this.Code }
+      }
+    }
+    expect(validateEntity(new Body() as unknown as Record<string, unknown>, schema)).toEqual({ ok: true })
+  })
+})

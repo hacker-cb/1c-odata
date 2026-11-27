@@ -1,7 +1,7 @@
 import type { MetadataIndex } from '@1c-odata/client'
-import type { EdmxModel } from '@1c-odata/metadata'
+import { buildMetadataIndex, type EdmxModel, parseEdmx } from '@1c-odata/metadata'
 import { describe, expect, it } from 'vitest'
-import { describeEntity } from '../../src/tools/schema-logic.js'
+import { describeEntity, selectEntities } from '../../src/tools/schema-logic.js'
 
 // Minimal index/edmx with intentionally plain-object maps (as built by
 // @1c-odata/metadata), so prototype-chain keys are reachable if not guarded.
@@ -43,5 +43,33 @@ describe('describeEntity', () => {
     const d = describeEntity(idx, edmx, '__proto__')
     expect(d).toMatchObject({ entitySet: '__proto__', entityType: '__proto__' })
     expect(d.properties).toEqual([{ name: 'Ref_Key', type: 'Edm.Guid', nullable: false }])
+  })
+})
+
+describe('list_entities and describe_entity agree on a set whose type has no schema', () => {
+  // An EntitySet whose type lies in another namespace — not from 1С. buildMetadataIndex leaves it out of
+  // entitySetToType, so neither tool shows it.
+  const xml = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="3.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="StandardODATA" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <EntityType Name="Catalog_X">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+      </EntityType>
+      <EntityContainer Name="StandardODATA" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="Catalog_X" EntityType="StandardODATA.Catalog_X"/>
+        <EntitySet Name="Foreign_Set" EntityType="Other.Catalog_Y"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`
+  const model = parseEdmx(xml)
+  const idx = buildMetadataIndex(model)
+
+  it('neither lists nor describes it', () => {
+    expect(selectEntities(idx).map((e) => e.entitySet)).toEqual(['Catalog_X'])
+    expect(() => describeEntity(idx, model, 'Foreign_Set')).toThrow(/Unknown entity/)
+    expect(describeEntity(idx, model, 'Catalog_X')).toMatchObject({ entitySet: 'Catalog_X', keys: ['Ref_Key'] })
   })
 })

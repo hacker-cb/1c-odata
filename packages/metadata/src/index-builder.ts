@@ -43,13 +43,18 @@ function buildSchemas(model: EdmxModel, keep?: (typeName: string) => boolean): R
  * Build a runtime lookup map from EntitySet name to EntityType local name.
  * The EDMX `EntitySet.EntityType` attribute is fully qualified (e.g.
  * `StandardODATA.Catalog_X`); strip the schema-namespace prefix.
+ *
+ * Only sets whose type `schemas` holds — the filter's closure among them: a set
+ * whose type lies in another namespace or is missing from the EDMX would name
+ * a type no schema stands for, and `parseMetadataIndex` refuses such an index
+ * whole. Without a schema the set reads and writes schema-less either way.
  */
-function buildEntitySetToType(model: EdmxModel, keep?: (typeName: string) => boolean): Record<string, string> {
+function buildEntitySetToType(model: EdmxModel, schemas: Record<string, EntitySchema>): Record<string, string> {
   const prefix = `${model.schemaNamespace}.`
   const out: Record<string, string> = {}
   for (const set of model.entityContainer.entitySets) {
     const localName = set.entityType.startsWith(prefix) ? set.entityType.slice(prefix.length) : set.entityType
-    if (keep !== undefined && !keep(localName)) continue
+    if (!Object.hasOwn(schemas, localName)) continue
     setOwn(out, set.name, localName)
   }
   return out
@@ -134,10 +139,11 @@ export function buildMetadataIndex(model: EdmxModel, opts: BuildMetadataIndexOpt
     const closure = computeClosure(model, opts.filter)
     keep = (typeName) => closure.entities.has(typeName) || closure.complexTypes.has(typeName)
   }
+  const schemas = buildSchemas(model, keep)
   return {
     schemaNamespace: model.schemaNamespace,
-    schemas: buildSchemas(model, keep),
-    entitySetToType: buildEntitySetToType(model, keep),
+    schemas,
+    entitySetToType: buildEntitySetToType(model, schemas),
     shape,
     enums: buildEnums(model),
   }
