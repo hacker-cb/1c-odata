@@ -44,30 +44,34 @@ function buildSchemas(model: EdmxModel, keep?: (typeName: string) => boolean): R
 
 /**
  * Record each EntityType's navigation properties in its schema — after every
- * schema exists, a target may come later in the EDMX. Only a navigation whose
- * target resolves to a type `schemas` holds is written (the filter's closure
- * keeps every target of a kept entity): one naming no schema would read
- * schema-less either way. `collection: true` where the target end's
- * multiplicity is `*`; 1С declares every navigation `0..1`, so none carries it.
- * The key goes after `valueStorages`, leaving the rest of `__metadata.json`
- * byte-for-byte as it was.
+ * schema exists, a target may come later in the EDMX. The target is the one
+ * `parseEdmx` resolved (`resolvedTargetType`, as the closure and codegen read
+ * it); only a navigation whose target is a type `schemas` holds is written
+ * (the filter's closure keeps every target of a kept entity): one naming no
+ * schema would read schema-less either way. `collection: true` where the
+ * target end's multiplicity is `*`; 1С declares every navigation `0..1`, so
+ * none carries it. A type named twice gets the navigations of its last
+ * declaration, as its schema is (`buildSchemas`). The key goes after
+ * `valueStorages`, leaving the rest of `__metadata.json` byte-for-byte as it
+ * was.
  */
 function addNavigation(model: EdmxModel, schemas: Record<string, EntitySchema>): void {
   const prefix = `${model.schemaNamespace}.`
   const assocByName = new Map(model.associations.map((a) => [a.name, a]))
   for (const t of model.entityTypes) {
     if (!Object.hasOwn(schemas, t.name)) continue
+    const schema = schemas[t.name] as EntitySchema
     const navigation: Record<string, NavigationSchema> = {}
-    let any = false
     for (const np of t.navigationProperties) {
-      const end = navigationTargetEnd(np, assocByName)
-      if (end === undefined || !end.type.startsWith(prefix)) continue
-      const target = end.type.slice(prefix.length)
+      const targetType = np.resolvedTargetType
+      if (targetType === undefined || !targetType.startsWith(prefix)) continue
+      const target = targetType.slice(prefix.length)
       if (!Object.hasOwn(schemas, target)) continue
-      setOwn(navigation, np.name, end.multiplicity === '*' ? { type: target, collection: true } : { type: target })
-      any = true
+      const many = navigationTargetEnd(np, assocByName)?.multiplicity === '*'
+      setOwn(navigation, np.name, many ? { type: target, collection: true } : { type: target })
     }
-    if (any) (schemas[t.name] as EntitySchema).navigation = navigation
+    if (Object.keys(navigation).length > 0) schema.navigation = navigation
+    else delete schema.navigation
   }
 }
 

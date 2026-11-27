@@ -47,8 +47,8 @@ function readNavigationProperty(raw: Record<string, unknown>): EdmxNavigationPro
  * The Association end a NavigationProperty leads to — its `ToRole` end, the
  * Association named by `Relationship` (`<Schema>.<AssocName>`, the schema prefix
  * stripped) — or `undefined` where either is missing. The one resolution of a
- * navigation's target: its type (`resolvedTargetType`) and its multiplicity
- * (`buildMetadataIndex`) are both read off this end.
+ * navigation's target end: `parseEdmx` reads its type into `resolvedTargetType`,
+ * `buildMetadataIndex` its multiplicity.
  */
 export function navigationTargetEnd(
   np: EdmxNavigationProperty,

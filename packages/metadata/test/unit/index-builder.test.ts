@@ -165,6 +165,32 @@ describe('buildMetadataIndex — navigation properties (#283)', () => {
     expect(narrowed.schemas.Document_X?.navigation).toEqual(index.schemas.Document_X?.navigation)
   })
 
+  it('takes the target parseEdmx resolved — a model carrying `resolvedTargetType` without its Associations', () => {
+    const model = parseEdmx(NAV_EDMX)
+    const built = buildMetadataIndex({ ...model, associations: [] })
+    // No Association to read a multiplicity off: a single entity.
+    expect(built.schemas.Document_X?.navigation).toEqual({
+      Контрагент: { type: 'Catalog_Контрагенты' },
+      Строки: { type: 'Catalog_Строки' },
+    })
+  })
+
+  it('gives a type declared twice the navigations of its last declaration, as its schema', () => {
+    const model = parseEdmx(NAV_EDMX)
+    const doc = model.entityTypes.find((t) => t.name === 'Document_X')
+    if (doc === undefined) throw new Error('fixture lacks Document_X')
+    const lastWithout = buildMetadataIndex({
+      ...model,
+      entityTypes: [...model.entityTypes, { ...doc, navigationProperties: [] }],
+    })
+    expect(lastWithout.schemas.Document_X).not.toHaveProperty('navigation')
+    const lastWith = buildMetadataIndex({
+      ...model,
+      entityTypes: [{ ...doc, navigationProperties: [] }, ...model.entityTypes],
+    })
+    expect(lastWith.schemas.Document_X?.navigation).toEqual(index.schemas.Document_X?.navigation)
+  })
+
   it('passes parseMetadataIndex, built and through a JSON round trip', () => {
     expect(parseMetadataIndex(index)).toBe(index)
     expect(parseMetadataIndex(JSON.parse(JSON.stringify(index))).schemas.Document_X?.navigation).toEqual(
