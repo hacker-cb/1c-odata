@@ -1,4 +1,5 @@
 import type { MetadataIndex } from '@1c-odata/client'
+import { schemaOfType, typeNameOfSet } from '@1c-odata/client/internal'
 import { classifyEntity, type EdmxModel, tailName } from '@1c-odata/metadata'
 
 /** Pure schema-query helpers shared by the schema tools — no I/O, easy to test. */
@@ -59,23 +60,23 @@ export interface EntityDescription {
  * from the {@link EdmxModel}. Throws when the name resolves to neither.
  */
 export function describeEntity(index: MetadataIndex, edmx: EdmxModel, entity: string): EntityDescription {
-  // hasOwn guards: `entity` is a tool argument and these maps are plain objects,
-  // so a key like "__proto__"/"constructor" would otherwise resolve up the
-  // prototype chain to a non-string and crash the type/name logic below.
-  const mappedType = Object.hasOwn(index.entitySetToType, entity) ? index.entitySetToType[entity] : undefined
+  // `entity` is a tool argument and these maps are plain objects: the client's own-key lookup (the one the read
+  // and write paths use) keeps a key like "__proto__"/"constructor" from resolving up the prototype chain.
+  // A set resolves where the index holds its type's schema — as the read and write paths see it.
+  const mappedType = typeNameOfSet(index, entity)
   let entityType: string
   let entitySet: string | null
   if (mappedType !== undefined) {
     entitySet = entity
     entityType = mappedType
-  } else if (Object.hasOwn(index.schemas, entity)) {
+  } else if (schemaOfType(index, entity) !== undefined) {
     entityType = entity
     entitySet = Object.keys(index.entitySetToType).find((s) => index.entitySetToType[s] === entity) ?? null
   } else {
     throw new Error(`Unknown entity "${entity}". Use list_entities to discover names.`)
   }
 
-  const schema = Object.hasOwn(index.schemas, entityType) ? index.schemas[entityType] : undefined
+  const schema = schemaOfType(index, entityType)
   const properties: EntityProperty[] = Object.entries(schema?.properties ?? {}).map(([propName, p]) => ({
     name: propName,
     type: p.type,
