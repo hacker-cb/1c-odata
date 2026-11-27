@@ -1,0 +1,5 @@
+---
+"@1c-odata/mcp": patch
+---
+
+Changes to connections from several processes no longer overwrite each other. Every MCP server of every client and the CLI share one data directory, but only calls within one process were serialized: two processes that read `config.json` at once each saved their own copy, and one change — an added or removed connection, a label, new credentials — was silently lost; meanwhile another process could read a new password together with the old base URL. Every change (`add`, `remove`, `set-credentials`, `label` and their MCP tools) now holds a cross-process lock, the file `<data dir>/.lock`, over the whole change — `config.json` and the password together. A change waits up to 10 s for it, then fails naming the process that holds it; a lock left by a process that died is taken over on its own — at once where that process ran on this host, after 60 s where it cannot be checked. Reads never take it.

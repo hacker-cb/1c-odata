@@ -188,6 +188,8 @@ async function applyCredentialChange(
     ...(change.login !== undefined ? { login: change.login } : {}),
     ...(change.password !== undefined ? { password: change.password } : {}),
     insecure: opts.insecure ?? false,
+    // Verified (or decided) against `existing`: refused where another process re-pointed it since (#273).
+    verifiedTarget: { baseUrl: existing.baseUrl, login: existing.login },
     signal,
   })
   // Rebuild the cached client (it was wired with the old credentials).

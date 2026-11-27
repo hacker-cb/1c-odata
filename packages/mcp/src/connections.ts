@@ -9,6 +9,7 @@ import { request } from '@1c-odata/client/internal'
 import { fetchMetadataXml } from '@1c-odata/metadata'
 import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfig, targetBaseUrl } from './config.js'
 import { DEFAULT_METADATA_TIMEOUT_MS, DEFAULT_REACHABILITY_TIMEOUT_MS } from './constants.js'
+import { withDataDirLock } from './data-dir-lock.js'
 import { stripUrlUserinfo } from './redact.js'
 import { connectionEnvPassword, envPassword, passwordEnvVar, SecretStore, secretKey } from './secret-store.js'
 
@@ -166,15 +167,20 @@ export function assertAddable(dataDir: string, name: string, overwrite: boolean)
 }
 
 /**
- * Serialize config read-modify-write across concurrent calls in this process.
- * MCP tool invocations can run in parallel, so a slow `add_connection` (it
- * verifies connectivity first) must not be clobbered by a `remove_connection`
- * that loaded a stale config and saved over it. In-process only — the MCP
- * server is the single writer; concurrent CLI processes are not coordinated.
+ * Serialize a read-modify-write of the data dir — `config.json` and the secrets
+ * that go with it — across concurrent calls in this process AND across
+ * processes sharing the dir (#269): every MCP server of every client and the CLI
+ * resolve the same one. In this process the calls queue on a promise chain, so a
+ * process never waits on its own lock file; the head of the queue then takes the
+ * cross-process {@link withDataDirLock}, held for the whole operation and
+ * released however it ends. `signal` aborts the wait — nothing is written then.
+ * Verifying a connection (network) stays outside: callers verify first, and the
+ * operation re-checks under the lock what it rests on.
  */
 let configMutation: Promise<unknown> = Promise.resolve()
-function withConfigLock<T>(task: () => Promise<T>): Promise<T> {
-  const run = configMutation.then(task, task)
+function withConfigLock<T>(dataDir: string, task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  const locked = () => withDataDirLock(dataDir, task, { signal })
+  const run = configMutation.then(locked, locked)
   configMutation = run.then(
     () => undefined,
     () => undefined,
@@ -387,46 +393,50 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
   const { baseUrl, login } = authTarget(input.baseUrl, input.login)
   const password = input.password // opaque credential — stored verbatim, never trimmed
 
-  return withConfigLock(async () => {
-    input.signal?.throwIfAborted()
-    const config = loadConfig(input.dataDir)
-    const existing = storedConnection(config.connections, input.name)
-    const existed = existing !== undefined
-    if (existed && input.overwrite !== true) {
-      throw new InvalidArgumentError(`Connection "${input.name}" already exists`, { argument: 'name' })
-    }
-    // Trimmed (non-interactive --timezone / MCP tool args aren't trimmed by their
-    // callers): surrounding whitespace would fail the IANA check.
-    const serverTimezone = addTimezone(input.name, existing, baseUrl, input.serverTimezone)
-    assertConnectionFields({ ...input, serverTimezone })
+  return withConfigLock(
+    input.dataDir,
+    async () => {
+      input.signal?.throwIfAborted()
+      const config = loadConfig(input.dataDir)
+      const existing = storedConnection(config.connections, input.name)
+      const existed = existing !== undefined
+      if (existed && input.overwrite !== true) {
+        throw new InvalidArgumentError(`Connection "${input.name}" already exists`, { argument: 'name' })
+      }
+      // Trimmed (non-interactive --timezone / MCP tool args aren't trimmed by their
+      // callers): surrounding whitespace would fail the IANA check.
+      const serverTimezone = addTimezone(input.name, existing, baseUrl, input.serverTimezone)
+      assertConnectionFields({ ...input, serverTimezone })
 
-    // Authoritative (under the lock) re-checks of the env-var guards.
-    assertNoPasswordEnvCollision(config.connections, input.name)
-    const byAgent = input.byAgent === true
-    assertAddTargetAllowed(
-      input.name,
-      existing,
-      { baseUrl, login },
-      { byAgent, storesPassword: password !== undefined && password !== '' },
-    )
+      // Authoritative (under the lock) re-checks of the env-var guards.
+      assertNoPasswordEnvCollision(config.connections, input.name)
+      const byAgent = input.byAgent === true
+      assertAddTargetAllowed(
+        input.name,
+        existing,
+        { baseUrl, login },
+        { byAgent, storesPassword: password !== undefined && password !== '' },
+      )
 
-    // Mutate the secret store BEFORE persisting config: if a secret write/remove
-    // throws, config.json is left untouched, so it can never end up pointing at a
-    // new auth target (baseUrl/login) while a stale password still resolves.
-    const written = buildStoredConnection({ baseUrl, login, serverTimezone }, input, existing, byAgent)
-    const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
-    const secret = await applyUpsertSecret(store, input.name, password, existing, written)
+      // Mutate the secret store BEFORE persisting config: if a secret write/remove
+      // throws, config.json is left untouched, so it can never end up pointing at a
+      // new auth target (baseUrl/login) while a stale password still resolves.
+      const written = buildStoredConnection({ baseUrl, login, serverTimezone }, input, existing, byAgent)
+      const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
+      const secret = await applyUpsertSecret(store, input.name, password, existing, written)
 
-    config.connections[input.name] = written
-    saveConfig(input.dataDir, config)
-    await dropOldKey(store, input.name, existing, written)
+      config.connections[input.name] = written
+      saveConfig(input.dataDir, config)
+      await dropOldKey(store, input.name, existing, written)
 
-    return {
-      overwritten: existed,
-      ...(secret.passwordBackend !== undefined ? { passwordBackend: secret.passwordBackend } : {}),
-      ...(secret.passwordCleared ? { passwordCleared: true } : {}),
-    }
-  })
+      return {
+        overwritten: existed,
+        ...(secret.passwordBackend !== undefined ? { passwordBackend: secret.passwordBackend } : {}),
+        ...(secret.passwordCleared ? { passwordCleared: true } : {}),
+      }
+    },
+    input.signal,
+  )
 }
 
 /**
@@ -437,7 +447,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
  * never reads a person's. Returns false if absent.
  */
 export async function removeConnection(input: { dataDir: string; name: string; insecure?: boolean }): Promise<boolean> {
-  return withConfigLock(async () => {
+  return withConfigLock(input.dataDir, async () => {
     const config = loadConfig(input.dataDir)
     const existing = config.connections[input.name]
     if (existing === undefined) return false
@@ -550,7 +560,7 @@ export async function setConnectionLabel(input: {
   name: string
   label: string
 }): Promise<SetLabelResult> {
-  return withConfigLock(async () => {
+  return withConfigLock(input.dataDir, async () => {
     const config = loadConfig(input.dataDir)
     const existing = config.connections[input.name]
     if (existing === undefined) {
@@ -575,6 +585,14 @@ export interface UpdateCredentialsInput {
   /** New password; omit to keep the current one. Stored via {@link SecretStore}; never trimmed. */
   password?: string
   insecure?: boolean
+  /**
+   * The connection as the caller read it to verify the change — its base URL and
+   * login. Given, the change is refused unless the connection still points
+   * there under the lock: another process may have re-pointed it while the
+   * caller verified, and the verified password must not be stored for a target
+   * it was never checked on (#273).
+   */
+  verifiedTarget?: { baseUrl: string; login: string }
   /**
    * Aborted by the time the write's turn comes, nothing is written (#236). A
    * write once begun completes: the secret and the config are never left to
@@ -611,28 +629,39 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
   if (login === undefined && input.password === undefined) {
     throw new InvalidArgumentError('Provide a new login, a new password, or both', { argument: 'login' })
   }
-  return withConfigLock(async () => {
-    input.signal?.throwIfAborted()
-    const config = loadConfig(input.dataDir)
-    const existing = config.connections[input.name]
-    if (existing === undefined) {
-      throw new InvalidArgumentError(`No connection named "${input.name}"`, { argument: 'connection' })
-    }
-    assertNoEnvPassword(input.name, existing)
-    // Write the secret BEFORE the config so a login change is never persisted
-    // while its matching password write is still pending or has failed.
-    const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
-    let passwordBackend: 'keychain' | 'file' | undefined
-    if (input.password !== undefined) {
-      passwordBackend = (await store.write(input.name, input.password, existing)).backend
-    }
-    const loginUpdated = login !== undefined && login !== existing.login
-    if (loginUpdated) existing.login = login
-    saveConfig(input.dataDir, config)
-    return {
-      loginUpdated,
-      passwordUpdated: input.password !== undefined,
-      ...(passwordBackend !== undefined ? { passwordBackend } : {}),
-    }
-  })
+  return withConfigLock(
+    input.dataDir,
+    async () => {
+      input.signal?.throwIfAborted()
+      const config = loadConfig(input.dataDir)
+      const existing = config.connections[input.name]
+      if (existing === undefined) {
+        throw new InvalidArgumentError(`No connection named "${input.name}"`, { argument: 'connection' })
+      }
+      const verified = input.verifiedTarget
+      if (verified !== undefined && !sameAuthTarget(existing, authTarget(verified.baseUrl, verified.login))) {
+        throw new InvalidArgumentError(
+          `Connection "${input.name}" changed while its credentials were being verified — it now points at ${targetBaseUrl(existing.baseUrl)} as "${existing.login}". Nothing was changed: check the connection and retry.`,
+          { argument: 'connection' },
+        )
+      }
+      assertNoEnvPassword(input.name, existing)
+      // Write the secret BEFORE the config so a login change is never persisted
+      // while its matching password write is still pending or has failed.
+      const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
+      let passwordBackend: 'keychain' | 'file' | undefined
+      if (input.password !== undefined) {
+        passwordBackend = (await store.write(input.name, input.password, existing)).backend
+      }
+      const loginUpdated = login !== undefined && login !== existing.login
+      if (loginUpdated) existing.login = login
+      saveConfig(input.dataDir, config)
+      return {
+        loginUpdated,
+        passwordUpdated: input.password !== undefined,
+        ...(passwordBackend !== undefined ? { passwordBackend } : {}),
+      }
+    },
+    input.signal,
+  )
 }

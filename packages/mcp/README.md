@@ -206,6 +206,12 @@ are not expanded and stay a "not absolute" error.
     a password only where the keychain refused the newest write: a write the keychain takes deletes the file
     copy (and fails where it cannot), so an older copy the keychain still keeps — one a locked keychain or
     another process (`--insecure-storage`, no keychain backend) could not delete — never outranks it.
+- **`.lock`** — present only while a process changes connections (`add`, `remove`, `set-credentials`, `label`
+  and their MCP tools). Every process sharing the data dir takes it around the whole change — `config.json`
+  and the password together — so concurrent changes from several MCP clients and the CLI never overwrite each
+  other. A change waits up to 10 s for it, then fails naming the process that holds it. A lock left by a
+  process that died is taken over on its own: at once where that process ran on this host, after 60 s where
+  it cannot be checked. Reads never take it.
 
 **Connection names** are an ASCII alias — a letter or digit first, then letters, digits, `-`, `_`
 (`/^[A-Za-z0-9][A-Za-z0-9_-]*$/`); a Cyrillic 1С base name needs such an alias. Because the env-var slug

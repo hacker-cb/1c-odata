@@ -129,6 +129,8 @@ export async function runSetCredentials(opts: SetCredentialsOptions): Promise<vo
     ...(hasLogin ? { login: newLogin } : {}),
     ...(pw !== undefined ? { password: pw.value } : {}),
     insecure: opts.insecure ?? false,
+    // Verified (or decided) against `existing`: refused where another process re-pointed it since (#273).
+    verifiedTarget: { baseUrl: existing.baseUrl, login: existing.login },
   })
   reportCredentialChange(opts, result)
 }
