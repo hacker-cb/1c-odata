@@ -156,7 +156,8 @@ async function gatherInteractive(opts: AddOptions): Promise<ResolvedFields | nul
   let overwrite = false
   const existing = loadConfig(opts.dataDir).connections[name]
   if (existing !== undefined) {
-    if (!(await promptConfirm(`Connection "${name}" exists. Overwrite?`))) {
+    // `--force` is the answer already given: overwrite without asking, as the non-interactive add does.
+    if (opts.force !== true && !(await promptConfirm(`Connection "${name}" exists. Overwrite?`))) {
       process.stdout.write('Aborted.\n')
       return null
     }
