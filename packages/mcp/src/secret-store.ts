@@ -163,9 +163,8 @@ export class SecretStore {
   private readonly insecure: boolean
   private readonly env: NodeJS.ProcessEnv
   private readonly warn: (message: string) => void
-  private keyring: KeyringModule | null | undefined
-  /** Why the keychain backend did not load, where it did not: what the downgrade warning names. */
-  private keyringUnavailable = ''
+  /** The keychain backend: loaded, or why it did not load — what the downgrade warning names; `undefined` before the first try. */
+  private keyring: KeyringModule | { unavailable: KeyringUnavailable } | undefined
 
   constructor(opts: SecretStoreOptions) {
     this.dataDir = opts.dataDir
@@ -188,11 +187,10 @@ export class SecretStore {
       try {
         this.keyring = (await import('@napi-rs/keyring')) as unknown as KeyringModule
       } catch (err) {
-        this.keyring = null
-        this.keyringUnavailable = keyringLoadFailure(err)
+        this.keyring = { unavailable: keyringLoadFailure(err) }
       }
     }
-    return this.keyring
+    return 'unavailable' in this.keyring ? null : this.keyring
   }
 
   /**
@@ -259,9 +257,10 @@ export class SecretStore {
         : `Set ${passwordEnvVar(name)} or ${fix} to avoid this.`
     const mod = await this.keyringModule()
     if (mod === null) {
+      const why = this.keyring !== undefined && 'unavailable' in this.keyring ? this.keyring.unavailable : undefined
       this.warn(
-        `⚠ ${this.keyringUnavailable}; falling back to plaintext ${this.credentialsPath} (0600). ` +
-          avoid('install the keychain backend'),
+        `⚠ ${why?.reason ?? '@napi-rs/keyring not loaded'}; falling back to plaintext ${this.credentialsPath} (0600). ` +
+          avoid(why?.fix ?? 'install the keychain backend'),
       )
       return false
     }
@@ -493,19 +492,38 @@ export class SecretStore {
   }
 }
 
+/** Why the keychain backend did not load, and what fixes it — the two halves of the downgrade warning. */
+export interface KeyringUnavailable {
+  reason: string
+  fix: string
+}
+
 /**
  * What stopped `@napi-rs/keyring` from loading: not installed (an optional
  * dependency the install skipped), or installed and failing — a native binary
  * built for another platform or Node ABI, say — which reinstalling fixes and
- * "not installed" would hide.
+ * "not installed" would hide. The error's first line, and its loader's first
+ * cause where it wraps them (`Cannot find native binding`), keep the one-line
+ * warning one line.
  */
-export function keyringLoadFailure(err: unknown): string {
+export function keyringLoadFailure(err: unknown): KeyringUnavailable {
   const code = (err as NodeJS.ErrnoException | undefined)?.code
   // The package itself, quoted as Node names it — not a platform package of it (`@napi-rs/keyring-linux-x64-gnu`).
   const missing =
     (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') &&
     /['"]@napi-rs\/keyring['"]/.test(errMessage(err))
-  return missing ? '@napi-rs/keyring not installed' : `@napi-rs/keyring could not be loaded (${errMessage(err)})`
+  if (missing) return { reason: '@napi-rs/keyring not installed', fix: 'install the keychain backend' }
+  const cause = (err as { cause?: unknown } | undefined)?.cause
+  const first = Array.isArray(cause) ? cause[0] : cause
+  const detail = [firstLine(errMessage(err)), ...(first !== undefined ? [firstLine(errMessage(first))] : [])].join(': ')
+  return {
+    reason: `@napi-rs/keyring could not be loaded (${detail})`,
+    fix: 'reinstall @napi-rs/keyring for this platform and Node version',
+  }
+}
+
+function firstLine(text: string): string {
+  return text.split('\n', 1)[0] ?? text
 }
 
 function errMessage(err: unknown): string {

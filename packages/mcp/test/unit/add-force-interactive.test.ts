@@ -21,9 +21,19 @@ vi.mock('@napi-rs/keyring', () => ({
 }))
 
 /** The interactive `add`, answered without a terminal; every overwrite question asked is counted and answered no. */
-const prompts = vi.hoisted(() => ({ lines: [] as string[], confirms: [] as string[] }))
+const prompts = vi.hoisted(() => ({
+  lines: [] as string[],
+  confirms: [] as string[],
+  /** Runs at the first question: another process acting while the person answers. */
+  meanwhile: undefined as (() => Promise<void>) | undefined,
+}))
 vi.mock('../../src/commands/_prompt.js', () => ({
-  promptLine: async () => prompts.lines.shift() ?? '',
+  promptLine: async () => {
+    const meanwhile = prompts.meanwhile
+    prompts.meanwhile = undefined
+    await meanwhile?.()
+    return prompts.lines.shift() ?? ''
+  },
   promptHidden: async () => '',
   promptConfirm: async (question: string) => {
     prompts.confirms.push(question)
@@ -40,6 +50,7 @@ beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'mcp-add-force-'))
   prompts.lines = []
   prompts.confirms = []
+  prompts.meanwhile = undefined
   vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
   vi.stubEnv('ONEC_C_PASSWORD', '')
   await upsertConnection({ dataDir: dir, name: 'c', baseUrl: OLD, login: 'u', serverTimezone: 'UTC', insecure: true })
@@ -62,6 +73,21 @@ describe('the interactive CLI add over an existing connection', () => {
     await runAdd({ dataDir: dir, insecure: true, name: 'c', force: true })
     expect(prompts.confirms).toEqual([])
     expect(loadConfig(dir).connections.c?.baseUrl).toBe(NEW)
+  })
+
+  it('with --force overwrites one another process added while the questions were answered', async () => {
+    prompts.lines = [NEW, 'u', 'Europe/Moscow', '']
+    prompts.meanwhile = () =>
+      upsertConnection({
+        dataDir: dir,
+        name: 'd',
+        baseUrl: OLD,
+        login: 'u',
+        serverTimezone: 'UTC',
+        insecure: true,
+      }).then(() => undefined)
+    await runAdd({ dataDir: dir, insecure: true, name: 'd', force: true })
+    expect(loadConfig(dir).connections.d?.baseUrl).toBe(NEW)
   })
 
   it('without --force asks first, and a no leaves it as it was', async () => {

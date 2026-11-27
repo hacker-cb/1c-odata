@@ -255,6 +255,13 @@ export function loadConfig(dataDir: string): McpConfig {
   } catch {
     throw new Error(`Malformed JSON in ${configPath(dataDir)} — fix or delete the file.`)
   }
+  // An array is no name → connection map: its indexes ("0", "1") would pass as connection names, and read
+  // as none, the next save would drop what it holds. A person fixes it.
+  if (Array.isArray((parsed as { connections?: unknown } | null)?.connections)) {
+    throw new Error(
+      `"connections" in ${configPath(dataDir)} is an array; it must be an object mapping each connection name to its connection — fix the file.`,
+    )
+  }
   return normalizeConfig(parsed)
 }
 
@@ -272,10 +279,7 @@ function noConnections(): Record<string, StoredConnection> {
 function normalizeConfig(data: unknown): McpConfig {
   if (data === null || typeof data !== 'object') return { connections: noConnections() }
   const connections = (data as { connections?: unknown }).connections
-  // An array is no name → connection map: its indexes ("0", "1") would pass as connection names.
-  if (connections === null || typeof connections !== 'object' || Array.isArray(connections)) {
-    return { connections: noConnections() }
-  }
+  if (connections === null || typeof connections !== 'object') return { connections: noConnections() }
   // Drop structurally-invalid entries (a hand-edited config may have non-objects
   // or miss required string fields — keeping them would crash later paths) AND
   // entries whose name key fails connection-name validation (a non-ASCII name

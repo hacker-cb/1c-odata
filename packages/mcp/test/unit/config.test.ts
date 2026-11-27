@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -134,12 +134,13 @@ describe('loadConfig / saveConfig', () => {
     expect(loadConfig(dir).connections.c?.baseUrl).toBe('http://host/odata')
   })
 
-  it('reads connections written as an array as none — its indexes are no connection names', () => {
-    writeFileSync(
-      configPath(dir),
-      JSON.stringify({ connections: [{ baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow' }] }),
-    )
-    expect(Object.keys(loadConfig(dir).connections)).toEqual([])
+  it('refuses connections written as an array — its indexes are no names, and a save would drop them', () => {
+    const written = JSON.stringify({
+      connections: [{ baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow' }],
+    })
+    writeFileSync(configPath(dir), written)
+    expect(() => loadConfig(dir)).toThrow(/"connections" in .*config\.json is an array; .*fix the file/)
+    expect(readFileSync(configPath(dir), 'utf8')).toBe(written)
   })
 
   it('drops connections whose name key is invalid (non-ASCII / leading separator)', () => {

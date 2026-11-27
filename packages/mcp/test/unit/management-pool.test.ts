@@ -70,7 +70,7 @@ async function connect() {
   return { pool, mcp }
 }
 
-describe('the management tools leave the pool to notice their changes (#274)', () => {
+describe('the management tools and the pool (#274)', () => {
   it('a new password through set_credentials: the next get builds with it', async () => {
     const { pool, mcp } = await connect()
     const before = await pool.get('c')
@@ -93,6 +93,19 @@ describe('the management tools leave the pool to notice their changes (#274)', (
     expect(res.isError).toBeFalsy()
     expect(await pool.get('c')).toBe(before)
     expect(downloads.length).toBe(count)
+    await mcp.close()
+  })
+
+  it('remove_connection, then add_connection without a password: the old password is not used again', async () => {
+    const { pool, mcp } = await connect()
+    await pool.get('c')
+    await mcp.callTool({ name: 'remove_connection', arguments: { connection: 'c' } })
+    const res = await mcp.callTool({
+      name: 'add_connection',
+      arguments: { connection: 'c', baseUrl: BASE, login: 'u', serverTimezone: 'UTC' },
+    })
+    expect(res.isError).toBeFalsy()
+    await expect(pool.get('c')).rejects.toThrow(/No password for "c"/)
     await mcp.close()
   })
 

@@ -52,6 +52,7 @@ interface AddConnectionArgs {
 /** Body of the `add_connection` tool (extracted to keep the tool callback flat). */
 async function addConnection(
   opts: ManagementToolsOptions,
+  pool: ConnectionPool,
   args: AddConnectionArgs,
   signal: AbortSignal,
 ): Promise<ToolResultBody> {
@@ -86,6 +87,10 @@ async function addConnection(
     byAgent: true,
     signal,
   })
+  // A password stored or cleared: a pooled client built with the old one must go, also where the
+  // new one cannot be read back — the pool keeps an entry whose password reads as none (#274). An
+  // overwrite that keeps the password (a label, a timezone) leaves it: the pool sees the rest itself.
+  if (result.passwordBackend !== undefined || result.passwordCleared === true) pool.refresh(connection)
   return {
     summary: `Connection "${connection}" ${result.overwritten ? 'updated' : 'added'}${passwordNote(result)}.`,
     data: {
@@ -167,6 +172,7 @@ function summarizeCredentialChange(
 /** Body of the `set_credentials` tool (extracted to keep the tool callback flat). */
 async function applyCredentialChange(
   opts: ManagementToolsOptions,
+  pool: ConnectionPool,
   connection: string,
   login: string | undefined,
   password: string | undefined,
@@ -193,6 +199,8 @@ async function applyCredentialChange(
     expected: { baseUrl: existing.baseUrl, login: existing.login, password: storedPassword },
     signal,
   })
+  // The client built with the old credentials goes, also where the new password cannot be read back.
+  pool.refresh(connection)
   return summarizeCredentialChange(connection, result, verified)
 }
 
@@ -201,13 +209,13 @@ async function applyCredentialChange(
  * base — data access stays read-only). A password may be supplied but is
  * write-only: it is stored via SecretStore and no tool ever returns it.
  *
- * They leave the pool alone: its every `get` compares the connection and its
- * password with what its client was built from and rebuilds on a change
- * (#274), so a change here — or in another process — reaches it without a
- * refresh, and one that changes nothing the client uses (a label) costs no
- * `$metadata` download. `_pool` stays in the signature the server calls.
+ * The pool compares a connection and its password on every `get` and rebuilds
+ * on a change (#274), but keeps an entry whose password reads as none: so a
+ * tool drops the pooled client where it stores, clears or removes a password,
+ * and leaves it where an overwrite keeps the password — a label costs no
+ * `$metadata` download.
  */
-export function registerManagementTools(server: McpServer, _pool: ConnectionPool, opts: ManagementToolsOptions): void {
+export function registerManagementTools(server: McpServer, pool: ConnectionPool, opts: ManagementToolsOptions): void {
   server.registerTool(
     'add_connection',
     {
@@ -246,7 +254,7 @@ export function registerManagementTools(server: McpServer, _pool: ConnectionPool
           ),
       },
     },
-    async (args, { signal }) => toolResult(() => addConnection(opts, args, signal)),
+    async (args, { signal }) => toolResult(() => addConnection(opts, pool, args, signal)),
   )
 
   server.registerTool(
@@ -266,6 +274,9 @@ export function registerManagementTools(server: McpServer, _pool: ConnectionPool
           insecure: opts.insecure ?? false,
           signal,
         })
+        // The pool keeps an entry whose password reads as none: one removed and re-added without a
+        // password must not go on with the old one.
+        pool.refresh(connection)
         return {
           summary: removed ? `Connection "${connection}" removed.` : `No connection named "${connection}".`,
           data: { connection, removed },
@@ -314,6 +325,6 @@ export function registerManagementTools(server: McpServer, _pool: ConnectionPool
       },
     },
     async ({ connection, login, password }, { signal }) =>
-      toolResult(() => applyCredentialChange(opts, connection, login, password, signal)),
+      toolResult(() => applyCredentialChange(opts, pool, connection, login, password, signal)),
   )
 }
