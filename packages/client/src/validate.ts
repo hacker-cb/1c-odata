@@ -98,6 +98,20 @@ export type ValidationIssue =
 export type ValidationResult = { ok: true } | { ok: false; errors: ValidationIssue[] }
 
 /**
+ * Options for {@link validateEntity}.
+ *
+ * @public
+ */
+export interface ValidateEntityOptions {
+  /**
+   * Check only the fields the payload carries — a partial update (`patch()`),
+   * whose absent fields keep the values the server holds. Default `false`:
+   * the payload is a whole entity (`create()`, `put()`).
+   */
+  partial?: boolean
+}
+
+/**
  * Validate an entity-shaped object against its schema. Pure function — no I/O.
  *
  * Rules:
@@ -107,6 +121,10 @@ export type ValidationResult = { ok: true } | { ok: false; errors: ValidationIss
  * - Unknown fields are ignored (forward-compat with newer server schemas).
  * - Type-shape coercion (Guid/Boolean/numeric) is NOT validated — server is
  *   the source of truth for those.
+ * - With `partial: true` (a `patch()` body, which carries only the fields it
+ *   changes), a field the payload does not carry (`undefined`) is not checked;
+ *   one it carries is — `null` where `nullable: false` is still a `required`
+ *   issue, a string past `maxLength` a `maxLength` one.
  * - ValueStorage triple members (`<base>`, `<base>_Base64Data`, `<base>_Type`)
  *   are NOT validated. The user-facing grouped form is a single `<base>:
  *   { contentType, base64Data }` object that the write transform splits into
@@ -116,7 +134,11 @@ export type ValidationResult = { ok: true } | { ok: false; errors: ValidationIss
  *
  * @public
  */
-export function validateEntity(entity: Record<string, unknown>, schema: EntitySchema): ValidationResult {
+export function validateEntity(
+  entity: Record<string, unknown>,
+  schema: EntitySchema,
+  opts: ValidateEntityOptions = {},
+): ValidationResult {
   const errors: ValidationIssue[] = []
   const valueStorageMembers = collectValueStorageMembers(schema)
   for (const [name, prop] of Object.entries(schema.properties)) {
@@ -125,6 +147,7 @@ export function validateEntity(entity: Record<string, unknown>, schema: EntitySc
     // one the payload lacks would read `Object.prototype` / `Object` and pass a `required` check. Every other
     // name reads as before — a getter or a field a `toJSON` adds included.
     const v = Object.hasOwn(Object.prototype, name) && !Object.hasOwn(entity, name) ? undefined : entity[name]
+    if (v === undefined && opts.partial === true) continue
     if (v === undefined || v === null) {
       if (!prop.nullable) errors.push({ kind: 'required', field: name })
       continue

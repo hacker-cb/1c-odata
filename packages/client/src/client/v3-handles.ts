@@ -114,7 +114,7 @@ export class V3EntityHandle<T> {
   /** Partial update via PATCH. Returns the full updated entity. */
   async patch(body: Partial<T>, opts: MutationOptions = {}): Promise<T> {
     const key = this.keyNow()
-    this.client.validateBeforeWrite(this.entitySet, body)
+    this.client.validateBeforeWrite(this.entitySet, body, true)
     if (opts.expectVersion !== undefined) {
       await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }

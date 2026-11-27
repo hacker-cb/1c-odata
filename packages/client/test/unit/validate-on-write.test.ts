@@ -88,3 +88,54 @@ describe('ODataV3Client validateOnWrite', () => {
     )
   })
 })
+
+describe('validateOnWrite on a partial update (#295)', () => {
+  const index: MetadataIndex = {
+    schemaNamespace: 'StandardODATA',
+    schemas: {
+      Catalog_X: {
+        properties: {
+          Ref_Key: { type: 'Edm.Guid', nullable: false },
+          Code: { type: 'Edm.String', nullable: false, maxLength: 3 },
+          Description: { type: 'Edm.String', nullable: false, maxLength: 25 },
+          Comment: { type: 'Edm.String', nullable: true },
+        },
+      },
+    },
+    entitySetToType: { Catalog_X: 'Catalog_X' },
+  }
+  const key = '00000000-0000-0000-0000-000000000001'
+  const client = () =>
+    new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', metadataIndex: index, validateOnWrite: true })
+  let sent: unknown[]
+  beforeEach(() => {
+    sent = []
+    const reply = async ({ request }: { request: Request }) => {
+      sent.push(await request.json())
+      return HttpResponse.json({ Ref_Key: key, Code: 'Y', Description: 'd' })
+    }
+    server.use(http.patch(/Catalog_X/, reply), http.put(/Catalog_X/, reply), http.post(/Catalog_X/, reply))
+  })
+
+  it('patch() checks only the fields it carries — the absent required ones keep what the server holds', async () => {
+    await client().entity('Catalog_X', key).patch({ Code: 'Y' })
+    expect(sent).toEqual([{ Code: 'Y' }])
+  })
+
+  it('patch() still refuses a carried field that breaks the schema — null where required, a string too long', async () => {
+    const e = client().entity('Catalog_X', key)
+    await expect(e.patch({ Code: null } as Record<string, unknown>)).rejects.toThrow(ValidationError)
+    await expect(e.patch({ Code: 'TOOLONG' })).rejects.toThrow(ValidationError)
+    expect(sent).toEqual([])
+  })
+
+  it('create() and put() still check the whole entity', async () => {
+    await expect(client().entity('Catalog_X').create({ Code: 'Y' })).rejects.toThrow(ValidationError)
+    await expect(
+      client()
+        .entity('Catalog_X', key)
+        .put({ Code: 'Y' } as Record<string, unknown>),
+    ).rejects.toThrow(ValidationError)
+    expect(sent).toEqual([])
+  })
+})

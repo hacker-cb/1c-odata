@@ -123,3 +123,35 @@ describe('validateEntity — any other name reads as before', () => {
     expect(validateEntity(new Body() as unknown as Record<string, unknown>, schema)).toEqual({ ok: true })
   })
 })
+
+describe('validateEntity — partial (#295)', () => {
+  const schema: EntitySchema = {
+    properties: {
+      Code: { type: 'Edm.String', nullable: false, maxLength: 3 },
+      Description: { type: 'Edm.String', nullable: false },
+    },
+  }
+
+  it('skips a field the payload does not carry', () => {
+    expect(validateEntity({ Code: 'Y' }, schema, { partial: true })).toEqual({ ok: true })
+    expect(validateEntity({ Code: 'Y', Description: undefined }, schema, { partial: true })).toEqual({ ok: true })
+  })
+
+  it('checks a field it carries — null where required, past maxLength', () => {
+    expect(validateEntity({ Code: null }, schema, { partial: true })).toEqual({
+      ok: false,
+      errors: [{ kind: 'required', field: 'Code' }],
+    })
+    expect(validateEntity({ Code: 'LONG' }, schema, { partial: true })).toEqual({
+      ok: false,
+      errors: [{ kind: 'maxLength', field: 'Code', value: 'LONG', max: 3 }],
+    })
+  })
+
+  it('without partial, a missing required field is an issue, as before', () => {
+    expect(validateEntity({ Code: 'Y' }, schema)).toEqual({
+      ok: false,
+      errors: [{ kind: 'required', field: 'Description' }],
+    })
+  })
+})
