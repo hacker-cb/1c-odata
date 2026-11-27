@@ -5,6 +5,7 @@ import type { EdmxModel } from '@1c-odata/metadata'
 import { buildMetadataIndex, fetchMetadataXml, parseEdmx } from '@1c-odata/metadata'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConnectionPool } from '../../src/connection-pool.js'
+import { removeConnection, upsertConnection } from '../../src/connections.js'
 import { FileConnectionSource } from '../../src/file-connection-source.js'
 
 // Stub the network + parse + index build so get() never touches a real base;
@@ -93,6 +94,116 @@ describe('ConnectionPool.get', () => {
     await p.get('trade')
     p.refresh('trade')
     await p.get('trade')
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('ConnectionPool.get — a connection another process changed (#274)', () => {
+  // Two pools on one data dir stand for two processes: `serve` holding a cached
+  // client, and the CLI (or another MCP server) changing config.json and the
+  // password store behind it — nothing calls refresh() on the first pool.
+  const trade = { dataDir: '', name: 'trade', baseUrl: 'http://h/odata/standard.odata', login: 'u' }
+  const change = (input: Partial<Parameters<typeof upsertConnection>[0]>) =>
+    upsertConnection({
+      ...trade,
+      dataDir: dir,
+      serverTimezone: 'Europe/Moscow',
+      password: 'pw',
+      insecure: true,
+      overwrite: true,
+      ...input,
+    })
+
+  it('keeps the cached entry while nothing changed — the label is cosmetic', async () => {
+    const serve = pool()
+    const built = await serve.get('trade')
+    await change({ label: 'Торговля' })
+    await expect(serve.get('trade')).resolves.toBe(built)
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(1)
+  })
+
+  it('rebuilds after another process changes the timezone', async () => {
+    const serve = pool()
+    const built = await serve.get('trade')
+    await change({ serverTimezone: 'Asia/Novosibirsk' })
+    const rebuilt = await serve.get('trade')
+    expect(rebuilt).not.toBe(built)
+    expect(rebuilt.connection.serverTimezone).toBe('Asia/Novosibirsk')
+    // The other process's own pool builds the same, and the server's is cached again.
+    expect((await pool().get('trade')).connection.serverTimezone).toBe('Asia/Novosibirsk')
+    await expect(serve.get('trade')).resolves.toBe(rebuilt)
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(3)
+  })
+
+  it('rebuilds after another process changes the login, the URL or the shape', async () => {
+    const serve = pool()
+    await serve.get('trade')
+    await change({ login: 'u2' })
+    expect((await serve.get('trade')).connection.auth).toMatchObject({ username: 'u2' })
+    await change({ login: 'u2', baseUrl: 'http://h4/odata/standard.odata' })
+    expect((await serve.get('trade')).connection.baseUrl).toBe('http://h4/odata/standard.odata')
+    await change({ login: 'u2', baseUrl: 'http://h4/odata/standard.odata', shape: { int64Mode: 'bigint' } })
+    expect((await serve.get('trade')).connection.shape).toEqual({ int64Mode: 'bigint' })
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(4)
+  })
+
+  it('rebuilds after another process changes only the password', async () => {
+    const serve = pool()
+    await serve.get('trade')
+    await change({ password: 'pw2' })
+    const rebuilt = await serve.get('trade')
+    expect(rebuilt.connection.auth).toMatchObject({ username: 'u', password: 'pw2' })
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fetchMetadataXml).mock.lastCall?.[0].auth).toMatchObject({ header: `Basic ${btoa('u:pw2')}` })
+  })
+
+  it('fails as an unknown connection once another process removes it, and builds anew when re-added', async () => {
+    const serve = pool()
+    const built = await serve.get('trade')
+    await removeConnection({ dataDir: dir, name: 'trade', insecure: true })
+    await expect(serve.get('trade')).rejects.toThrow(/No connection named "trade"/)
+    expect((await serve.list()).map((c) => c.name)).toEqual(['nopw'])
+    await change({})
+    const readded = await serve.get('trade')
+    expect(readded).not.toBe(built)
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails as password-less once another process drops the password, and builds anew when it is back', async () => {
+    const serve = pool()
+    const built = await serve.get('trade')
+    write('credentials.json', {})
+    await expect(serve.get('trade')).rejects.toThrow(/No password for "trade"/)
+    write('credentials.json', { trade: 'pw' })
+    await expect(serve.get('trade')).resolves.not.toBe(built)
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports an entry built from an older descriptor as not loaded', async () => {
+    const serve = pool()
+    await serve.get('trade')
+    await change({ serverTimezone: 'Asia/Novosibirsk' })
+    expect((await serve.list()).find((c) => c.name === 'trade')?.loaded).toBe(false)
+    await serve.get('trade')
+    expect((await serve.list()).find((c) => c.name === 'trade')?.loaded).toBe(true)
+  })
+
+  it('a stale build that fails leaves the newer build cached', async () => {
+    const serve = pool()
+    let failStale: (err: Error) => void = () => {}
+    vi.mocked(fetchMetadataXml).mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          failStale = reject
+        }),
+    )
+    const stale = serve.get('trade')
+    await vi.waitFor(() => expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(1))
+    await change({ serverTimezone: 'Asia/Novosibirsk' })
+    const fresh = await serve.get('trade')
+    failStale(new Error('network down'))
+    await expect(stale).rejects.toThrow('network down')
+    await expect(serve.get('trade')).resolves.toBe(fresh)
     expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2)
   })
 })

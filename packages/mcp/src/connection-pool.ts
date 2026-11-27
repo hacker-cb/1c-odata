@@ -8,7 +8,7 @@ import {
   validateConnection,
 } from '@1c-odata/client'
 import { buildMetadataIndex, type EdmxModel, fetchMetadataXml, parseEdmx } from '@1c-odata/metadata'
-import { connectionLabel } from './config.js'
+import { connectionLabel, type StoredConnection } from './config.js'
 import type { ConnectionSource } from './connection-source.js'
 import { DEFAULT_METADATA_TIMEOUT_MS } from './constants.js'
 import type { SecretSource } from './secret-store.js'
@@ -63,6 +63,29 @@ export interface ConnectionPoolOptions {
 }
 
 /**
+ * What a cached entry was built from: the descriptor fields that reach the
+ * client or its schema, and the password it authenticates with. `label` is
+ * cosmetic and `addedBy` only decides which password is read — both stay out.
+ */
+interface BuiltFrom {
+  /** `baseUrl`, `login`, `serverTimezone` and `shape`, serialized. */
+  descriptor: string
+  /** Held exactly as the client already holds it — never logged, listed or put in an error. */
+  password: string
+}
+
+/** A cache slot: the entry (built or building) and what it was built from. */
+interface CacheSlot {
+  entry: Promise<PoolEntry>
+  builtFrom: BuiltFrom
+}
+
+/** The part of {@link BuiltFrom} a descriptor alone decides. */
+function descriptorKey(stored: StoredConnection): string {
+  return JSON.stringify([stored.baseUrl, stored.login, stored.serverTimezone, stored.shape ?? null])
+}
+
+/**
  * Lazily resolves connections into ready clients and caches the schema in
  * memory. The first access to a connection downloads `$metadata` ONCE and
  * derives both the {@link EdmxModel} (keys/navigation) and the
@@ -74,11 +97,18 @@ export interface ConnectionPoolOptions {
  * {@link FileConnectionSource} (config.json + keychain), a multi-tenant host a
  * DB-backed one. The cache is keyed on the connection name and is process-global
  * for the pool's lifetime, so it can be shared across sessions.
+ *
+ * Every {@link get} re-reads the connection from its source and checks it
+ * against what the cached entry was built from (#274): another process — the
+ * CLI `remove` / `add --force`, or another MCP server on the same config — may
+ * have changed or removed it since. A changed descriptor or password rebuilds
+ * the entry; a removed connection, or one left with no password, drops it and
+ * fails as an unknown or password-less one would.
  */
 export class ConnectionPool implements ReadPool {
   private readonly source: ConnectionSource
   private readonly fetchTimeout: number
-  private readonly cache = new Map<string, Promise<PoolEntry>>()
+  private readonly cache = new Map<string, CacheSlot>()
   /** The signal of the `$metadata` downloads started since the last {@link abortDownloads}. */
   private downloads = new AbortController()
   /** The builds still in flight — what {@link abortDownloads} drops from the cache. */
@@ -103,7 +133,7 @@ export class ConnectionPool implements ReadPool {
         serverTimezone: c.serverTimezone,
         passwordSource: await this.source.secretSource(c.name, c),
         ...(c.addedBy === 'agent' ? { addedBy: c.addedBy } : {}),
-        loaded: this.cache.has(c.name),
+        loaded: this.cache.get(c.name)?.builtFrom.descriptor === descriptorKey(c),
       })),
     )
     return summaries.sort((a, b) => a.name.localeCompare(b.name))
@@ -112,42 +142,54 @@ export class ConnectionPool implements ReadPool {
   /**
    * Resolve a ready entry, fetching + building the schema on first access. The
    * in-flight Promise is cached, so concurrent calls for the same uncached
-   * connection share ONE `$metadata` download instead of racing.
+   * connection share ONE `$metadata` download instead of racing. Each call
+   * first re-reads the connection and its password from the source; an entry
+   * built from anything else is replaced (see the class doc, #274).
    */
   async get(name: string): Promise<PoolEntry> {
-    const cached = this.cache.get(name)
-    if (cached !== undefined) return cached
+    // Taken before the source reads: a call still reading when abortDownloads runs fails with the rest.
+    const signal = this.downloads.signal
+    const stored = await this.source.getBase(name)
+    if (stored === undefined) {
+      this.cache.delete(name)
+      throw new InvalidArgumentError(`No connection named "${name}"`, { argument: 'connection' })
+    }
+    // The descriptor read above: the password is resolved for the target it goes to.
+    const secret = await this.source.getSecret(name, stored)
+    if (secret === null) {
+      this.cache.delete(name)
+      const hint = this.source.missingSecretHint?.(name, stored)
+      throw new InvalidArgumentError(`No password for "${name}".${hint !== undefined ? ` ${hint}` : ''}`, {
+        argument: 'connection',
+      })
+    }
+    signal.throwIfAborted()
 
-    const pending = this.build(name, this.downloads.signal)
-    this.cache.set(name, pending)
+    // From here to the cache write nothing awaits: concurrent calls see one slot.
+    const builtFrom: BuiltFrom = { descriptor: descriptorKey(stored), password: secret }
+    const cached = this.cache.get(name)
+    if (cached !== undefined && sameBuild(cached.builtFrom, builtFrom)) return cached.entry
+
+    const pending = this.build(name, stored, secret, signal)
+    const slot: CacheSlot = { entry: pending, builtFrom }
+    this.cache.set(name, slot)
     this.building.add(pending)
     try {
       return await pending
     } catch (err) {
       // Never cache a failed build — let the next call retry.
-      if (this.cache.get(name) === pending) this.cache.delete(name)
+      if (this.cache.get(name) === slot) this.cache.delete(name)
       throw err
     } finally {
       this.building.delete(pending)
     }
   }
 
-  /** Build an entry; `signal` aborts its `$metadata` download, or the build before it starts. */
-  private async build(name: string, signal: AbortSignal): Promise<PoolEntry> {
-    const stored = await this.source.getBase(name)
-    if (stored === undefined) {
-      throw new InvalidArgumentError(`No connection named "${name}"`, { argument: 'connection' })
-    }
-
-    // The descriptor read above: the password is resolved for the target it goes to.
-    const secret = await this.source.getSecret(name, stored)
-    if (secret === null) {
-      const hint = this.source.missingSecretHint?.(name, stored)
-      throw new InvalidArgumentError(`No password for "${name}".${hint !== undefined ? ` ${hint}` : ''}`, {
-        argument: 'connection',
-      })
-    }
-
+  /**
+   * Build an entry from the descriptor and password {@link get} read; `signal`
+   * aborts its `$metadata` download.
+   */
+  private async build(name: string, stored: StoredConnection, secret: string, signal: AbortSignal): Promise<PoolEntry> {
     const connection: Connection = {
       baseUrl: stored.baseUrl,
       auth: { username: stored.login, password: secret },
@@ -160,7 +202,6 @@ export class ConnectionPool implements ReadPool {
     // the add path; a hand-edited / migrated config.json bypasses that, and the
     // client constructor would otherwise only reject it post-download.
     validateConnection(connection)
-    signal.throwIfAborted()
 
     // Inline fetch→parse→build (rather than metadata's fetchMetadataIndex) so we
     // keep the intermediate EdmxModel for describe_entity (keys/navigation) —
@@ -193,6 +234,11 @@ export class ConnectionPool implements ReadPool {
   abortDownloads(): void {
     this.downloads.abort()
     this.downloads = new AbortController()
-    for (const [name, pending] of this.cache) if (this.building.has(pending)) this.cache.delete(name)
+    for (const [name, slot] of this.cache) if (this.building.has(slot.entry)) this.cache.delete(name)
   }
+}
+
+/** Whether a cached entry built from `a` is still what `b` — the source's current answer — builds. */
+function sameBuild(a: BuiltFrom, b: BuiltFrom): boolean {
+  return a.descriptor === b.descriptor && a.password === b.password
 }
