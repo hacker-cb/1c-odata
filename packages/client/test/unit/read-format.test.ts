@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MINIMALMETADATA_JSON, NOMETADATA_JSON, readFormat } from '../../src/read-format.js'
+import { MINIMALMETADATA_JSON, NOMETADATA_JSON, readFormat, wireSelect } from '../../src/read-format.js'
 import type { MetadataIndex } from '../../src/validate.js'
 
 // #289: 1С withholds a ValueStorage's `_Type` in `nometadata`; a read whose reply carries a storage asks for
@@ -92,5 +92,34 @@ describe('readFormat (#289)', () => {
   it('reads `*` only at the end of an $expand path — inside one it names nothing, however long the path', () => {
     const path = Array(40).fill('*').concat('Логотип').join('/')
     expect(readFormat(index, 'Catalog_Контрагенты', { select: ['Ref_Key'], expand: [path] })).toBe(NOMETADATA_JSON)
+  })
+})
+
+describe('wireSelect (#286)', () => {
+  it('writes a storage base — of the row or through a navigation path — as its halves, any other name as given', () => {
+    expect(
+      wireSelect(index, 'Catalog_Контрагенты', ['Ref_Key', 'Логотип/Файл', 'Логотип/Ref_Key', 'Висячая/Файл', 'Файл']),
+    ).toEqual(['Ref_Key', 'Логотип/Файл_Base64Data', 'Логотип/Файл_Type', 'Логотип/Ref_Key', 'Висячая/Файл', 'Файл'])
+    expect(wireSelect(index, 'Catalog_Файлы', ['Файл', 'Владелец/Логотип/Файл'])).toEqual([
+      'Файл_Base64Data',
+      'Файл_Type',
+      'Владелец/Логотип/Файл_Base64Data',
+      'Владелец/Логотип/Файл_Type',
+    ])
+  })
+
+  it('reads names as 1С does — commas split, names and path segments trimmed — a name not repeated', () => {
+    expect(wireSelect(index, 'Catalog_Контрагенты', ['Ref_Key , Логотип / Файл', 'Логотип/Файл_Type'])).toEqual([
+      'Ref_Key',
+      'Логотип/Файл_Base64Data',
+      'Логотип/Файл_Type',
+    ])
+  })
+
+  it('is undefined without an index, for a type it does not hold, and for separators alone', () => {
+    expect(wireSelect(undefined, 'Catalog_Файлы', ['Файл'])).toBeUndefined()
+    expect(wireSelect(index, 'Catalog_Нет', ['Файл'])).toBeUndefined()
+    expect(wireSelect(index, 'Catalog_Файлы', [','])).toBeUndefined()
+    expect(wireSelect(index, 'Catalog_Файлы', undefined)).toBeUndefined()
   })
 })

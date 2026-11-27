@@ -189,3 +189,97 @@ describe('a read whose reply carries a ValueStorage asks for minimalmetadata (#2
     expect(seen).toEqual(Array(3).fill(['GET', NONE, NONE]))
   })
 })
+
+describe('select() of a ValueStorage field asks 1С for its halves (#286)', () => {
+  const metadataIndex: MetadataIndex = {
+    schemaNamespace: 'StandardODATA',
+    schemas: {
+      Catalog_Файлы: {
+        properties: {
+          Ref_Key: { type: 'Edm.Guid', nullable: false },
+          ФайлХранилище: { type: 'Edm.Stream', nullable: true },
+          ФайлХранилище_Base64Data: { type: 'Edm.Binary', nullable: true },
+          ФайлХранилище_Type: { type: 'Edm.String', nullable: true },
+        },
+        valueStorages: ['ФайлХранилище'],
+      },
+    },
+    entitySetToType: { Catalog_Файлы: 'Catalog_Файлы' },
+  }
+  /** The `$select` each request carried, decoded. */
+  const seen: (string | null)[] = []
+  beforeEach(() => {
+    seen.length = 0
+    server.use(
+      http.get(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B\/\$count/, ({ request }) => {
+        seen.push(new URL(request.url).searchParams.get('$select'))
+        return new HttpResponse('1', { headers: { 'Content-Type': 'text/plain' } })
+      }),
+      http.get(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B$/, ({ request }) => {
+        seen.push(new URL(request.url).searchParams.get('$select'))
+        return HttpResponse.json({
+          value: [{ Ref_Key: 'g', ФайлХранилище_Base64Data: 'aGk=', ФайлХранилище_Type: 'image/png' }],
+        })
+      }),
+    )
+  })
+
+  it('writes the field as its two halves and reads them back grouped', async () => {
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', metadataIndex })
+    const r = await c.query<Record<string, unknown>>('Catalog_Файлы').select('Ref_Key', 'ФайлХранилище').get()
+    expect(seen).toEqual(['Ref_Key,ФайлХранилище_Base64Data,ФайлХранилище_Type'])
+    expect(r.value[0]).toEqual({ Ref_Key: 'g', ФайлХранилище: { contentType: 'image/png', base64Data: 'aGk=' } })
+  })
+
+  it('names a half once where the select already names it; count() sends the same $select, raw() the one given', async () => {
+    const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', metadataIndex })
+    const q = c.query('Catalog_Файлы').select('ФайлХранилище_Type', 'ФайлХранилище')
+    await q.get()
+    await q.count()
+    await q.raw()
+    expect(seen).toEqual([
+      'ФайлХранилище_Type,ФайлХранилище_Base64Data',
+      'ФайлХранилище_Type,ФайлХранилище_Base64Data',
+      'ФайлХранилище_Type,ФайлХранилище',
+    ])
+  })
+
+  it('reads the reply of an untrimmed name in minimalmetadata, as the $select it sends', async () => {
+    const formats: (string | null)[] = []
+    server.use(
+      http.get(/Catalog_%D0%A4%D0%B0%D0%B9%D0%BB%D1%8B$/, ({ request }) => {
+        const url = new URL(request.url)
+        seen.push(url.searchParams.get('$select'))
+        formats.push(url.searchParams.get('$format'))
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    await new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', metadataIndex })
+      .query('Catalog_Файлы')
+      .select(' ФайлХранилище ')
+      .get()
+    expect(seen).toEqual(['ФайлХранилище_Base64Data,ФайлХранилище_Type'])
+    expect(formats).toEqual(['application/json;odata=minimalmetadata'])
+  })
+
+  it('reads an entry holding several names as 1С does', async () => {
+    await new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', metadataIndex })
+      .query('Catalog_Файлы')
+      .select('Ref_Key, ФайлХранилище')
+      .get()
+    expect(seen).toEqual(['Ref_Key,ФайлХранилище_Base64Data,ФайлХранилище_Type'])
+  })
+
+  it('sends the names as given without an index, or for a set it does not list', async () => {
+    await new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow' })
+      .query('Catalog_Файлы')
+      .select('ФайлХранилище')
+      .get()
+    const other: MetadataIndex = { ...metadataIndex, entitySetToType: {} }
+    await new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', metadataIndex: other })
+      .query('Catalog_Файлы')
+      .select('ФайлХранилище')
+      .get()
+    expect(seen).toEqual(['ФайлХранилище', 'ФайлХранилище'])
+  })
+})

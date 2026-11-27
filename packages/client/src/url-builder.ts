@@ -124,9 +124,14 @@ function pathParts(path: string): string[] {
 /**
  * Build a V3 collection URL: `<base>/<EntitySet>?$format=...&$filter=...&...`.
  */
-export function buildV3CollectionUrl(base: string, q: QueryBuilder<unknown>, format = NOMETADATA_JSON): string {
+export function buildV3CollectionUrl(
+  base: string,
+  q: QueryBuilder<unknown>,
+  format = NOMETADATA_JSON,
+  select?: readonly string[],
+): string {
   const path = `${base}/${encodeSegment(q.entitySet)}`
-  const params = buildQueryParams(q)
+  const params = buildQueryParams(q, select)
   // Always prepend $format — `readFormat`'s, which the request's `Accept` repeats.
   const allParams = [qp('$format', format), ...params]
   return `${path}?${allParams.join('&')}`
@@ -159,9 +164,9 @@ export function buildV3KeyUrl(
  * `$skip` / `$inlinecount` stay off; so does `$format`, `/$count` answering
  * text/plain.
  */
-export function buildV3CountUrl(base: string, q: QueryBuilder<unknown>): string {
+export function buildV3CountUrl(base: string, q: QueryBuilder<unknown>, select?: readonly string[]): string {
   const path = `${base}/${encodeSegment(q.entitySet)}/$count`
-  const params = buildQueryParams(q, { count: true })
+  const params = buildQueryParams(q, select, { count: true })
   if (params.length === 0) return path
   return `${path}?${params.join('&')}`
 }
@@ -199,15 +204,20 @@ export function nonBlank(names: readonly string[] | undefined): readonly string[
   return names.map((n) => String(n ?? '').trim()).filter((n) => n !== '')
 }
 
-function buildQueryParams(q: QueryBuilder<unknown>, opts: { count?: boolean } = {}): string[] {
+function buildQueryParams(
+  q: QueryBuilder<unknown>,
+  select: readonly string[] | undefined,
+  opts: { count?: boolean } = {},
+): string[] {
   const s = q.state
   const params: string[] = []
   if (s.filter) params.push(qp('$filter', s.filter._expr))
   // An empty list — or one of blank names only — sends no option: 1С reads
   // `$select=` / `$expand=` as their absence anyway (as `ReadFiOptions.select`).
-  const select = nonBlank(s.select)
+  // `select`, where given, is the query's `$select` as the caller holding the schema wrote it (`wireSelect`).
+  const selectNames = nonBlank(select ?? s.select)
   const expand = nonBlank(s.expand)
-  if (select.length > 0) params.push(qp('$select', select.join(',')))
+  if (selectNames.length > 0) params.push(qp('$select', selectNames.join(',')))
   if (expand.length > 0) params.push(qp('$expand', expand.join(',')))
   if (!opts.count) {
     if (s.orderBy) params.push(qp('$orderby', formatOrderBy(s.orderBy)))
