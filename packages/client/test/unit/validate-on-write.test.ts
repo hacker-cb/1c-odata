@@ -129,12 +129,21 @@ describe('validateOnWrite: Nullable="false" is not mandatory on write to 1С (#2
     expect(sent).toEqual([{ Description: 'x' }])
   })
 
-  it('patch() and put() of one field', async () => {
+  it('patch() of one field', async () => {
     await client().entity('Catalog_X', key).patch({ Code: 'Y' })
+    expect(sent).toEqual([{ Code: 'Y' }])
+  })
+
+  it('put() still checks the whole entity — 1С requires every property of a PUT', async () => {
+    await expect(
+      client()
+        .entity('Catalog_X', key)
+        .put({ Code: 'Y' } as Record<string, unknown>),
+    ).rejects.toThrow(ValidationError)
     await client()
       .entity('Catalog_X', key)
-      .put({ Code: 'Y' } as Record<string, unknown>)
-    expect(sent).toEqual([{ Code: 'Y' }, { Code: 'Y' }])
+      .put({ Ref_Key: key, Code: 'Y', Description: 'd', ДатаОплаты: null } as Record<string, unknown>)
+    expect(sent).toEqual([{ Ref_Key: key, Code: 'Y', Description: 'd', ДатаОплаты: '0001-01-01T00:00:00' }])
   })
 
   it('a null date goes as the empty date of 1С — refused only under dateMode string, where it goes as null', async () => {
@@ -157,16 +166,6 @@ describe('validateOnWrite: Nullable="false" is not mandatory on write to 1С (#2
       client()
         .entity('Catalog_X')
         .create({ Description: null } as Record<string, unknown>),
-    ).rejects.toThrow(ValidationError)
-    expect(sent).toEqual([])
-  })
-
-  it('checks what is sent: a toJSON result', async () => {
-    const body = { toJSON: () => ({ Code: null }) }
-    await expect(
-      client()
-        .entity('Catalog_X', key)
-        .patch(body as Record<string, unknown>),
     ).rejects.toThrow(ValidationError)
     expect(sent).toEqual([])
   })

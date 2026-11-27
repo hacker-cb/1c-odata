@@ -44,7 +44,7 @@ export class V3EntitySetHandle<T> {
 
   /** POST a new entity. Returns the full entity (including auto-`Ref_Key` + `DataVersion`). */
   async create(body: Partial<T>, opts: RequestOptions = {}): Promise<T> {
-    this.client.validateBeforeWrite(this.entitySet, body)
+    this.client.validateBeforeWrite(this.entitySet, body, 'POST')
     const url = `${this.client.baseUrl}/${encodeSegment(this.entitySet)}`
     const format = entityFormat(this.client, this.entitySet)
     const raw = await this.client.transportPost(url, body, opts, this.entitySet, this.extraHeaders, format)
@@ -114,7 +114,7 @@ export class V3EntityHandle<T> {
   /** Partial update via PATCH. Returns the full updated entity. */
   async patch(body: Partial<T>, opts: MutationOptions = {}): Promise<T> {
     const key = this.keyNow()
-    this.client.validateBeforeWrite(this.entitySet, body)
+    this.client.validateBeforeWrite(this.entitySet, body, 'PATCH')
     if (opts.expectVersion !== undefined) {
       await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
@@ -127,7 +127,7 @@ export class V3EntityHandle<T> {
   /** Full replacement via PUT. Returns the full updated entity. */
   async put(body: T, opts: MutationOptions = {}): Promise<T> {
     const key = this.keyNow()
-    this.client.validateBeforeWrite(this.entitySet, body)
+    this.client.validateBeforeWrite(this.entitySet, body, 'PUT')
     if (opts.expectVersion !== undefined) {
       await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }

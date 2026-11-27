@@ -105,12 +105,16 @@ export type ValidationResult = { ok: true } | { ok: false; errors: ValidationIss
  */
 export interface ValidateEntityOptions {
   /**
-   * What a non-nullable field the payload does not carry — not an own
-   * enumerable field of it, or `undefined` — is: `'required'` (default), an
-   * issue; `'ignore'`, nothing. 1С fills a field a write leaves out itself
-   * (`Ref_Key`, `Code` / `Number`, `DataVersion`, dates…) and a `patch()`
-   * keeps it, so `Nullable="false"` in its EDMX does not make a field
-   * mandatory on write — `validateOnWrite` checks with `'ignore'`.
+   * What a non-nullable field the payload does not carry is: `'required'`
+   * (default) — read as before, an `undefined` value an issue; `'ignore'` — a
+   * field that is not an own enumerable one of the payload (what a write
+   * sends), or is `undefined`, is not checked. 1С fills a field a write leaves
+   * out itself (`Ref_Key`, `Code` / `Number`, `DataVersion`, dates…) and a
+   * `patch()` keeps it, so `Nullable="false"` in its EDMX is no write
+   * requirement — `validateOnWrite` checks `create()` / `patch()` with
+   * `'ignore'`, and `put()`, which 1С requires to carry every property (docs
+   * 17.4: «Для PUT-запроса необходимо указывать значения всех свойств»), with
+   * `'required'`.
    */
   missing?: 'required' | 'ignore'
   /**
@@ -154,6 +158,7 @@ export function validateEntity(
 ): ValidationResult {
   const errors: ValidationIssue[] = []
   const valueStorageMembers = collectValueStorageMembers(schema)
+  const ignoreMissing = opts.missing === 'ignore'
   for (const [name, prop] of Object.entries(schema.properties)) {
     if (valueStorageMembers.has(name)) continue
     // A name `Object.prototype` carries (`__proto__`, `constructor`, …) counts only as the payload's own field:
@@ -161,7 +166,6 @@ export function validateEntity(
     // name reads as before — a getter or a field a `toJSON` adds included.
     // With `missing: 'ignore'` a payload carries only its own enumerable fields — what `JSON.stringify` sends — so
     // an inherited getter is no field of it.
-    const ignoreMissing = opts.missing === 'ignore'
     if (ignoreMissing && !Object.prototype.propertyIsEnumerable.call(entity, name)) continue
     const v = Object.hasOwn(Object.prototype, name) && !Object.hasOwn(entity, name) ? undefined : entity[name]
     if (v === undefined && ignoreMissing) continue
