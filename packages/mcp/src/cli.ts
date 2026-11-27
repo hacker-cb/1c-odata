@@ -90,7 +90,10 @@ export function buildProgram(): Command {
     .option('--login <login>', 'username (non-interactive)')
     .option('--password <password>', 'password (non-interactive; visible in `ps` — prefer --password-stdin or env)')
     .option('--password-stdin', 'read the password from stdin (non-interactive)')
-    .option('--timezone <tz>', 'IANA server timezone (default Europe/Moscow)')
+    .option(
+      '--timezone <tz>',
+      'IANA timezone of the 1С server, e.g. Europe/Moscow (required with --url, save for --force keeping the URL; no default)',
+    )
     .option('--label <label>', 'display label shown in lists (defaults to the name)')
     .option('-f, --force', 'overwrite an existing connection without prompting', false)
     .option('--no-verify', 'skip the connectivity check')

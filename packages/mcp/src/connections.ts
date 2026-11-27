@@ -187,7 +187,12 @@ export interface UpsertConnectionInput {
   name: string
   baseUrl: string
   login: string
-  serverTimezone: string
+  /**
+   * IANA timezone of the 1С server. No default: required for a new connection,
+   * and for an overwrite moving it to another base URL; an overwrite keeping
+   * the base URL keeps the stored one where it is omitted ({@link addTimezone}).
+   */
+  serverTimezone?: string
   /**
    * Optional display label. A non-blank value is stored; blank/omitted keeps any
    * existing label on overwrite (use {@link setConnectionLabel} to clear one).
@@ -299,6 +304,79 @@ function buildStoredConnection(
 }
 
 /**
+ * The timezone an add of `name` stores: the one given; else, for an overwrite
+ * keeping `existing` on the same base URL, the stored one. Anything else throws
+ * — there is no default: a wrong zone silently shifts every DateTime (#254).
+ */
+export function addTimezone(
+  name: string,
+  existing: StoredConnection | undefined,
+  baseUrl: string,
+  given: string | undefined,
+): string {
+  const zone = given?.trim()
+  const keepsUrl =
+    existing !== undefined && authTarget(existing.baseUrl, '').baseUrl === authTarget(baseUrl, '').baseUrl
+  if (zone !== undefined) {
+    if (zone !== '') return zone
+    throw new InvalidArgumentError(
+      `The server timezone (serverTimezone / --timezone) of "${name}" is blank: give an IANA zone, e.g. Europe/Moscow or Asia/Yekaterinburg${keepsUrl ? ', or omit it to keep the stored one' : ''}.`,
+      { argument: 'serverTimezone' },
+    )
+  }
+  if (keepsUrl) {
+    // Trimmed, as a given one is: a hand-written " Europe/Moscow " would pass the check and fail every read.
+    return existing.serverTimezone.trim()
+  }
+  const what =
+    existing === undefined
+      ? `the new connection "${name}"`
+      : `connection "${name}" when it moves to another server, which may run in another zone`
+  throw new InvalidArgumentError(
+    `The server timezone (serverTimezone / --timezone) is required for ${what}: the IANA zone of its 1С server, e.g. Europe/Moscow or Asia/Yekaterinburg — ask the person if unknown. There is no default: a wrong zone silently shifts every DateTime.`,
+    { argument: 'serverTimezone' },
+  )
+}
+
+/**
+ * Preflight for an add, BEFORE its credentials are verified: the timezone it
+ * would store ({@link addTimezone}) and the fields {@link assertConnectionFields}
+ * checks, so a missing or mistyped zone fails without a `$metadata` download.
+ */
+export function assertAddFieldsOnAdd(
+  dataDir: string,
+  name: string,
+  input: { baseUrl: string; login: string; serverTimezone?: string | undefined; password?: string | undefined },
+): void {
+  const existing = storedConnection(loadConfig(dataDir).connections, name)
+  const serverTimezone = addTimezone(name, existing, input.baseUrl, input.serverTimezone)
+  assertConnectionFields({
+    baseUrl: input.baseUrl,
+    login: input.login,
+    serverTimezone,
+    ...(input.password !== undefined ? { password: input.password } : {}),
+  })
+}
+
+/**
+ * Throw where {@link upsertConnection} would refuse these fields — a base URL,
+ * login or timezone (an IANA zone) that is not valid — so a caller checks them
+ * BEFORE it spends a `$metadata` download verifying them. When only the
+ * non-secret config is saved, a placeholder satisfies `validateConnection`'s
+ * non-empty password check; it is never persisted.
+ */
+export function assertConnectionFields(input: {
+  baseUrl: string
+  login: string
+  serverTimezone: string
+  password?: string
+}): void {
+  const { baseUrl, login } = authTarget(input.baseUrl, input.login)
+  const password = input.password !== undefined && input.password !== '' ? input.password : 'x'
+  validateConnection({ baseUrl, auth: { username: login, password }, serverTimezone: input.serverTimezone.trim() })
+}
+
+/**
  * Validate and persist a connection: writes the non-secret descriptor to
  * `config.json` and, when a password is given, stores it via {@link SecretStore}.
  * Shared by the CLI `add` command and the MCP `add_connection` tool. Pure config
@@ -307,20 +385,7 @@ function buildStoredConnection(
 export async function upsertConnection(input: UpsertConnectionInput): Promise<UpsertConnectionResult> {
   assertValidConnectionName(input.name)
   const { baseUrl, login } = authTarget(input.baseUrl, input.login)
-  // Trim the timezone too (non-interactive --timezone / MCP tool args aren't
-  // trimmed by their callers): surrounding whitespace would fail the IANA check
-  // even for an otherwise-valid zone.
-  const serverTimezone = input.serverTimezone.trim()
   const password = input.password // opaque credential — stored verbatim, never trimmed
-
-  // Validate baseUrl / login / timezone. When only the non-secret config is
-  // saved, a placeholder satisfies validateConnection's non-empty password
-  // check; it is never persisted.
-  validateConnection({
-    baseUrl,
-    auth: { username: login, password: password !== undefined && password !== '' ? password : 'x' },
-    serverTimezone,
-  })
 
   return withConfigLock(async () => {
     input.signal?.throwIfAborted()
@@ -330,6 +395,10 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
     if (existed && input.overwrite !== true) {
       throw new InvalidArgumentError(`Connection "${input.name}" already exists`, { argument: 'name' })
     }
+    // Trimmed (non-interactive --timezone / MCP tool args aren't trimmed by their
+    // callers): surrounding whitespace would fail the IANA check.
+    const serverTimezone = addTimezone(input.name, existing, baseUrl, input.serverTimezone)
+    assertConnectionFields({ ...input, serverTimezone })
 
     // Authoritative (under the lock) re-checks of the env-var guards.
     assertNoPasswordEnvCollision(config.connections, input.name)

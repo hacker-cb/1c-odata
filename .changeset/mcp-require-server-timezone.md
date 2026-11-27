@@ -1,0 +1,5 @@
+---
+"@1c-odata/mcp": minor
+---
+
+**Breaking:** the server timezone has no default anymore. Before, MCP `add_connection` defaulted `serverTimezone` to `Europe/Moscow`, and so did the CLI `add` (`--timezone`, and the interactive answer). Now the zone is required for a new connection and for an overwrite that moves a connection to another base URL. `add_connection` refuses without it, before any request, and asks the agent to ask the person. `add --url …` refuses without `--timezone`. The interactive `add` offers no answer and asks again on a blank or unknown zone. An overwrite keeping the base URL (`add_connection` with `overwrite`, `add --force`) keeps the stored zone when none is given. A mistyped zone now fails before the `$metadata` download, not after it. The project rule is that `serverTimezone` has no implicit default: a connection added without one for a base outside Moscow time silently shifted every DateTime. Migration: pass `serverTimezone` (an IANA zone, e.g. `"Europe/Moscow"`) to `add_connection` and `--timezone <zone>` to non-interactive `add` when adding a connection. Connections already in `config.json` are unaffected.

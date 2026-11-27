@@ -19,14 +19,25 @@ export async function readPasswordStdin(): Promise<string> {
   return value
 }
 
-/** Ask for a line of input. Returns `opts.default` when the user enters nothing. */
-export async function promptLine(label: string, opts: { default?: string } = {}): Promise<string> {
+/**
+ * Ask for a line of input, trimmed. Throws where the input closes before an
+ * answer (Ctrl-D on an empty line, stdin run dry), rather than leaving the
+ * question pending.
+ */
+export async function promptLine(label: string): Promise<string> {
   const rl = createInterface({ input: stdin, output: stdout })
+  let answered = false
+  const closed = new Promise<never>((_, reject) => {
+    rl.once('close', () => {
+      if (!answered) reject(new InvalidArgumentError('Input closed before an answer', { argument: 'stdin' }))
+    })
+  })
   try {
-    const answer = (await rl.question(label)).trim()
-    if (answer === '' && opts.default !== undefined) return opts.default
-    return answer
+    const answer = await Promise.race([rl.question(label), closed])
+    answered = true
+    return answer.trim()
   } finally {
+    answered = true
     rl.close()
   }
 }

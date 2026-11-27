@@ -100,6 +100,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       const { call, close } = await tools()
       for (const password of [undefined, 'typed']) {
         const res = await call('add_connection', {
+          serverTimezone: 'UTC',
           connection: 'c',
           ...target,
           ...(password !== undefined ? { password } : {}),
@@ -118,6 +119,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       envPassword()
       const { call, close } = await tools()
       const res = await call('add_connection', {
+        serverTimezone: 'UTC',
         connection: 'c',
         baseUrl: OLD,
         login: 'u',
@@ -186,7 +188,13 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
 
     it('refuses another target without the env var too: another process may hold it (#253)', async () => {
       const { call, close } = await tools()
-      const res = await call('add_connection', { connection: 'c', baseUrl: NEW, login: 'u', overwrite: true })
+      const res = await call('add_connection', {
+        serverTimezone: 'UTC',
+        connection: 'c',
+        baseUrl: NEW,
+        login: 'u',
+        overwrite: true,
+      })
       await close()
       expect(res.isError).toBe(true)
       expect(res.text).toContain('1c-odata-mcp add c --force')
@@ -196,7 +204,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
     })
 
     it('the CLI add --force still re-points one without the env var: the stored password is cleared', async () => {
-      await runAdd({ dataDir: dir, insecure: true, name: 'c', url: NEW, login: 'u', force: true })
+      await runAdd({ timezone: 'UTC', dataDir: dir, insecure: true, name: 'c', url: NEW, login: 'u', force: true })
       expect(stored().config?.baseUrl).toBe(NEW)
       expect(await stored().secret.read('c')).toBeNull()
     })
@@ -207,7 +215,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       envPassword()
       const { call, close } = await tools()
       expect((await call('remove_connection', { connection: 'c' })).isError).toBe(false)
-      const res = await call('add_connection', { connection: 'c', baseUrl: NEW, login: 'u' })
+      const res = await call('add_connection', { serverTimezone: 'UTC', connection: 'c', baseUrl: NEW, login: 'u' })
       await close()
       expect(res.isError).toBe(true)
       expect(res.text).toContain('ONEC_C_PASSWORD')
@@ -218,7 +226,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
 
     it('creates as before without the env var', async () => {
       const { call, close } = await tools()
-      const res = await call('add_connection', { connection: 'd', baseUrl: NEW, login: 'u' })
+      const res = await call('add_connection', { serverTimezone: 'UTC', connection: 'd', baseUrl: NEW, login: 'u' })
       await close()
       expect(res.isError).toBe(false)
       expect(loadConfig(dir).connections.d?.baseUrl).toBe(NEW)
@@ -227,14 +235,14 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
     it('the CLI add refuses a typed password for a new name under a set env var: reads would not use it', async () => {
       vi.stubEnv('ONEC_D_PASSWORD', 'from-env')
       await expect(
-        runAdd({ dataDir: dir, insecure: true, name: 'd', url: NEW, login: 'u', password: 'typed' }),
+        runAdd({ timezone: 'UTC', dataDir: dir, insecure: true, name: 'd', url: NEW, login: 'u', password: 'typed' }),
       ).rejects.toThrow(/ONEC_D_PASSWORD/)
       expect(fetched).toEqual([])
     })
 
     it('the CLI add still creates one under a set env var (a person chose the target)', async () => {
       vi.stubEnv('ONEC_D_PASSWORD', 'from-env')
-      await runAdd({ dataDir: dir, insecure: true, name: 'd', url: NEW, login: 'u' })
+      await runAdd({ timezone: 'UTC', dataDir: dir, insecure: true, name: 'd', url: NEW, login: 'u' })
       expect(fetched).toEqual([`${NEW}/$metadata`])
       expect(loadConfig(dir).connections.d?.baseUrl).toBe(NEW)
     })
@@ -265,17 +273,31 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
       rmSync(join(dir, 'config.json'))
       vi.stubEnv('ONEC_CONSTRUCTOR_PASSWORD', 'from-env')
       const { call, close } = await tools()
-      const res = await call('add_connection', { connection: 'constructor', baseUrl: NEW, login: 'u', overwrite: true })
+      const res = await call('add_connection', {
+        serverTimezone: 'UTC',
+        connection: 'constructor',
+        baseUrl: NEW,
+        login: 'u',
+        overwrite: true,
+      })
       await close()
       expect(res.isError).toBe(true)
       expect(res.text).toContain('ONEC_CONSTRUCTOR_PASSWORD')
-      await runAdd({ dataDir: dir, insecure: true, name: 'constructor', url: NEW, login: 'u', force: true })
+      await runAdd({
+        timezone: 'UTC',
+        dataDir: dir,
+        insecure: true,
+        name: 'constructor',
+        url: NEW,
+        login: 'u',
+        force: true,
+      })
       expect(loadConfig(dir).connections.constructor).toMatchObject({ baseUrl: NEW })
     })
 
     it('a name the config object inherits is no duplicate on a plain create, without --force', async () => {
       rmSync(join(dir, 'config.json'))
-      await runAdd({ dataDir: dir, insecure: true, name: 'constructor', url: NEW, login: 'u' })
+      await runAdd({ timezone: 'UTC', dataDir: dir, insecure: true, name: 'constructor', url: NEW, login: 'u' })
       expect(loadConfig(dir).connections.constructor).toMatchObject({ baseUrl: NEW })
     })
 
@@ -339,7 +361,7 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
     it('add --force to another URL refuses before verifying', async () => {
       envPassword()
       await expect(
-        runAdd({ dataDir: dir, insecure: true, name: 'c', url: NEW, login: 'u', force: true }),
+        runAdd({ timezone: 'UTC', dataDir: dir, insecure: true, name: 'c', url: NEW, login: 'u', force: true }),
       ).rejects.toThrow(/ONEC_C_PASSWORD/)
       expect(fetched).toEqual([])
       expect(stored().config?.baseUrl).toBe(OLD)

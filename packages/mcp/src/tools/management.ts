@@ -5,6 +5,7 @@ import { loadConfig, type StoredConnection } from '../config.js'
 import type { ConnectionPool } from '../connection-pool.js'
 import {
   assertAddable,
+  assertAddFieldsOnAdd,
   assertAddTargetAllowedOnAdd,
   assertNoEnvPassword,
   removeConnection,
@@ -66,6 +67,8 @@ async function addConnection(
     { baseUrl, login },
     { byAgent: true, storesPassword: hasPassword },
   )
+  // A missing or mistyped zone (or URL) fails here, not after a multi-MB $metadata download.
+  assertAddFieldsOnAdd(opts.dataDir, connection, { baseUrl, login, serverTimezone })
   // Verify before persisting when a password is available. The password is used
   // verbatim here so verify matches exactly what gets stored/used.
   if (hasPassword) {
@@ -76,7 +79,7 @@ async function addConnection(
     name: connection,
     baseUrl,
     login,
-    serverTimezone: serverTimezone ?? 'Europe/Moscow',
+    ...(serverTimezone !== undefined ? { serverTimezone } : {}),
     ...(label !== undefined ? { label } : {}),
     ...(hasPassword ? { password } : {}),
     insecure: opts.insecure ?? false,
@@ -212,7 +215,12 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
           ),
         baseUrl: z.string().describe('Service root URL, e.g. http://host/base/odata/standard.odata/'),
         login: z.string().describe('Basic-auth username'),
-        serverTimezone: z.string().optional().describe('IANA timezone (default Europe/Moscow)'),
+        serverTimezone: z
+          .string()
+          .optional()
+          .describe(
+            'IANA zone of the 1С server, e.g. Europe/Moscow, Asia/Yekaterinburg — required for a new connection (no default: a wrong zone silently shifts every DateTime); ask the person if unknown. An overwrite keeping the base URL keeps the stored zone when this is omitted.',
+          ),
         label: z
           .string()
           .optional()
