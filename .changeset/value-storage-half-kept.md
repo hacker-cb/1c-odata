@@ -6,4 +6,4 @@ A ValueStorage half that a response carries without its pair stays in the row as
 
 The halves are now grouped only as a pair: both present, both strings → `{ contentType, base64Data }`; both present, one `null` → `null`. A half sent alone — or a pair of values neither form fits — is left as it came.
 
-This reaches whole-entity reads too: the client asks 1С for `odata=nometadata` JSON, in which 1С sends a ValueStorage's `<X>_Base64Data` but not its `<X>_Type`. Such a row lost the half silently; it now carries `<X>_Base64Data` as a plain field, and `<X>` is not set.
+This reaches whole-entity reads too: the client asks 1С for `odata=nometadata` JSON, in which 1С sends a ValueStorage's `<X>_Base64Data` but not its `<X>_Type`. Up to v0.12.0 every such row lost both halves silently — the stored bytes never reached the caller; it now carries `<X>_Base64Data` as a plain field, and `<X>` is not set. Grouping a whole row into `<X>` needs the `_Type` 1С withholds there — #289.
