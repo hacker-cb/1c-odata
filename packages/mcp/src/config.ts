@@ -255,6 +255,14 @@ export function loadConfig(dataDir: string): McpConfig {
   } catch {
     throw new Error(`Malformed JSON in ${configPath(dataDir)} — fix or delete the file.`)
   }
+  // An array is no name → connection map — at the top or as `connections`: its indexes ("0", "1") would
+  // pass as connection names, and read as none, the next save would drop what it holds. A person fixes it.
+  const connections = (parsed as { connections?: unknown } | null)?.connections
+  if (Array.isArray(parsed) || Array.isArray(connections)) {
+    throw new Error(
+      `${Array.isArray(parsed) ? 'The top level' : '"connections"'} of ${configPath(dataDir)} is an array; it must be an object — { "connections": { "<name>": { … } } } — fix the file.`,
+    )
+  }
   return normalizeConfig(parsed)
 }
 

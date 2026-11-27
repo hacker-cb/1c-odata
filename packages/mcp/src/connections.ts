@@ -41,11 +41,6 @@ function sameAuthTarget(existing: StoredConnection, next: { baseUrl: string; log
   return stored.baseUrl === next.baseUrl && stored.login === next.login
 }
 
-/** The stored connection `name` — an own entry only, never one the object's prototype answers for (`constructor`). */
-function storedConnection(connections: Record<string, StoredConnection>, name: string): StoredConnection | undefined {
-  return Object.hasOwn(connections, name) ? connections[name] : undefined
-}
-
 /**
  * Who chose an add's target, and what it stores: `byAgent` — an agent through
  * the MCP `add_connection`, which may neither point an existing connection at
@@ -130,7 +125,7 @@ export function assertAddTargetAllowedOnAdd(
   next: { baseUrl: string; login: string },
   add: AddTarget,
 ): void {
-  const existing = storedConnection(loadConfig(dataDir).connections, name)
+  const existing = loadConfig(dataDir).connections[name]
   assertAddTargetAllowed(name, existing, authTarget(next.baseUrl, next.login), add)
 }
 
@@ -160,7 +155,7 @@ export function assertNoEnvPassword(name: string, conn: StoredConnection): void 
 export function assertAddable(dataDir: string, name: string, overwrite: boolean): void {
   assertValidConnectionName(name)
   const { connections } = loadConfig(dataDir)
-  if (!overwrite && storedConnection(connections, name) !== undefined) {
+  if (!overwrite && connections[name] !== undefined) {
     throw new InvalidArgumentError(`Connection "${name}" already exists`, { argument: 'name' })
   }
   assertNoPasswordEnvCollision(connections, name)
@@ -465,7 +460,7 @@ export function assertAddFieldsOnAdd(
   name: string,
   input: { baseUrl: string; login: string; serverTimezone?: string | undefined; password?: string | undefined },
 ): void {
-  const existing = storedConnection(loadConfig(dataDir).connections, name)
+  const existing = loadConfig(dataDir).connections[name]
   const serverTimezone = addTimezone(name, existing, input.baseUrl, input.serverTimezone)
   assertConnectionFields({
     baseUrl: input.baseUrl,
@@ -509,7 +504,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
     async (lock) => {
       input.signal?.throwIfAborted()
       const config = loadConfig(input.dataDir)
-      const existing = storedConnection(config.connections, input.name)
+      const existing = config.connections[input.name]
       const existed = existing !== undefined
       if (existed && input.overwrite !== true) {
         throw new InvalidArgumentError(`Connection "${input.name}" already exists`, { argument: 'name' })

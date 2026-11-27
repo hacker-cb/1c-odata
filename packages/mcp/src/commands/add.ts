@@ -153,9 +153,11 @@ async function promptTimezone(kept?: string): Promise<string> {
 async function gatherInteractive(opts: AddOptions): Promise<ResolvedFields | null> {
   const name = (opts.name ?? (await promptLine('Connection name: '))).trim()
   assertValidConnectionName(name)
-  let overwrite = false
+  // `--force` is the answer already given: overwrite without asking — also a connection another process adds
+  // while these questions are answered — as the non-interactive add does.
+  let overwrite = opts.force === true
   const existing = loadConfig(opts.dataDir).connections[name]
-  if (existing !== undefined) {
+  if (existing !== undefined && !overwrite) {
     if (!(await promptConfirm(`Connection "${name}" exists. Overwrite?`))) {
       process.stdout.write('Aborted.\n')
       return null

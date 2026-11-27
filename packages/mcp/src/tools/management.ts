@@ -87,7 +87,11 @@ async function addConnection(
     byAgent: true,
     signal,
   })
-  pool.refresh(connection)
+  // The pool keeps an entry whose password reads as none (#274): a client built with another password —
+  // one stored or cleared here, or a connection of this name another process removed — must go. Only an
+  // overwrite that keeps the password (a label, a timezone) leaves it: the pool sees the rest itself.
+  const keepsPassword = result.overwritten && result.passwordBackend === undefined && result.passwordCleared !== true
+  if (!keepsPassword) pool.refresh(connection)
   return {
     summary: `Connection "${connection}" ${result.overwritten ? 'updated' : 'added'}${passwordNote(result)}.`,
     data: {
@@ -196,8 +200,8 @@ async function applyCredentialChange(
     expected: { baseUrl: existing.baseUrl, login: existing.login, password: storedPassword },
     signal,
   })
-  // Rebuild the cached client (it was wired with the old credentials).
-  pool.refresh(connection)
+  // The client built with the old credentials goes, also where the new password cannot be read back.
+  if (result.loginUpdated || result.passwordUpdated) pool.refresh(connection)
   return summarizeCredentialChange(connection, result, verified)
 }
 
@@ -205,6 +209,12 @@ async function applyCredentialChange(
  * Connection-management tools. These WRITE the MCP's own config (not the 1С
  * base — data access stays read-only). A password may be supplied but is
  * write-only: it is stored via SecretStore and no tool ever returns it.
+ *
+ * The pool compares a connection and its password on every `get` and rebuilds
+ * on a change (#274), but keeps an entry whose password reads as none: so a
+ * tool drops the pooled client where it stores, clears or removes a password,
+ * and leaves it where an overwrite keeps the password — a label costs no
+ * `$metadata` download.
  */
 export function registerManagementTools(server: McpServer, pool: ConnectionPool, opts: ManagementToolsOptions): void {
   server.registerTool(
@@ -265,6 +275,8 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
           insecure: opts.insecure ?? false,
           signal,
         })
+        // The pool keeps an entry whose password reads as none: one removed and re-added without a
+        // password must not go on with the old one.
         pool.refresh(connection)
         return {
           summary: removed ? `Connection "${connection}" removed.` : `No connection named "${connection}".`,
