@@ -134,6 +134,14 @@ describe('loadConfig / saveConfig', () => {
     expect(loadConfig(dir).connections.c?.baseUrl).toBe('http://host/odata')
   })
 
+  it('reads connections written as an array as none — its indexes are no connection names', () => {
+    writeFileSync(
+      configPath(dir),
+      JSON.stringify({ connections: [{ baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow' }] }),
+    )
+    expect(Object.keys(loadConfig(dir).connections)).toEqual([])
+  })
+
   it('drops connections whose name key is invalid (non-ASCII / leading separator)', () => {
     writeFileSync(
       configPath(dir),
