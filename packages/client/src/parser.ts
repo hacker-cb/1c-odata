@@ -76,8 +76,9 @@ const INT64_WIRE = /^-?\d+$/
  *     except sentinel `0001-01-01T00:00:00` → `null` (sentinel check runs first)
  *   - `@navigationLinkUrl` fields are passed through as strings
  *   - When `metadataIndex` + `typeHint` present: Edm.Int64 → bigint/number per
- *     `shape.int64Mode` (a string that is no decimal integer is a `ParseError`
- *     in both, untouched in `'string'`); ValueStorage triples → ValueStorage object (or null on
+ *     `shape.int64Mode` (a value that is neither null nor a decimal integer
+ *     string within the 64-bit range is a `ParseError` in both, untouched in
+ *     `'string'`); ValueStorage triples → ValueStorage object (or null on
  *     null halves; halves removed from output regardless)
  *
  * In `dateMode='string'` mode parser passes Edm.DateTime through as wire string —
@@ -245,6 +246,12 @@ function mapValue(
   opts: ParseOptions,
 ): unknown {
   const propType = schema?.properties[fieldName]?.type
+  if (propType === 'Edm.Int64') {
+    // Defaults to 'number' per the DataShape contract in connection.ts: no shape (or one without `int64Mode`)
+    // means "behave like the documented default", not "leave the wire value untouched".
+    const mode = shape?.int64Mode ?? DEFAULT_SHAPE.int64Mode
+    if (mode === 'bigint' || mode === 'number') return int64Value(v, fieldName, mode)
+  }
   if (typeof v === 'string') return convertStringValue(v, fieldName, propType, shape, opts)
   // A schema-typed date-time is a string or null on the wire; anything else would reach a `Date`-typed field
   // as-is. `dateMode: 'string'` passes values through untouched, this one included.
@@ -273,6 +280,33 @@ function mapValue(
   return v
 }
 
+/**
+ * An `Edm.Int64` wire value converted per `int64Mode` — `null`, or a decimal
+ * integer string within the signed 64-bit range: what 1С sends. Anything else
+ * is a `ParseError` naming the field and the value, where `BigInt` threw a bare
+ * `SyntaxError` on `12x` and read `''` / ` 0x1f ` as 0n / 31n, `Number` made
+ * `12x` NaN and `''` 0, and a JSON number reached a `bigint`-typed field as-is.
+ */
+function int64Value(v: unknown, fieldName: string, mode: 'bigint' | 'number'): unknown {
+  if (v === null) return null
+  // Up to 18 characters every decimal integer is within range; past that, BigInt says.
+  if (typeof v !== 'string' || !INT64_WIRE.test(v) || (v.length > 18 && !inInt64Range(BigInt(v)))) {
+    throw new ParseError(
+      `Edm.Int64 field ${fieldName}: expected a 64-bit integer string or null, got ${describeJson(v)}`,
+    )
+  }
+  if (mode === 'bigint') return BigInt(v)
+  const n = Number(v)
+  return n === 0 ? 0 : n // `-0` reads as 0, as it reads as 0n
+}
+
+const INT64_MIN = -(2n ** 63n)
+const INT64_MAX = 2n ** 63n - 1n
+
+function inInt64Range(n: bigint): boolean {
+  return n >= INT64_MIN && n <= INT64_MAX
+}
+
 /** Convert a string wire value per its declared (or heuristically-detected) type. */
 function convertStringValue(
   v: string,
@@ -281,20 +315,6 @@ function convertStringValue(
   shape: DataShape | undefined,
   opts: ParseOptions,
 ): unknown {
-  // Edm.Int64 — apply `shape.int64Mode`. Defaults to 'number' per the DataShape
-  // contract in connection.ts; absence of an explicit shape (or an explicit
-  // shape without `int64Mode`) means "behave like the documented default", not
-  // "leave the wire string untouched".
-  if (propType === 'Edm.Int64') {
-    const mode = shape?.int64Mode ?? DEFAULT_SHAPE.int64Mode
-    if (mode !== 'bigint' && mode !== 'number') return v
-    // Both converting modes take only a decimal integer: `BigInt` throws a bare `SyntaxError` on `12x` and
-    // reads `''` / ` 0x1f ` as 0n / 31n, `Number` turns `12x` into NaN and `''` into 0 — silently.
-    if (!INT64_WIRE.test(v)) {
-      throw new ParseError(`Edm.Int64 field ${fieldName}: expected an integer string, got ${describeJson(v)}`)
-    }
-    return mode === 'bigint' ? BigInt(v) : Number(v)
-  }
   // Edm.DateTime — by schema or regex heuristic.
   // `Collection(Edm.DateTime)` not handled here — 0 empirical occurrences in real
   // 1С EDMX; emitter falls back to generic `Date[]` typing, runtime leaves wire

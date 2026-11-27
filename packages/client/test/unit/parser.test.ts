@@ -222,7 +222,7 @@ describe('schema-aware parsing', () => {
         }
         expect(caught).toBeInstanceOf(ParseError)
         expect((caught as Error).message).toBe(
-          `Edm.Int64 field LineNumber: expected an integer string, got string ${JSON.stringify(v)}`,
+          `Edm.Int64 field LineNumber: expected a 64-bit integer string or null, got string ${JSON.stringify(v)}`,
         )
       },
     )
@@ -235,12 +235,47 @@ describe('schema-aware parsing', () => {
       expect(single('-42', 'number').LineNumber).toBe(-42)
       expect(single('-42', 'bigint').LineNumber).toBe(-42n)
       expect(single('007', 'number').LineNumber).toBe(7)
+      expect(single('0000000000000000000000001', 'bigint').LineNumber).toBe(1n)
+    })
+
+    it('`-0` reads as 0 in number mode, as it reads as 0n in bigint mode', () => {
+      expect(Object.is(single('-0', 'number').LineNumber, 0)).toBe(true)
+      expect(single('-0', 'bigint').LineNumber).toBe(0n)
+    })
+
+    it('null stays null in both modes', () => {
+      expect(single(null, 'number').LineNumber).toBeNull()
+      expect(single(null, 'bigint').LineNumber).toBeNull()
+    })
+
+    it('the signed 64-bit bounds convert; one past either is a ParseError', () => {
+      expect(single('9223372036854775807', 'bigint').LineNumber).toBe(9223372036854775807n)
       expect(single('-9223372036854775808', 'bigint').LineNumber).toBe(-9223372036854775808n)
+      for (const mode of ['number', 'bigint'] as const) {
+        for (const v of ['9223372036854775808', '-9223372036854775809', '9'.repeat(309)]) {
+          expect(() => single(v, mode)).toThrow(ParseError)
+        }
+      }
+    })
+
+    it.each([
+      [1.5, 'number 1.5'],
+      [42, 'number 42'],
+      [true, 'boolean true'],
+      [{}, 'an object'],
+      [[], 'an array'],
+    ])('a JSON %j instead of a string is a ParseError in both converting modes', (v, shown) => {
+      for (const mode of ['number', 'bigint'] as const) {
+        expect(() => single(v, mode)).toThrow(
+          `Edm.Int64 field LineNumber: expected a 64-bit integer string or null, got ${shown}`,
+        )
+      }
+      expect(single(v, 'string').LineNumber).toEqual(v)
     })
 
     it('a long value is cut in the message, never quoted whole', () => {
       expect(() => single(`${'9'.repeat(60)}x`, 'bigint')).toThrow(
-        `Edm.Int64 field LineNumber: expected an integer string, got string "${'9'.repeat(50)}…"`,
+        `Edm.Int64 field LineNumber: expected a 64-bit integer string or null, got string "${'9'.repeat(50)}…"`,
       )
     })
 
