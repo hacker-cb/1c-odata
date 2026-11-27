@@ -200,9 +200,12 @@ are not expanded and stay a "not absolute" error.
     another process could not delete, never reaches a server the connection was re-pointed to. The *base URL*
     here is the connection's target: no userinfo, scheme and host lower-cased, a default port (`:80`, `:443`)
     and a trailing `/` dropped, the path as written. A person's connection added before this scheme keeps its
-    password under the bare `<name>` (no `passwordKey` in `config.json`); the next change of it — an overwrite on
-    the same base URL, `set-credentials` — moves the password to the server's key, while a re-point to another
-    base URL without a password leaves the new key empty. *Canonical* =
+    password under the bare `<name>` (no `passwordKey` in `config.json`); the next change of it on the same
+    server — an overwrite, `set-credentials` — moves the password to the server's key, in the backend it is in
+    (where this process cannot read it — `--insecure-storage`, a keychain refusing — it stays under `<name>`). A
+    re-point to another server or login without a password leaves the connection without one: the old password
+    is deleted after `config.json` is saved, and where it would still be read (the same server's key, or
+    `<name>`) and a locked keychain refuses the delete, the change is undone and refused. *Canonical* =
     the absolute path resolved (`.`/`..` collapsed), lower-cased on Windows. The basename and account are
     human-readable hints in Keychain Access / Credential Manager; the hash isolates dirs. Two clients on the
     **same** data dir share the secret; a **different** `--data-dir` / `ONEC_MCP_DATA_DIR` is a separate

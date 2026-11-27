@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { request } from '@1c-odata/client/internal'
@@ -220,7 +220,9 @@ describe('removeConnection', () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'pw' })
     expect(await removeConnection({ dataDir: dir, name: 'trade', insecure: true })).toBe(true)
     expect(loadConfig(dir).connections.trade).toBeUndefined()
-    expect(await fileStore().read('trade', loadConfig(dir).connections['trade'])).toBeNull()
+    // Read under the key the removed connection used: nothing left there, nor any credentials file.
+    expect(await fileStore().stored('trade', { baseUrl: base.baseUrl, passwordKey: 'target' })).toBeNull()
+    expect(existsSync(join(dir, 'credentials.json'))).toBe(false)
   })
 
   it('returns false for an unknown connection', async () => {

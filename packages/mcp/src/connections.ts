@@ -11,14 +11,7 @@ import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfi
 import { DEFAULT_METADATA_TIMEOUT_MS, DEFAULT_REACHABILITY_TIMEOUT_MS } from './constants.js'
 import { type DataDirLock, withDataDirLock } from './data-dir-lock.js'
 import { stripUrlUserinfo } from './redact.js'
-import {
-  connectionEnvPassword,
-  envPassword,
-  NAME_KEY_OWNER,
-  passwordEnvVar,
-  SecretStore,
-  secretKey,
-} from './secret-store.js'
+import { connectionEnvPassword, envPassword, passwordEnvVar, SecretStore, secretKey } from './secret-store.js'
 
 /**
  * Throw if `name`'s password env-var slug collides with a DIFFERENT existing
@@ -240,65 +233,111 @@ export interface UpsertConnectionResult {
   passwordCleared?: boolean
 }
 
+/** What an upsert's secret side decided, BEFORE the config is saved ({@link planUpsertSecret}). */
+interface UpsertSecretPlan {
+  /** The descriptor to save — `written`, or unmarked where a password could not be carried. */
+  written: StoredConnection
+  passwordBackend?: 'keychain' | 'file'
+  passwordCleared: boolean
+  /**
+   * A key a connection may still read after the save — `existing`'s own: the
+   * same key on a login change, `<name>` (which older versions read whatever
+   * the target). Deleted strictly once the config is saved; where it cannot
+   * be, the config goes back to `existing` and the upsert fails.
+   */
+  clearAfterSave?: StoredConnection
+}
+
 /**
- * Apply the secret-store side of an upsert, for the connection as `written`,
- * BEFORE the config is saved. A password given is written under `written`'s
- * key. Without one, a person's connection from before #272 (keyed `<name>`)
- * that stays on its base URL has its password carried to the target's key
- * (#272); any other move of the key — another base URL, an agent's connection
- * taken over by a person — leaves the new key empty: a password stored for
- * another target or another hand is never sent to this one.
+ * The secret side of an upsert of `name`, BEFORE the config is saved. A
+ * password given is written under `written`'s key. Without one:
+ * - the same target (base URL and login) under the same key keeps its password;
+ * - a person's connection still keyed `<name>` (before #272) on the same
+ *   target has it carried to the target's key (#272) — where it cannot be
+ *   (none readable here, the keychain refusing), the connection stays keyed
+ *   `<name>` rather than lose it;
+ * - any other change of the target leaves the connection without a password:
+ *   a password stored for another server, login or hand is never sent with
+ *   this one. A copy already under the new key is dropped first (best-effort),
+ *   and a key the connection would still read is cleared after the save.
  *
- * Writing before the config is safe because a password is keyed to its target
- * ({@link secretKey}): until the config is saved, a reader still reads the old
- * target's key, never this one — unless the key is the same, which is the same
- * target. Nothing is deleted here: the key `existing` read goes only after the
- * config no longer reads it ({@link dropOldKey}), so a failed save leaves the
- * connection as it was, password included (#270).
+ * Writing before the save is safe because a password is keyed to its server
+ * ({@link secretKey}): a reader of the old config reads the old target's key,
+ * never a new one. Nothing a reader of the old config reads is deleted before
+ * the save, so a failed save leaves the connection as it was, password
+ * included (#270).
  */
-async function applyUpsertSecret(
+async function planUpsertSecret(
   store: SecretStore,
   name: string,
   password: string | undefined,
   existing: StoredConnection | undefined,
   written: StoredConnection,
-): Promise<{ passwordBackend?: 'keychain' | 'file'; passwordCleared: boolean }> {
+): Promise<UpsertSecretPlan> {
   if (password !== undefined && password !== '') {
-    return { passwordBackend: (await store.write(name, password, written)).backend, passwordCleared: false }
+    return { written, passwordBackend: (await store.write(name, password, written)).backend, passwordCleared: false }
   }
-  if (existing === undefined || secretKey(name, existing) === secretKey(name, written)) {
-    return { passwordCleared: false }
+  if (existing === undefined) {
+    // A copy a remove could not delete is the same server's, but no password was given for this one.
+    await store.remove(name, written)
+    return { written, passwordCleared: false }
   }
-  if (carriesNameKey(existing, written)) {
-    await carryPassword(store, name, existing, written)
-    return { passwordCleared: false }
+  const sameTarget = sameAuthTarget(existing, written)
+  if (secretKey(name, existing) === secretKey(name, written)) {
+    return sameTarget
+      ? { written, passwordCleared: false }
+      : { written, passwordCleared: true, clearAfterSave: existing }
   }
-  return { passwordCleared: true }
+  if (sameTarget && isNameKeyed(existing) && written.addedBy !== 'agent') {
+    if (await store.carry(name, existing, written)) return { written, passwordCleared: false }
+    return { written: unmarked(written), passwordCleared: false }
+  }
+  await store.remove(name, written)
+  return {
+    written,
+    passwordCleared: true,
+    // Older versions sharing the dir read `<name>` whatever the target: it may not outlive the re-point.
+    ...(isNameKeyed(existing) ? { clearAfterSave: existing } : {}),
+  }
 }
 
 /**
- * Whether `existing`'s password moves to `written`'s key as it is: a person's
- * connection still keyed `<name>` (before #272) that stays a person's on the
- * same base URL — the key changes form, not target.
+ * Save `config` with `written` as connection `name`, then clear strictly what
+ * `plan` says a connection would still read. Where that clear fails, the config
+ * goes back to `existing` and the error is thrown — nothing changed.
  */
-function carriesNameKey(existing: StoredConnection, written: StoredConnection): boolean {
-  return (
-    existing.addedBy !== 'agent' &&
-    existing.passwordKey !== 'target' &&
-    written.addedBy !== 'agent' &&
-    targetBaseUrl(existing.baseUrl) === targetBaseUrl(written.baseUrl)
-  )
+async function saveUpsert(
+  lock: DataDirLock,
+  store: SecretStore,
+  dataDir: string,
+  config: ReturnType<typeof loadConfig>,
+  name: string,
+  existing: StoredConnection | undefined,
+  plan: UpsertSecretPlan,
+): Promise<void> {
+  config.connections[name] = plan.written
+  lock.assertHeld()
+  saveConfig(dataDir, config)
+  if (plan.clearAfterSave === undefined || existing === undefined) return
+  try {
+    await store.remove(name, plan.clearAfterSave, { strict: true })
+  } catch (err) {
+    config.connections[name] = existing
+    lock.assertHeld()
+    saveConfig(dataDir, config)
+    throw err
+  }
 }
 
-/** Copy the password stored for `existing` — the stored one, never the env var — under `written`'s key. */
-async function carryPassword(
-  store: SecretStore,
-  name: string,
-  existing: StoredConnection,
-  written: StoredConnection,
-): Promise<void> {
-  const stored = await store.stored(name, existing)
-  if (stored !== null) await store.write(name, stored, written)
+/** Whether `conn` is a person's connection whose password still lives under `<name>` (before #272). */
+function isNameKeyed(conn: StoredConnection): boolean {
+  return conn.addedBy !== 'agent' && conn.passwordKey !== 'target'
+}
+
+/** `conn` without its `passwordKey` mark: its password stays under `<name>`. */
+function unmarked(conn: StoredConnection): StoredConnection {
+  const { passwordKey: _mark, ...rest } = conn
+  return rest
 }
 
 /**
@@ -323,10 +362,10 @@ async function dropOldKey(
 /**
  * `conn` as a person's connection is written from this version on: its
  * password keyed to its target (`passwordKey: 'target'`, #272). An agent's is
- * keyed so already.
+ * keyed so already, and never carries the mark.
  */
 function keyedToTarget(conn: StoredConnection): StoredConnection {
-  return conn.addedBy === 'agent' ? conn : { ...conn, passwordKey: 'target' }
+  return conn.addedBy === 'agent' ? unmarked(conn) : { ...conn, passwordKey: 'target' }
 }
 
 /**
@@ -347,14 +386,14 @@ function buildStoredConnection(
   const resolvedLabel = label !== undefined && label !== '' ? label : existing?.label
   const shape = input.shape ?? existing?.shape
   const agentTarget = byAgent && (existing === undefined || existing.addedBy === 'agent')
-  return {
+  return keyedToTarget({
     baseUrl: next.baseUrl,
     login: next.login,
     serverTimezone: next.serverTimezone,
     ...(resolvedLabel !== undefined && resolvedLabel !== '' ? { label: resolvedLabel } : {}),
     ...(shape !== undefined ? { shape } : {}),
-    ...(agentTarget ? { addedBy: 'agent' as const } : { passwordKey: 'target' as const }),
-  }
+    ...(agentTarget ? { addedBy: 'agent' as const } : {}),
+  })
 }
 
 /**
@@ -472,17 +511,14 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
       const written = buildStoredConnection({ baseUrl, login, serverTimezone }, input, existing, byAgent)
       const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
       lock.assertHeld()
-      const secret = await applyUpsertSecret(store, input.name, password, existing, written)
-
-      config.connections[input.name] = written
-      lock.assertHeld()
-      saveConfig(input.dataDir, config)
-      await dropOldKey(store, input.name, existing, written)
+      const plan = await planUpsertSecret(store, input.name, password, existing, written)
+      await saveUpsert(lock, store, input.dataDir, config, input.name, existing, plan)
+      await dropOldKey(store, input.name, existing, plan.written)
 
       return {
         overwritten: existed,
-        ...(secret.passwordBackend !== undefined ? { passwordBackend: secret.passwordBackend } : {}),
-        ...(secret.passwordCleared ? { passwordCleared: true } : {}),
+        ...(plan.passwordBackend !== undefined ? { passwordBackend: plan.passwordBackend } : {}),
+        ...(plan.passwordCleared ? { passwordCleared: true } : {}),
       }
     },
     input.signal,
@@ -515,16 +551,7 @@ export async function removeConnection(input: {
       lock.assertHeld()
       saveConfig(input.dataDir, config)
       const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
-      // Its own key, and for a person's connection both forms it may have left a copy under — `<name>` and
-      // its target's key (a move an earlier failed save cut short): nothing reads them once it is gone.
-      const owners = existing.addedBy === 'agent' ? [existing] : [existing, NAME_KEY_OWNER, keyedToTarget(existing)]
-      const keys = new Set<string>()
-      for (const owner of owners) {
-        const key = secretKey(input.name, owner)
-        if (keys.has(key)) continue
-        keys.add(key)
-        await store.remove(input.name, owner)
-      }
+      await store.removeEveryKey(input.name, existing)
       return true
     },
     input.signal,
@@ -749,8 +776,8 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
       assertNoEnvPassword(input.name, existing)
       const loginUpdated = login !== undefined && login !== existing.login
       // A person's connection from before #272 moves to its target's key here: same base URL, so its password goes along.
-      const written = keyedToTarget(loginUpdated ? { ...existing, login } : existing)
-      const rekeyed = secretKey(input.name, existing) !== secretKey(input.name, written)
+      let written = keyedToTarget(loginUpdated ? { ...existing, login } : existing)
+      let rekeyed = secretKey(input.name, existing) !== secretKey(input.name, written)
       // Write the secret BEFORE the config so a login change is never persisted
       // while its matching password write is still pending or has failed. Under
       // a new key it is read by nobody until the config is saved.
@@ -758,8 +785,10 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
       lock.assertHeld()
       if (input.password !== undefined) {
         passwordBackend = (await store.write(input.name, input.password, written)).backend
-      } else if (rekeyed) {
-        await carryPassword(store, input.name, existing, written)
+      } else if (rekeyed && !(await store.carry(input.name, existing, written))) {
+        // None readable here to carry (the keychain refusing, --insecure-storage): it stays keyed `<name>`.
+        written = unmarked(written)
+        rekeyed = false
       }
       if (loginUpdated || rekeyed) {
         config.connections[input.name] = written

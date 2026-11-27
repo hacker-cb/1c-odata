@@ -76,14 +76,40 @@ describe('re-pointing a connection without a password (#270, #272)', () => {
     keychain.entries.set(nameKey(), 'old')
   })
 
-  it('re-points even where the keychain cannot delete: the new target reads no password, the old one stays its own', async () => {
+  it('a connection still keyed <name> refuses where the keychain cannot delete it — older versions read <name> whatever the target', async () => {
+    keychain.deleteFails = true
+    await expect(retarget(false)).rejects.toThrow(/Could not delete the stored password of "c".*nothing was changed/)
+    // Saved, then put back once the delete failed: the connection is as it was, password included.
+    expect(loadConfig(dir).connections.c).toEqual({ baseUrl: OLD, login: 'u', serverTimezone: 'Europe/Moscow' })
+    expect(await new SecretStore({ dataDir: dir }).read('c', loadConfig(dir).connections.c)).toEqual({
+      password: 'old',
+      source: 'keychain',
+    })
+  })
+
+  it('a connection keyed to its target re-points even where the keychain cannot delete: the old copy stays its own', async () => {
+    keychain.entries.clear()
+    await upsertConnection({ dataDir: dir, name: 'c', baseUrl: OLD, login: 'u', password: 'old', overwrite: true })
+    const oldKey = `${keychainServiceName(dir)}/${secretKey('c', { baseUrl: OLD, passwordKey: 'target' })}`
+    expect(keychain.entries.get(oldKey)).toBe('old')
     keychain.deleteFails = true
     await expect(retarget(false)).resolves.toMatchObject({ passwordCleared: true })
     const conn = loadConfig(dir).connections.c
     expect(conn).toMatchObject({ baseUrl: NEW, passwordKey: 'target' })
     expect(await new SecretStore({ dataDir: dir }).read('c', conn)).toBeNull()
-    // Left under the key the old record read — which no record reads now.
-    expect(keychain.entries.get(nameKey())).toBe('old')
+    expect(keychain.entries.get(oldKey)).toBe('old') // left under OLD's key, which only OLD reads
+  })
+
+  it('a login change on the same server without a password clears the password — strictly, the key being the same', async () => {
+    keychain.entries.clear()
+    await upsertConnection({ dataDir: dir, name: 'c', baseUrl: OLD, login: 'u', password: 'alice', overwrite: true })
+    const relogin = () => upsertConnection({ dataDir: dir, name: 'c', baseUrl: OLD, login: 'bob', overwrite: true })
+    keychain.deleteFails = true
+    await expect(relogin()).rejects.toThrow(/Could not delete the stored password of "c"/)
+    expect(loadConfig(dir).connections.c?.login).toBe('u')
+    keychain.deleteFails = false
+    await expect(relogin()).resolves.toMatchObject({ passwordCleared: true })
+    expect(await new SecretStore({ dataDir: dir }).read('c', loadConfig(dir).connections.c)).toBeNull()
   })
 
   it('drops the old target’s password once the config no longer reads it', async () => {

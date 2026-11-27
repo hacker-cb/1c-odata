@@ -11,11 +11,12 @@ import {
   upsertConnection,
 } from '../../src/connections.js'
 import { FileConnectionSource } from '../../src/file-connection-source.js'
-import { keychainServiceName, SecretStore, secretKey } from '../../src/secret-store.js'
+import { keychainServiceName, NAME_KEY_OWNER, SecretStore, secretKey } from '../../src/secret-store.js'
 
 /** The keychain as the tests set it, and what a failing config save does. */
 const state = vi.hoisted(() => ({
   deleteFails: false,
+  readFails: false,
   /** Runs as a password is set — between the secret write and the config save of an upsert. */
   onSet: undefined as (() => void) | undefined,
   entries: new Map<string, string>(),
@@ -29,6 +30,7 @@ vi.mock('@napi-rs/keyring', () => ({
       this.key = `${service}/${account}`
     }
     getPassword(): string | null {
+      if (state.readFails) throw new Error('Platform secure storage failure: keychain locked')
       return state.entries.get(this.key) ?? null
     }
     setPassword(password: string): void {
@@ -60,6 +62,7 @@ let dir: string
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'mcp-person-key-'))
   state.deleteFails = false
+  state.readFails = false
   state.onSet = undefined
   state.configSaveFails = false
   state.entries.clear()
@@ -259,6 +262,87 @@ describe('a connection from before #272 keeps its password', () => {
   })
 })
 
+describe('a carry that cannot read the password keeps it where it is', () => {
+  const relabel = (insecure = false) =>
+    upsertConnection({ dataDir: dir, name: 'prod', baseUrl: OLD, login: 'u', label: 'x', insecure, overwrite: true })
+
+  it('under --insecure-storage, which never reads the keychain: still keyed <name>, the keychain copy kept', async () => {
+    const legacy = legacyProd()
+    await expect(relabel(true)).resolves.toEqual({ overwritten: true })
+    expect(loadConfig(dir).connections.prod).toMatchObject({ label: 'x' })
+    expect(loadConfig(dir).connections.prod?.passwordKey).toBeUndefined()
+    expect(entry(legacy)).toBe('legacy')
+    expect(await resolved()).toBe('legacy')
+  })
+
+  it('where the keychain refuses to read: still keyed <name>, nothing lost', async () => {
+    const legacy = legacyProd()
+    state.readFails = true
+    await relabel()
+    state.readFails = false
+    expect(loadConfig(dir).connections.prod?.passwordKey).toBeUndefined()
+    expect(entry(legacy)).toBe('legacy')
+  })
+
+  it('a login-only set_credentials the same way', async () => {
+    legacyProd()
+    state.readFails = true
+    await updateConnectionCredentials({
+      dataDir: dir,
+      name: 'prod',
+      login: 'u2',
+      expected: { baseUrl: OLD, login: 'u' },
+    })
+    state.readFails = false
+    expect(loadConfig(dir).connections.prod).toMatchObject({ login: 'u2' })
+    expect(loadConfig(dir).connections.prod?.passwordKey).toBeUndefined()
+    expect(await resolved()).toBe('legacy')
+  })
+
+  it('a password in credentials.json is carried within the file, where an --insecure-storage reader finds it', async () => {
+    saveConfig(dir, { connections: { prod: { baseUrl: OLD, login: 'u', serverTimezone: 'Europe/Moscow' } } })
+    await new SecretStore({ dataDir: dir, insecure: true }).write('prod', 'in-file', NAME_KEY_OWNER)
+    await relabel()
+    expect(loadConfig(dir).connections.prod?.passwordKey).toBe('target')
+    expect(await new FileConnectionSource({ dataDir: dir, insecure: true }).getSecret('prod')).toBe('in-file')
+    expect(state.entries.size).toBe(0)
+  })
+})
+
+describe('no password resurfaces for a connection given none', () => {
+  it('a re-point drops a copy already under the new target’s key', async () => {
+    await add(OLD, { password: 'old' })
+    // A copy for NEW left by a save that failed earlier.
+    await new SecretStore({ dataDir: dir }).write('prod', 'stale', { baseUrl: NEW, passwordKey: 'target' })
+    await expect(add(NEW, { overwrite: true })).resolves.toMatchObject({ passwordCleared: true })
+    expect(await resolved()).toBeNull()
+  })
+
+  it('a new connection drops a copy a remove could not delete', async () => {
+    await add(OLD, { password: 'old' })
+    state.deleteFails = true
+    await removeConnection({ dataDir: dir, name: 'prod' })
+    state.deleteFails = false
+    await add(OLD)
+    expect(await resolved()).toBeNull()
+  })
+
+  it('removing an agent’s connection deletes a person’s copy left under <name> too', async () => {
+    state.entries.set(`${keychainServiceName(dir)}/prod`, 'persons')
+    await upsertConnection({
+      dataDir: dir,
+      name: 'prod',
+      baseUrl: OLD,
+      login: 'u',
+      serverTimezone: 'UTC',
+      byAgent: true,
+      password: 'agents',
+    })
+    await removeConnection({ dataDir: dir, name: 'prod' })
+    expect(state.entries.size).toBe(0)
+  })
+})
+
 describe('a failed config save deletes no password (#270)', () => {
   it('a re-point without a password: the connection keeps its target and its password', async () => {
     await add(OLD, { password: 'kept' })
@@ -307,6 +391,10 @@ describe('a base URL as a target (#272)', () => {
     ['https://[::1]:8443/odata', 'https://[::1]:8443/odata'],
     ['http://user:pw@Host/odata', 'http://host/odata'],
     ['http://host/ODATA/Path', 'http://host/ODATA/Path'],
+    ['https://host:0443/odata', 'https://host/odata'],
+    ['http://host:08080/odata', 'http://host:8080/odata'],
+    // Only ASCII is folded: a Unicode host stays as written (lower-casing Σ may pick another DNS name).
+    ['https://ΑΒΓΣ.Example/odata', 'https://ΑΒΓΣ.example/odata'],
   ])('%s → %s', (given, target) => {
     expect(targetBaseUrl(given)).toBe(target)
   })

@@ -58,7 +58,13 @@ export function targetBaseUrl(baseUrl: string): string {
   return normalizeBaseUrl(canonicalOrigin(stripUrlUserinfo(baseUrl.trim())))
 }
 
-/** `url` with its scheme and host lower-cased and a default port dropped; anything not `scheme://authority…` as is. */
+/**
+ * `url` with its scheme and host's ASCII letters lower-cased and a default port
+ * dropped; anything not `scheme://authority…` as is. Only ASCII is folded: a
+ * Unicode host lower-cased by JavaScript may name another DNS name than the one
+ * the request resolves (a final sigma), so it stays as written — another key,
+ * never another server.
+ */
 function canonicalOrigin(url: string): string {
   const match = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)(.*)$/s.exec(url)
   if (match === null) return url
@@ -66,15 +72,20 @@ function canonicalOrigin(url: string): string {
   const authority = match[2] ?? ''
   const rest = match[3] ?? ''
   // The port follows the last ':' outside an IPv6 literal's brackets.
-  const port = /^(.*?)(?::(\d*))?$/s.exec(
-    authority.includes(']') ? authority.slice(authority.lastIndexOf(']')) : authority,
+  const afterBracket = authority.includes(']') ? authority.slice(authority.lastIndexOf(']')) : authority
+  const portText = /:(\d*)$/.exec(afterBracket)?.[1]
+  const host = foldAscii(
+    portText !== undefined ? authority.slice(0, authority.length - portText.length - 1) : authority,
   )
-  const portText = port?.[2]
-  const host = portText !== undefined ? authority.slice(0, authority.length - portText.length - 1) : authority
-  const isDefault = (scheme === 'http' && portText === '80') || (scheme === 'https' && portText === '443')
-  const hostPort =
-    portText !== undefined && portText !== '' && !isDefault ? `${host.toLowerCase()}:${portText}` : host.toLowerCase()
-  return `${scheme}://${hostPort}${rest}`
+  // As a number: `:0443` is port 443, as a URL parser reads it.
+  const port = portText !== undefined && portText !== '' ? String(Number(portText)) : undefined
+  const isDefault = (scheme === 'http' && port === '80') || (scheme === 'https' && port === '443')
+  return `${scheme}://${port !== undefined && !isDefault ? `${host}:${port}` : host}${rest}`
+}
+
+/** `text` with its ASCII letters lower-cased, every other character as is. */
+function foldAscii(text: string): string {
+  return text.replace(/[A-Z]+/g, (letters) => letters.toLowerCase())
 }
 
 /** Shape of `<dataDir>/config.json`. */

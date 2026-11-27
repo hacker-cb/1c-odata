@@ -276,13 +276,56 @@ export class SecretStore {
    * Remove the password of `name` stored as `conn` ({@link secretKey}) from
    * every backend (file + keychain), regardless of preference — a secret may
    * have been written to either on an earlier run (e.g. keychain then later
-   * `--insecure-storage`). Best-effort on the keychain: a copy a locked
-   * keychain keeps stays under its own key, which only that target reads.
+   * `--insecure-storage`). Best-effort on the keychain — a copy a locked
+   * keychain keeps stays under its own key, which only that target reads —
+   * unless `strict`: then a keychain this store reads that fails to delete (an
+   * error, not "no such entry") throws, for a key a connection still reads.
+   * `--insecure-storage` never reads the keychain, so its delete stays
+   * best-effort even then.
    */
-  async remove(name: string, conn: SecretOwner): Promise<void> {
+  async remove(name: string, conn: SecretOwner, opts: { strict?: boolean } = {}): Promise<void> {
     const key = secretKey(name, conn)
-    await this.keychainDelete(key)
+    await this.keychainDelete(key, opts.strict === true && !this.insecure ? name : undefined)
     this.fileDelete(key)
+  }
+
+  /**
+   * Remove every copy connection `name`, stored as `conn`, may have left — its
+   * own key and, for a person's connection, both forms a password of that
+   * name lives under (`<name>` before #272, `<name>+<hash>` after), whichever
+   * a move cut short left behind. Best-effort on the keychain.
+   */
+  async removeEveryKey(name: string, conn: SecretOwner): Promise<void> {
+    const keys = new Set([secretKey(name, conn), name])
+    if (conn.addedBy !== 'agent') keys.add(secretKey(name, { ...conn, passwordKey: 'target' }))
+    for (const key of keys) await this.keychainDelete(key)
+    this.fileDeleteKeys([...keys])
+  }
+
+  /**
+   * Copy the password stored for `name` as `from` under `to`'s key, in the
+   * backend it is in — a file copy stays a file copy, so a process reading only
+   * the file (`--insecure-storage`) still finds it. `false` where nothing was
+   * copied: none found where this store can look (it never looks into the
+   * keychain under `--insecure-storage`, nor finds one the keychain refuses to
+   * read), or the keychain refused the copy.
+   */
+  async carry(name: string, from: SecretOwner, to: SecretOwner): Promise<boolean> {
+    const found = await this.storedUnder(secretKey(name, from))
+    if (found === null) return false
+    const key = secretKey(name, to)
+    if (found.source === 'file') {
+      this.fileWrite(key, found.password)
+      return true
+    }
+    const mod = await this.keyringModule()
+    if (mod === null) return false
+    try {
+      this.keychainEntry(mod, key).setPassword(found.password)
+      return true
+    } catch {
+      return false
+    }
   }
 
   private async keychainRead(key: string): Promise<string | null> {
@@ -298,17 +341,22 @@ export class SecretStore {
   }
 
   /**
-   * Delete the keychain entry under `key`, best-effort: "no such entry" is not
-   * an error (the backend answers `false`), and a keychain that fails otherwise
-   * is ignored — what it keeps stays under its own key.
+   * Delete the keychain entry under `key`. "No such entry" is not an error (the
+   * backend answers `false`); a keychain that fails otherwise is ignored — what
+   * it keeps stays under its own key — unless `strictFor` names the connection,
+   * when it throws.
    */
-  private async keychainDelete(key: string): Promise<void> {
+  private async keychainDelete(key: string, strictFor?: string): Promise<void> {
     const mod = await this.keyringModule()
     if (mod === null) return
     try {
       this.keychainEntry(mod, key).deletePassword()
-    } catch {
-      // left under its own key, read only for that target
+    } catch (err) {
+      if (strictFor !== undefined) {
+        throw new Error(
+          `Could not delete the stored password of "${strictFor}" from the OS keychain (${errMessage(err)}); nothing was changed. Fix the keychain and retry.`,
+        )
+      }
     }
   }
 
@@ -324,6 +372,25 @@ export class SecretStore {
     // write never clobbers unparseable siblings), add ours, then rewrite at 0600.
     const secrets = this.readFileSecrets(false)
     secrets[key] = password
+    this.writeFileSecrets(secrets)
+  }
+
+  /** Delete each of `keys` from the file in one pass — {@link fileDelete} per key, but read and written once. */
+  private fileDeleteKeys(keys: string[]): void {
+    let secrets: FileSecrets
+    try {
+      secrets = this.readFileSecrets(false)
+    } catch {
+      for (const key of keys) this.fileDelete(key)
+      return
+    }
+    const present = keys.filter((key) => key in secrets)
+    if (present.length === 0) return
+    for (const key of present) delete secrets[key]
+    if (Object.keys(secrets).length === 0) {
+      this.fileUnlink()
+      return
+    }
     this.writeFileSecrets(secrets)
   }
 

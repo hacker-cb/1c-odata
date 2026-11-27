@@ -133,10 +133,15 @@ describe('a password from ONEC_<NAME>_PASSWORD is never sent to a new target', (
     })
 
     it('keeps the stored password over an overwrite to the same, differently written target', async () => {
-      // Without the env var too: the stored password is cleared only for another target.
+      // Without the env var too: the stored password is cleared only for another target. The hand-written
+      // trailing slash is the same target, so the same key (#272) as the password beforeEach stored.
       writeFileSync(
         join(dir, 'config.json'),
-        JSON.stringify({ connections: { c: { baseUrl: `${OLD}/`, login: 'u', serverTimezone: 'Europe/Moscow' } } }),
+        JSON.stringify({
+          connections: {
+            c: { baseUrl: `${OLD}/`, login: 'u', serverTimezone: 'Europe/Moscow', passwordKey: 'target' },
+          },
+        }),
         { mode: 0o600 },
       )
       const { call, close } = await tools()
