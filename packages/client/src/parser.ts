@@ -277,8 +277,10 @@ function mapValue(
   // path (write-transform.ts), which already recurses with the nested type.
   if (Array.isArray(v)) {
     const childOpts = withNestedTypeHint(opts, propType)
+    // An array inside the array (no OData V3 collection holds one) is read as an array again, never handed
+    // to `mapEntity`, which would turn it into an object keyed `"0"`, `"1"`, ….
     return v.map((item) =>
-      typeof item === 'object' && item !== null
+      typeof item === 'object' && item !== null && !Array.isArray(item)
         ? mapEntity(item as Record<string, unknown>, childOpts)
         : mapValue(item, fieldName, schema, shape, opts),
     )

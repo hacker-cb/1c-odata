@@ -418,6 +418,22 @@ describe('schema-aware parsing', () => {
     })
   })
 
+  it('reads an array inside an array as an array, not an object keyed by index', () => {
+    const body = JSON.stringify({
+      'odata.metadata': '...',
+      Grid: [
+        [1, 'a'],
+        [{ k: 'v' }, []],
+      ],
+    })
+    const r = parseV3Single<{ Grid: unknown }>(body, { serverTimezone: 'UTC' })
+    expect(r.Grid).toEqual([
+      [1, 'a'],
+      [{ k: 'v' }, []],
+    ])
+    expect(Array.isArray((r.Grid as unknown[])[0])).toBe(true)
+  })
+
   it('falls back to date-regex heuristic when no metadataIndex', () => {
     const input = '2025-03-15T00:00:00'
     const body = JSON.stringify({ 'odata.metadata': '...', SomeDate: input })
