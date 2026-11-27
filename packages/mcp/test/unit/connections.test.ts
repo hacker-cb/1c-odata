@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { request } from '@1c-odata/client/internal'
 import { fetchMetadataXml } from '@1c-odata/metadata'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { runAdd } from '../../src/commands/add.js'
 import { loadConfig, saveConfig } from '../../src/config.js'
 import {
@@ -180,7 +180,12 @@ describe('an overwrite keeps the stored shape (#256)', () => {
   })
 
   it('re-pointed by a person (the CLI add --force)', async () => {
+    vi.stubEnv('ONEC_TRADE_PASSWORD', '') // a developer's own variable would refuse the re-point
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    onTestFinished(() => {
+      vi.restoreAllMocks()
+      vi.unstubAllEnvs()
+    })
     await runAdd({
       dataDir: dir,
       insecure: true,
@@ -190,7 +195,6 @@ describe('an overwrite keeps the stored shape (#256)', () => {
       force: true,
     })
     expect(loadConfig(dir).connections.trade).toMatchObject({ baseUrl: 'http://other/odata/standard.odata', shape })
-    vi.restoreAllMocks()
   })
 
   it('a shape given replaces it', async () => {

@@ -53,9 +53,10 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks()
   rmSync(dir, { recursive: true, force: true })
-  // A broken read would have written these onto the global Object; none may be left.
-  expect(Object.hasOwn(Object, 'label')).toBe(false)
-  expect(Object.hasOwn(Object, 'login')).toBe(false)
+  // A broken read would have written these onto the global Object; none may be left — nor leak to the next test.
+  const polluted = ['label', 'login'].filter((key) => Object.hasOwn(Object, key))
+  for (const key of polluted) delete (Object as unknown as Record<string, unknown>)[key]
+  expect(polluted).toEqual([])
 })
 
 /** `config.json` absent, or present with a `connections` that is no object: both read as no connections. */
