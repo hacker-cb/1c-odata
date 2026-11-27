@@ -9,7 +9,12 @@ import { RegisterHelper } from '../register.js'
 import { schemaOfSet } from '../schema-lookup.js'
 import { type EntityKey, NOMETADATA_JSON, normalizeBaseUrl } from '../url-builder.js'
 import { type EntitySchema, type MetadataIndex, ValidationError, validateEntity } from '../validate.js'
-import { bigintToStringReplacer, transformDatesToWire, transformDateValuesUntyped } from '../write-transform.js'
+import {
+  bigintToStringReplacer,
+  splitValueStorages,
+  transformDatesToWire,
+  transformDateValuesUntyped,
+} from '../write-transform.js'
 import type { ClientOptions, RequestOptions } from './options.js'
 import { createFunctionsProxy } from './v3-functions-proxy.js'
 import { V3DocumentHandle, V3EntityHandle, V3EntitySetHandle } from './v3-handles.js'
@@ -228,13 +233,16 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
   private transformWriteBody(body: unknown, entitySet: string): unknown {
     if (body === undefined) return undefined
     if (typeof body !== 'object' || body === null) return body
-    const dateMode = this.shape?.dateMode === 'string' ? 'string' : 'date'
+    const stringDates = this.shape?.dateMode === 'string'
     const idx = this.v3Opts.metadataIndex
     const schema = this.schemaForSet(entitySet)
     if (idx === undefined || schema === undefined) {
-      return dateMode === 'string' ? body : transformDateValuesUntyped(body, this.opts.serverTimezone)
+      return stringDates ? body : transformDateValuesUntyped(body, this.opts.serverTimezone)
     }
-    return transformDatesToWire(body as Record<string, unknown>, schema, this.opts.serverTimezone, idx, dateMode)
+    const dated = stringDates
+      ? (body as Record<string, unknown>)
+      : transformDatesToWire(body as Record<string, unknown>, schema, this.opts.serverTimezone, idx, 'date')
+    return splitValueStorages(dated, schema, idx)
   }
 
   query<T = Record<string, unknown>>(entitySet: string): V3QueryBuilder<T> {

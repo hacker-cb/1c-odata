@@ -334,7 +334,7 @@ describe('a ValueStorage read back is written by its halves, in every dateMode (
     },
   )
 
-  it('a null storage goes as `_Base64Data: null`; a half named beside a stale value wins', async () => {
+  it('a null storage goes as `_Base64Data: null`; a half set beside a stale value wins, the other half kept', async () => {
     const c = new ODataV3Client({ baseUrl, auth, serverTimezone: 'Europe/Moscow', metadataIndex })
     const e = c.entity('Catalog_Файлы', '00000000-0000-0000-0000-00000000000a')
     await e.patch({ ФайлХранилище: null })
@@ -343,6 +343,6 @@ describe('a ValueStorage read back is written by its halves, in every dateMode (
       ФайлХранилище: { contentType: 'image/png', base64Data: 'b2xk' },
       ФайлХранилище_Base64Data: 'bmV3',
     } as Record<string, unknown>)
-    expect(received).toEqual({ ФайлХранилище_Base64Data: 'bmV3' })
+    expect(received).toEqual({ ФайлХранилище_Type: 'image/png', ФайлХранилище_Base64Data: 'bmV3' })
   })
 })
