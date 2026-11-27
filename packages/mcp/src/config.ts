@@ -194,13 +194,16 @@ export function configPath(dataDir: string): string {
   return join(dataDir, CONFIG_FILE)
 }
 
-/** Load `config.json`. Returns an empty config when the file is absent. */
+/**
+ * Load `config.json`. Returns an empty config when the file is absent. Its
+ * `connections` never has a prototype: index it by any name.
+ */
 export function loadConfig(dataDir: string): McpConfig {
   let raw: string
   try {
     raw = readFileSync(configPath(dataDir), 'utf8')
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { connections: {} }
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { connections: noConnections() }
     throw err
   }
   let parsed: unknown
@@ -212,17 +215,27 @@ export function loadConfig(dataDir: string): McpConfig {
   return normalizeConfig(parsed)
 }
 
+/**
+ * An empty connections dictionary WITHOUT a prototype: every {@link loadConfig}
+ * answer is one, so a name the object prototype answers for (`constructor`,
+ * `toString` — both valid connection names) reads as no connection, never as a
+ * function standing in for one.
+ */
+function noConnections(): Record<string, StoredConnection> {
+  return Object.create(null)
+}
+
 /** Coerce parsed JSON into a well-formed {@link McpConfig} (shallow). */
 function normalizeConfig(data: unknown): McpConfig {
-  if (data === null || typeof data !== 'object') return { connections: {} }
+  if (data === null || typeof data !== 'object') return { connections: noConnections() }
   const connections = (data as { connections?: unknown }).connections
-  if (connections === null || typeof connections !== 'object') return { connections: {} }
+  if (connections === null || typeof connections !== 'object') return { connections: noConnections() }
   // Drop structurally-invalid entries (a hand-edited config may have non-objects
   // or miss required string fields — keeping them would crash later paths) AND
   // entries whose name key fails connection-name validation (a non-ASCII name
   // slugs to an empty, colliding `ONEC__PASSWORD` env var). For valid ones, strip
   // any userinfo the baseUrl might carry (defense in depth).
-  const sanitized: Record<string, StoredConnection> = Object.create(null)
+  const sanitized = noConnections()
   for (const [name, conn] of Object.entries(connections as Record<string, unknown>)) {
     if (!isValidConnectionName(name)) continue
     const entry = normalizeEntry(conn)
