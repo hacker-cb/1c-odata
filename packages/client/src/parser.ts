@@ -2,6 +2,7 @@
 
 import { type DataShape, DEFAULT_SHAPE } from './connection.js'
 import { InvalidArgumentError, ParseError } from './errors.js'
+import { schemaOfType, typeNameOfRef, typeNameOfSet } from './schema-lookup.js'
 import { parseInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
 import type { EntitySchema, MetadataIndex } from './validate.js'
@@ -47,7 +48,7 @@ export function parseOptsFor(
   entitySet: string,
   withTypeHint = true,
 ): ParseOptions {
-  const typeHint = withTypeHint ? client.metadataIndex?.entitySetToType[entitySet] : undefined
+  const typeHint = withTypeHint ? typeNameOfSet(client.metadataIndex, entitySet) : undefined
   const shape = client.shape ?? client.metadataIndex?.shape
   return {
     serverTimezone: client.serverTimezone,
@@ -146,10 +147,7 @@ function strictCount(text: string, source: string): number {
 }
 
 function mapEntity(obj: Record<string, unknown>, opts: ParseOptions): Record<string, unknown> {
-  const schema =
-    opts.typeHint !== undefined && opts.metadataIndex !== undefined
-      ? opts.metadataIndex.schemas[opts.typeHint]
-      : undefined
+  const schema = schemaOfType(opts.metadataIndex, opts.typeHint)
   const shape: DataShape | undefined = opts.shape ?? opts.metadataIndex?.shape
 
   const out: Record<string, unknown> = {}
@@ -264,28 +262,6 @@ function parseDateTime(v: string, fieldName: string, typed: boolean, serverTimez
 }
 
 /**
- * Resolve the EntityType/ComplexType local name of a nested field from its
- * declared property type (`Collection(<ns>.Foo)` or `<ns>.Foo`), so nested
- * values are parsed with their own schema. Returns undefined for primitive
- * collections (`Collection(Edm.*)`), unknown namespaces, or types absent from
- * the index — the caller then parses the nested value schema-less instead of
- * misapplying the parent schema. Mirrors the write-side resolution in
- * write-transform.ts.
- */
-function resolveNestedTypeHint(
-  propType: string | undefined,
-  metadataIndex: MetadataIndex | undefined,
-): string | undefined {
-  if (propType === undefined || metadataIndex === undefined) return undefined
-  let t = propType
-  if (t.startsWith('Collection(') && t.endsWith(')')) t = t.slice('Collection('.length, -1)
-  if (t.startsWith('Edm.')) return undefined
-  const prefix = `${metadataIndex.schemaNamespace}.`
-  const local = t.startsWith(prefix) ? t.slice(prefix.length) : t
-  return metadataIndex.schemas[local] !== undefined ? local : undefined
-}
-
-/**
  * Build the `ParseOptions` for a nested value: adopt the nested type's own
  * `typeHint` when resolvable, otherwise drop the parent `typeHint` so the
  * nested value is parsed schema-less (an expanded navigation property is absent
@@ -293,7 +269,7 @@ function resolveNestedTypeHint(
  * safer than misapplying the parent schema).
  */
 function withNestedTypeHint(opts: ParseOptions, propType: string | undefined): ParseOptions {
-  const typeHint = resolveNestedTypeHint(propType, opts.metadataIndex)
+  const typeHint = typeNameOfRef(opts.metadataIndex, propType)
   const { typeHint: _parent, ...rest } = opts
   return typeHint !== undefined ? { ...rest, typeHint } : rest
 }

@@ -10,7 +10,9 @@ import type { MetadataIndex } from './validate.js'
  * response, or any other transport.
  *
  * Validates structural shape: `schemaNamespace`, `schemas`, `entitySetToType`,
- * optional `shape`, optional `enums`. Mismatches throw `MetadataError` with a
+ * optional `shape`, optional `enums` — and that every `entitySetToType` value
+ * names a type `schemas` holds as its own key (an inherited name such as
+ * `constructor` is none). Mismatches throw `MetadataError` with a
  * JSON-path breadcrumb pointing at the offending node (e.g.
  * `$.schemas.Catalog_X.properties.Y.type`). `source` is only used in error
  * messages to say where the data came from.
@@ -137,6 +139,15 @@ function assertMetadataIndex(v: unknown, filePath: string, path: string): assert
   assertPlainObject(v.entitySetToType, filePath, `${path}.entitySetToType`)
   for (const [name, type] of Object.entries(v.entitySetToType)) {
     assertString(type, filePath, `${path}.entitySetToType.${name}`)
+    // Every reader looks a set's schema up by this name; one `schemas` lacks leaves the set schema-less
+    // at best — an inherited name (`constructor`) would hand the reader `Object` for a schema. Enumerable
+    // own keys only: those are the schemas the loop above validated.
+    if (!Object.prototype.propertyIsEnumerable.call(v.schemas, type)) {
+      throw new MetadataError(
+        `Invalid metadata at ${filePath} ${path}.entitySetToType.${name}: ` +
+          `type ${JSON.stringify(type)} is not in ${path}.schemas`,
+      )
+    }
   }
   if (v.shape !== undefined) assertDataShape(v.shape, filePath, `${path}.shape`)
   if (v.enums !== undefined) assertEnumCatalog(v.enums, filePath, `${path}.enums`)

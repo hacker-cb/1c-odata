@@ -1,6 +1,7 @@
 // packages/client/src/query/filter-internal.ts
 import { InvalidArgumentError, ODataError } from '../errors.js'
 import { formatNumberLiteral } from '../format-number.js'
+import { schemaOfRef } from '../schema-lookup.js'
 import type { Guid } from '../types/core.js'
 import { formatScalarLiteral, GUID_RE } from '../url-builder.js'
 import type { EntitySchema, MetadataIndex } from '../validate.js'
@@ -349,20 +350,15 @@ export function makeGuidLiteral(value: string): FieldExpr<Guid> {
 /**
  * The row schema of a tabular part `field` — what `any()`/`all()` give their
  * lambda's fields — resolved from its declared `Collection(<ns>.<Row>)` type
- * through the context's index (as `parser.ts` resolves a nested value's type).
+ * through the context's index by `schema-lookup.ts` — the rule `parser.ts`
+ * resolves a nested value's type by.
  * `undefined` without an index, for a field the proxy built with no schema, or
  * for a row type the index does not hold.
  *
  * @internal
  */
 export function rowSchemaOf(field: object, ctx: CompileContext): EntitySchema | undefined {
-  const index = ctx.metadataIndex
-  let t = fieldTypes.get(field)
-  if (index === undefined || t === undefined) return undefined
-  if (t.startsWith('Collection(') && t.endsWith(')')) t = t.slice('Collection('.length, -1)
-  const prefix = `${index.schemaNamespace}.`
-  const local = t.startsWith(prefix) ? t.slice(prefix.length) : t
-  return Object.hasOwn(index.schemas, local) ? index.schemas[local] : undefined
+  return schemaOfRef(ctx.metadataIndex, fieldTypes.get(field))
 }
 
 /**

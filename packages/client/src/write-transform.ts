@@ -1,4 +1,5 @@
 import type { DateMode } from './connection.js'
+import { schemaOfRef } from './schema-lookup.js'
 import { formatInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
 import { isDate } from './url-builder.js'
@@ -79,12 +80,6 @@ function isValueStorageObject(v: unknown): v is { contentType: string; base64Dat
   return typeof o.contentType === 'string' && typeof o.base64Data === 'string'
 }
 
-/** Strip schema namespace prefix from a fully-qualified type reference. */
-function makeStripNs(metadataIndex: MetadataIndex): (t: string) => string {
-  const prefix = `${metadataIndex.schemaNamespace}.`
-  return (t: string): string => (t.startsWith(prefix) ? t.slice(prefix.length) : t)
-}
-
 /** Recurse into a Collection(<ns>.Foo) field, transforming each element. */
 function transformCollection(
   v: unknown[],
@@ -92,11 +87,10 @@ function transformCollection(
   tz: string,
   metadataIndex: MetadataIndex,
   dateMode: DateMode,
-  stripNs: (t: string) => string,
 ): unknown {
-  const innerType = propType.slice('Collection('.length, -1)
-  const innerSchema = metadataIndex.schemas[stripNs(innerType)]
-  if (innerSchema === undefined) return v
+  const innerSchema = schemaOfRef(metadataIndex, propType)
+  // A row type the index does not hold is written as without an index — `Date`s found by value.
+  if (innerSchema === undefined) return transformDateValuesUntyped(v, tz)
   return v.map((item) =>
     typeof item === 'object' && item !== null
       ? transformDatesToWire(item as Record<string, unknown>, innerSchema, tz, metadataIndex, dateMode)
@@ -111,10 +105,9 @@ function transformNestedComplex(
   tz: string,
   metadataIndex: MetadataIndex,
   dateMode: DateMode,
-  stripNs: (t: string) => string,
 ): unknown {
-  const innerSchema = metadataIndex.schemas[stripNs(propType)]
-  if (innerSchema === undefined) return v
+  const innerSchema = schemaOfRef(metadataIndex, propType)
+  if (innerSchema === undefined) return transformDateValuesUntyped(v, tz)
   return transformDatesToWire(v, innerSchema, tz, metadataIndex, dateMode)
 }
 
@@ -154,7 +147,6 @@ export function transformDatesToWire(
 ): Record<string, unknown> {
   if (dateMode === 'string') return body
 
-  const stripNs = makeStripNs(metadataIndex)
   const out: Record<string, unknown> = {}
   for (const [name, v] of Object.entries(body)) {
     const propType = schema.properties[name]?.type
@@ -175,7 +167,7 @@ export function transformDatesToWire(
     // `Collection(Edm.DateTime)` not handled — 0 empirical occurrences in real 1С EDMX.
     // See packages/cli/src/codegen/emitter/entity.ts for the full design rationale.
     if (Array.isArray(v) && propType?.startsWith('Collection(')) {
-      out[name] = transformCollection(v, propType, tz, metadataIndex, dateMode, stripNs)
+      out[name] = transformCollection(v, propType, tz, metadataIndex, dateMode)
       continue
     }
 
@@ -188,7 +180,7 @@ export function transformDatesToWire(
       !propType.startsWith('Collection(')
     ) {
       // Nested ComplexType — propType is `<ns>.SomeComplex`
-      out[name] = transformNestedComplex(v as Record<string, unknown>, propType, tz, metadataIndex, dateMode, stripNs)
+      out[name] = transformNestedComplex(v as Record<string, unknown>, propType, tz, metadataIndex, dateMode)
       continue
     }
 
