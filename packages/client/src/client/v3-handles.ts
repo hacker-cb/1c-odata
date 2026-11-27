@@ -3,6 +3,8 @@
 import { assertExpectedVersion } from '../concurrency.js'
 import { buildFunctionUrl } from '../functions.js'
 import { parseOptsFor, parseV3Single } from '../parser.js'
+import { readFormat } from '../read-format.js'
+import { typeNameOfSet } from '../schema-lookup.js'
 import { buildV3KeyUrl, dateTime, type EntityKey, encodeSegment } from '../url-builder.js'
 import { type ReadStreamResult, readStream, type WriteStreamInput, writeStream } from '../value-storage.js'
 import type { MutationOptions, RequestOptions } from './options.js'
@@ -42,7 +44,8 @@ export class V3EntitySetHandle<T> {
   async create(body: Partial<T>, opts: RequestOptions = {}): Promise<T> {
     this.client.validateBeforeWrite(this.entitySet, body)
     const url = `${this.client.baseUrl}/${encodeSegment(this.entitySet)}`
-    const raw = await this.client.transportPost(url, body, opts, this.entitySet, this.extraHeaders)
+    const format = entityFormat(this.client, this.entitySet)
+    const raw = await this.client.transportPost(url, body, opts, this.entitySet, this.extraHeaders, format)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
 }
@@ -100,8 +103,9 @@ export class V3EntityHandle<T> {
 
   async get(opts: RequestOptions = {}): Promise<T> {
     const key = this.keyNow()
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone)
-    const raw = await this.client.transportGet(url, opts)
+    const format = entityFormat(this.client, this.entitySet)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone, format)
+    const raw = await this.client.transportGet(url, opts, format)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
 
@@ -112,8 +116,9 @@ export class V3EntityHandle<T> {
     if (opts.expectVersion !== undefined) {
       await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone)
-    const raw = await this.client.transportPatch(url, body, opts, this.entitySet, this.extraHeaders)
+    const format = entityFormat(this.client, this.entitySet)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone, format)
+    const raw = await this.client.transportPatch(url, body, opts, this.entitySet, this.extraHeaders, format)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
 
@@ -124,8 +129,9 @@ export class V3EntityHandle<T> {
     if (opts.expectVersion !== undefined) {
       await assertExpectedVersion(this.client, this.entitySet, key, opts.expectVersion, opts)
     }
-    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone)
-    const raw = await this.client.transportPut(url, body, opts, this.entitySet, this.extraHeaders)
+    const format = entityFormat(this.client, this.entitySet)
+    const url = buildV3KeyUrl(this.client.baseUrl, this.entitySet, key, this.client.serverTimezone, format)
+    const raw = await this.client.transportPut(url, body, opts, this.entitySet, this.extraHeaders, format)
     return parseV3Single<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
 
@@ -202,4 +208,14 @@ export class V3DocumentHandle {
     )
     await this.client.transportPost(url, undefined, {}, this.entitySet)
   }
+}
+
+/**
+ * The JSON format an entity of `entitySet` comes back in — `get()` and the
+ * entity `create()` / `patch()` / `put()` return: `minimalmetadata` where its
+ * type has a ValueStorage, whose `_Type` 1С withholds in `nometadata` (#289).
+ */
+function entityFormat(client: ODataV3Client<unknown>, entitySet: string): string {
+  const index = client.metadataIndex
+  return readFormat(index, typeNameOfSet(index, entitySet))
 }

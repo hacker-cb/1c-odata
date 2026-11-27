@@ -5,6 +5,7 @@ import { InvalidArgumentError } from '../errors.js'
 import type { ODataV3FunctionsBase, WithInstanceRef } from '../functions.js'
 import { requestWithRetry } from '../http/retry.js'
 import { request, requestStream } from '../http/transport.js'
+import { NOMETADATA_JSON } from '../read-format.js'
 import { RegisterHelper } from '../register.js'
 import { schemaOfSet } from '../schema-lookup.js'
 import { type EntityKey, normalizeBaseUrl } from '../url-builder.js'
@@ -58,7 +59,7 @@ export interface ODataV3ClientOptions extends ClientOptions {
 }
 
 const V3_BASE_HEADERS = {
-  Accept: 'application/json;odata=nometadata',
+  Accept: NOMETADATA_JSON,
   DataServiceVersion: '3.0',
   MaxDataServiceVersion: '3.0',
 }
@@ -267,12 +268,12 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
    *
    * @internal
    */
-  async transportGet(url: string, callOpts: RequestOptions) {
+  async transportGet(url: string, callOpts: RequestOptions, accept = NOMETADATA_JSON) {
     return requestWithRetry(
       {
         method: 'GET',
         url,
-        headers: this.baseHeaders(),
+        headers: { ...this.baseHeaders(), Accept: accept },
         ...(callOpts.signal !== undefined ? { signal: callOpts.signal } : {}),
       },
       this.callTransportOpts(callOpts),
@@ -294,6 +295,7 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     callOpts: RequestOptions,
     entitySet: string,
     extraHeaders: Record<string, string> = {},
+    accept = NOMETADATA_JSON,
   ): Promise<{ status: number; statusText: string; body: string; headers: Record<string, string> }> {
     const transformed = this.transformWriteBody(body, entitySet)
     // bigint → wire string via replacer (Date can't be fixed here — toJSON
@@ -309,7 +311,7 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     // body for undici to measure), which 1С's IIS host wants to avoid a 411.
     const libraryManaged: Record<string, string> =
       transformed !== undefined ? { 'Content-Type': 'application/json' } : { 'Content-Length': '0' }
-    const headers = mergeHeadersCaseInsensitive(this.baseHeaders(), extraHeaders, libraryManaged)
+    const headers = mergeHeadersCaseInsensitive({ ...this.baseHeaders(), Accept: accept }, extraHeaders, libraryManaged)
     if (transformed !== undefined) {
       // Content-Length is platform-managed on a body write — drop any caller-set
       // one (from withHeader/extraHeaders) so the forbidden header undici can
@@ -337,8 +339,9 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     callOpts: RequestOptions,
     entitySet: string,
     extraHeaders: Record<string, string> = {},
+    accept = NOMETADATA_JSON,
   ) {
-    return this.transportWrite('POST', url, body, callOpts, entitySet, extraHeaders)
+    return this.transportWrite('POST', url, body, callOpts, entitySet, extraHeaders, accept)
   }
 
   /** PATCH with JSON body. @internal */
@@ -348,8 +351,9 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     callOpts: RequestOptions,
     entitySet: string,
     extraHeaders: Record<string, string> = {},
+    accept = NOMETADATA_JSON,
   ) {
-    return this.transportWrite('PATCH', url, body, callOpts, entitySet, extraHeaders)
+    return this.transportWrite('PATCH', url, body, callOpts, entitySet, extraHeaders, accept)
   }
 
   /** PUT with JSON body. @internal */
@@ -359,8 +363,9 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
     callOpts: RequestOptions,
     entitySet: string,
     extraHeaders: Record<string, string> = {},
+    accept = NOMETADATA_JSON,
   ) {
-    return this.transportWrite('PUT', url, body, callOpts, entitySet, extraHeaders)
+    return this.transportWrite('PUT', url, body, callOpts, entitySet, extraHeaders, accept)
   }
 
   /** DELETE without body — explicit `Content-Length: 0` for IIS. @internal */
@@ -381,12 +386,12 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
    *
    * @internal
    */
-  async transportFetch(url: string, callOpts: RequestOptions): Promise<Response> {
+  async transportFetch(url: string, callOpts: RequestOptions, accept = NOMETADATA_JSON): Promise<Response> {
     const raw = await request(
       {
         method: 'GET',
         url,
-        headers: this.baseHeaders(),
+        headers: { ...this.baseHeaders(), Accept: accept },
         ...(callOpts.signal !== undefined ? { signal: callOpts.signal } : {}),
       },
       this.callTransportOpts(callOpts),

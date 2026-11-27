@@ -14,4 +14,5 @@ export type { AttemptTrace, RawResponse, RequestConfig, StreamResponse, Transpor
 export { request, requestStream } from './http/transport.js'
 export { setOwn } from './own-key.js'
 export type { CollectionResult } from './parser.js'
+export { MINIMALMETADATA_JSON, NOMETADATA_JSON, readFormat } from './read-format.js'
 export { schemaOfRef, schemaOfSet, schemaOfType, typeNameOfRef, typeNameOfSet } from './schema-lookup.js'

@@ -1,7 +1,9 @@
 // packages/client/src/url-builder.ts
+
 import { InvalidArgumentError } from './errors.js'
 import { formatNumberLiteral } from './format-number.js'
 import type { QueryBuilder } from './query/builder.js'
+import { NOMETADATA_JSON } from './read-format.js'
 import { formatInZone } from './timezone.js'
 
 /**
@@ -113,11 +115,11 @@ function pathParts(path: string): string[] {
 /**
  * Build a V3 collection URL: `<base>/<EntitySet>?$format=...&$filter=...&...`.
  */
-export function buildV3CollectionUrl(base: string, q: QueryBuilder<unknown>): string {
+export function buildV3CollectionUrl(base: string, q: QueryBuilder<unknown>, format = NOMETADATA_JSON): string {
   const path = `${base}/${encodeSegment(q.entitySet)}`
   const params = buildQueryParams(q)
-  // Always prepend $format
-  const allParams = [qp('$format', 'application/json;odata=nometadata'), ...params]
+  // Always prepend $format — `readFormat`'s, which the request's `Accept` repeats.
+  const allParams = [qp('$format', format), ...params]
   return `${path}?${allParams.join('&')}`
 }
 
@@ -125,10 +127,16 @@ export function buildV3CollectionUrl(base: string, q: QueryBuilder<unknown>): st
  * Build a V3 keyed URL: `<base>/<EntitySet>(<key>)?$format=...`. A `Date` in a
  * composite key is written in `serverTimezone`.
  */
-export function buildV3KeyUrl(base: string, entitySet: string, key: EntityKey, serverTimezone: string): string {
+export function buildV3KeyUrl(
+  base: string,
+  entitySet: string,
+  key: EntityKey,
+  serverTimezone: string,
+  format = NOMETADATA_JSON,
+): string {
   const keyExpr = formatKey(key, serverTimezone)
   const path = `${base}/${encodeSegment(entitySet)}(${keyExpr})`
-  const formatParam = qp('$format', 'application/json;odata=nometadata')
+  const formatParam = qp('$format', format)
   return `${path}?${formatParam}`
 }
 

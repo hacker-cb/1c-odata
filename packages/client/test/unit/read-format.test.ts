@@ -1,0 +1,65 @@
+import { describe, expect, it } from 'vitest'
+import { MINIMALMETADATA_JSON, NOMETADATA_JSON, readFormat } from '../../src/read-format.js'
+import type { MetadataIndex } from '../../src/validate.js'
+
+// #289: 1С withholds a ValueStorage's `_Type` in `nometadata`; a read whose reply carries a storage asks for
+// `minimalmetadata`, every other read stays `nometadata`.
+const index: MetadataIndex = {
+  schemaNamespace: 'StandardODATA',
+  schemas: {
+    Catalog_Файлы: {
+      properties: { Ref_Key: { type: 'Edm.Guid', nullable: false } },
+      valueStorages: ['Файл'],
+      navigation: { Владелец: { type: 'Catalog_Контрагенты' } },
+    },
+    Catalog_Контрагенты: {
+      properties: { Ref_Key: { type: 'Edm.Guid', nullable: false } },
+      navigation: { Логотип: { type: 'Catalog_Файлы' }, Висячая: { type: 'Catalog_Нет' } },
+    },
+  },
+  entitySetToType: { Catalog_Файлы: 'Catalog_Файлы', Catalog_Контрагенты: 'Catalog_Контрагенты' },
+}
+
+describe('readFormat (#289)', () => {
+  it('stays nometadata without an index, for a type it does not hold, and for a type without storages', () => {
+    expect(readFormat(undefined, 'Catalog_Файлы')).toBe(NOMETADATA_JSON)
+    expect(readFormat(index, undefined)).toBe(NOMETADATA_JSON)
+    expect(readFormat(index, 'Catalog_Нет')).toBe(NOMETADATA_JSON)
+    expect(readFormat(index, 'Catalog_Контрагенты')).toBe(NOMETADATA_JSON)
+  })
+
+  it.each([
+    [[], MINIMALMETADATA_JSON],
+    [['*'], MINIMALMETADATA_JSON],
+    [['**'], MINIMALMETADATA_JSON],
+    [['Ref_Key', 'Файл'], MINIMALMETADATA_JSON],
+    [['Файл_Base64Data'], MINIMALMETADATA_JSON],
+    [[' Файл_Type '], MINIMALMETADATA_JSON],
+    [['Ref_Key'], NOMETADATA_JSON],
+    [['Владелец/Файл'], NOMETADATA_JSON],
+  ])('a row of a type with a storage, $select %j → %s', (select, format) => {
+    expect(readFormat(index, 'Catalog_Файлы', { select })).toBe(format)
+  })
+
+  it.each([
+    [[], MINIMALMETADATA_JSON],
+    [['Ref_Key', 'Логотип'], MINIMALMETADATA_JSON],
+    [['Ref_Key', 'Логотип/*'], MINIMALMETADATA_JSON],
+    [['Ref_Key', 'Логотип/Файл'], MINIMALMETADATA_JSON],
+    [['Ref_Key', 'Логотип/Файл_Base64Data'], MINIMALMETADATA_JSON],
+    [['Ref_Key', 'Логотип/Ref_Key'], NOMETADATA_JSON],
+    [['Ref_Key'], NOMETADATA_JSON],
+  ])('an $expand reaching a type with a storage, $select %j → %s', (select, format) => {
+    expect(readFormat(index, 'Catalog_Контрагенты', { select, expand: ['Логотип'] })).toBe(format)
+  })
+
+  it('follows an $expand path through each navigation it names', () => {
+    expect(readFormat(index, 'Catalog_Файлы', { select: ['Ref_Key'], expand: ['Владелец/Логотип'] })).toBe(
+      NOMETADATA_JSON,
+    )
+    expect(readFormat(index, 'Catalog_Файлы', { select: ['Владелец/Логотип'], expand: ['Владелец/Логотип'] })).toBe(
+      MINIMALMETADATA_JSON,
+    )
+    expect(readFormat(index, 'Catalog_Контрагенты', { expand: ['Висячая', 'Нет', ''] })).toBe(NOMETADATA_JSON)
+  })
+})
