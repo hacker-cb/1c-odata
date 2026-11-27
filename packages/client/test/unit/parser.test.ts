@@ -109,6 +109,18 @@ describe('V3 parser', () => {
     },
   )
 
+  it.each([
+    [{ toString: null }, 'an object'],
+    [[1], 'an array'],
+    [-1, 'number -1'],
+    [null, 'null'],
+  ])('parseV3Collection refuses an odata.count of %j with a ParseError naming its kind', (count, shown) => {
+    const body = JSON.stringify({ 'odata.count': count, value: [] })
+    expect(() => parseV3Collection(body, { serverTimezone: TZ })).toThrow(
+      new ParseError(`Expected a non-negative integer row count in odata.count, got: ${shown}`),
+    )
+  })
+
   it(`ONEC_EMPTY_DATE constant matches default`, () => {
     expect(ONEC_EMPTY_DATE).toBe('0001-01-01T00:00:00')
   })

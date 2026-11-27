@@ -78,6 +78,9 @@ const DATETIME_FIELD = /^(?:\d{4})-(?:\d{2})-(?:\d{2})T(?:\d{2}):(?:\d{2}):(?:\d
  *
  * In `dateMode='string'` mode parser passes Edm.DateTime through as wire string —
  * no sentinel handling, no tz conversion. User responsibility via parseInZone helper.
+ *
+ * A body without a `value` array, or with a row that is not an object, is a
+ * `ParseError` — 1С sends an empty result as `"value": []`.
  */
 export function parseV3Collection<T>(body: string, opts: ParseOptions): CollectionResult<T> {
   const parsed = safeParse(body)
@@ -85,15 +88,69 @@ export function parseV3Collection<T>(body: string, opts: ParseOptions): Collecti
   const obj = parsed as Record<string, unknown>
   // Before the rows: a malformed count fails the response without mapping them first.
   const count = inlineCount(obj['odata.count'])
-  const value = Array.isArray(obj.value)
-    ? (obj.value as unknown[]).map((v) => mapEntity(v as Record<string, unknown>, opts))
-    : []
+  const value = collectionRows(parsed, obj.value).map((v) => mapEntity(v, opts))
   const result: CollectionResult<T> = {
     odataMetadata: typeof obj['odata.metadata'] === 'string' ? (obj['odata.metadata'] as string) : '',
     value: value as T[],
   }
   if (count !== undefined) result.count = count
   return result
+}
+
+/**
+ * The rows of a collection response — its `value` array, every row an object.
+ * 1С answers every collection read with one, an empty result as `"value": []`
+ * (checked live on entity sets and on every register virtual table), so a body
+ * without it — a gateway's `{"error": …}` with a 200, a truncated or foreign
+ * body — is a `ParseError` naming what came instead, never "no rows".
+ */
+function collectionRows(root: unknown, value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) {
+    const got =
+      value !== undefined
+        ? `"value" ${describeJson(value)}`
+        : Array.isArray(root)
+          ? 'an array at root'
+          : `no "value" — ${rootKeys(root as Record<string, unknown>)}`
+    throw new ParseError(`Expected a "value" array in the collection response, got ${got}`)
+  }
+  value.forEach((row, i) => {
+    if (typeof row !== 'object' || row === null || Array.isArray(row)) {
+      throw new ParseError(`Expected an object at value[${i}] of the collection response, got ${describeJson(row)}`)
+    }
+  })
+  return value as Record<string, unknown>[]
+}
+
+/** A JSON value by its kind, for a message — never its content beyond a short scalar. */
+function describeJson(v: unknown): string {
+  if (v === null) return 'null'
+  if (Array.isArray(v)) return 'an array'
+  if (typeof v === 'object') return 'an object'
+  // A string is cut before it is quoted — never serialized whole, never split inside a character or an escape.
+  if (typeof v === 'string') return `string ${JSON.stringify(clip(v, 50))}`
+  return `${typeof v} ${String(v)}`
+}
+
+/** `s` cut to its first `max` characters (code points), `…` marking a cut. */
+function clip(s: string, max: number): string {
+  if (s.length <= max) return s
+  let out = ''
+  let n = 0
+  for (const ch of s) {
+    if (n === max) return `${out}…`
+    out += ch
+    n++
+  }
+  return out
+}
+
+/** The first keys of a response body's root object, for a message. */
+function rootKeys(root: Record<string, unknown>): string {
+  const keys = Object.keys(root)
+  if (keys.length === 0) return 'an empty object'
+  const shown = keys.slice(0, 5).map((k) => JSON.stringify(clip(k, 40)))
+  return `keys ${shown.join(', ')}${keys.length > 5 ? `, … (${keys.length} in all)` : ''}`
 }
 
 /**
@@ -105,7 +162,8 @@ function inlineCount(raw: unknown): number | undefined {
   if (raw === undefined) return undefined
   if (typeof raw === 'string') return strictCount(raw, 'odata.count')
   if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0) return raw
-  throw new ParseError(`Expected a non-negative integer row count in odata.count, got: ${String(raw).slice(0, 50)}`)
+  // Not `String(raw)`: a JSON object with a `"toString"` key fails it with a TypeError.
+  throw new ParseError(`Expected a non-negative integer row count in odata.count, got: ${describeJson(raw)}`)
 }
 
 /**
