@@ -27,6 +27,7 @@ const CASES = [
   {
     file: 'bp_v3.0.xml',
     storage: { set: 'Catalog_ПравилаПроверкиУчета', base: 'ДополнительныеПараметры' },
+    tabular: { set: 'Catalog_УчетныеЗаписиДокументооборота', part: 'СертификатыЛичные', base: 'Содержимое' },
     none: [
       'Document_РеализацияТоваровУслуг',
       'InformationRegister_КурсыВалют',
@@ -52,7 +53,6 @@ describe('integration: readFormat over the snapshot indexes (#289)', () => {
       })
 
       it('reads a document whose tabular rows carry a storage in minimalmetadata (#290)', () => {
-        if (!('tabular' in c) || c.tabular === undefined) return
         const { set, part, base } = c.tabular
         const type = typeOf(set)
         expect(index.schemas[type ?? '']?.valueStorages).toBeUndefined()
