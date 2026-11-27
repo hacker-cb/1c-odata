@@ -14,7 +14,7 @@ import { navigationTargetEnd } from './parser/edmx-parser.js'
 
 /**
  * Build per-property constraint records for every EntityType + ComplexType.
- * Includes ValueStorage bases for EntityTypes.
+ * Includes ValueStorage bases for EntityTypes and ComplexTypes.
  * Keys are the type's local name (no `<schemaNamespace>.` prefix). Consumed
  * by the runtime client for response validation / shaping.
  */
@@ -31,11 +31,10 @@ function buildSchemas(model: EdmxModel, keep?: (typeName: string) => boolean): R
       setOwn(props, p.name, ps)
     }
     const schema: EntitySchema = { properties: props }
-    // Only EntityTypes have value storages (ComplexTypes don't have them in practice)
-    if ('key' in t) {
-      const valueStoragesSet = detectValueStorage(t)
-      if (valueStoragesSet.size > 0) schema.valueStorages = [...valueStoragesSet].sort()
-    }
+    // EntityTypes and ComplexTypes alike: a tabular part's `<Doc>_<Part>_RowType` carries storages too (86 such
+    // types in УТ 11.5) — without them its rows' halves stayed flat (#290).
+    const valueStoragesSet = detectValueStorage(t)
+    if (valueStoragesSet.size > 0) schema.valueStorages = [...valueStoragesSet].sort()
     setOwn(out, t.name, schema)
   }
   addNavigation(model, out)

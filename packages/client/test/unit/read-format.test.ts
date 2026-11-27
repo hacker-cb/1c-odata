@@ -123,3 +123,67 @@ describe('wireSelect (#286)', () => {
     expect(wireSelect(index, 'Catalog_Файлы', undefined)).toBeUndefined()
   })
 })
+
+describe('tabular parts (#290)', () => {
+  const doc: MetadataIndex = {
+    schemaNamespace: 'StandardODATA',
+    schemas: {
+      Document_X: {
+        properties: {
+          Ref_Key: { type: 'Edm.Guid', nullable: false },
+          Товары: { type: 'Collection(StandardODATA.Document_X_Товары_RowType)', nullable: true },
+          Услуги: { type: 'Collection(StandardODATA.Document_X_Услуги_RowType)', nullable: true },
+        },
+      },
+      Document_X_Товары_RowType: {
+        properties: { LineNumber: { type: 'Edm.Int64', nullable: false } },
+        valueStorages: ['Файл'],
+      },
+      Document_X_Услуги_RowType: { properties: { LineNumber: { type: 'Edm.Int64', nullable: false } } },
+    },
+    entitySetToType: { Document_X: 'Document_X' },
+  }
+
+  it.each([
+    [[], MINIMALMETADATA_JSON],
+    [['*'], MINIMALMETADATA_JSON],
+    [['Товары'], MINIMALMETADATA_JSON],
+    [['Товары/*'], MINIMALMETADATA_JSON],
+    [['Товары/Файл'], MINIMALMETADATA_JSON],
+    [['Товары/Файл_Base64Data'], MINIMALMETADATA_JSON],
+    [['Товары/**'], MINIMALMETADATA_JSON],
+    [['**'], NOMETADATA_JSON],
+    [['Ref_Key', 'Услуги'], NOMETADATA_JSON],
+    [['Товары/LineNumber'], NOMETADATA_JSON],
+  ])('a document whose tabular rows carry a storage, $select %j → %s', (select, format) => {
+    expect(readFormat(doc, 'Document_X', { select })).toBe(format)
+  })
+
+  it("follows an expanded entity's tabular parts: `<Nav>/**` leaves them out, `<Nav>/*` and `<Nav>` keep them", () => {
+    const withNav: MetadataIndex = {
+      ...doc,
+      schemas: {
+        ...doc.schemas,
+        Catalog_Y: {
+          properties: { Ref_Key: { type: 'Edm.Guid', nullable: false } },
+          navigation: { Документ: { type: 'Document_X' } },
+        },
+      },
+    }
+    const read = (select: string[]) => readFormat(withNav, 'Catalog_Y', { select, expand: ['Документ'] })
+    expect(read(['Документ/**'])).toBe(NOMETADATA_JSON)
+    expect(read(['Документ/*'])).toBe(MINIMALMETADATA_JSON)
+    expect(read(['Документ'])).toBe(MINIMALMETADATA_JSON)
+    expect(read(['Документ/Товары'])).toBe(MINIMALMETADATA_JSON)
+    expect(read(['Документ/Ref_Key'])).toBe(NOMETADATA_JSON)
+  })
+
+  it('writes a tabular row storage selected by its path as its halves', () => {
+    expect(wireSelect(doc, 'Document_X', ['Товары/Файл', 'Товары/LineNumber', 'Услуги/Файл'])).toEqual([
+      'Товары/Файл_Base64Data',
+      'Товары/Файл_Type',
+      'Товары/LineNumber',
+      'Услуги/Файл',
+    ])
+  })
+})
