@@ -69,23 +69,32 @@ const retarget = (insecure: boolean) =>
     overwrite: true,
   })
 
-describe('re-pointing a connection fails closed on a keychain that cannot delete its password', () => {
-  it('refuses, and the config keeps the old target, where the keychain delete errors', async () => {
+describe('re-pointing a connection without a password (#270, #272)', () => {
+  /** `c` as written before #272: its password in the keychain under the bare name. */
+  const nameKey = () => `${keychainServiceName(dir)}/c`
+  beforeEach(() => {
+    keychain.entries.set(nameKey(), 'old')
+  })
+
+  it('re-points even where the keychain cannot delete: the new target reads no password, the old one stays its own', async () => {
     keychain.deleteFails = true
-    await expect(retarget(false)).rejects.toThrow(/Could not delete the stored password of "c".*nothing was changed/)
-    expect(loadConfig(dir).connections.c?.baseUrl).toBe(OLD)
+    await expect(retarget(false)).resolves.toMatchObject({ passwordCleared: true })
+    const conn = loadConfig(dir).connections.c
+    expect(conn).toMatchObject({ baseUrl: NEW, passwordKey: 'target' })
+    expect(await new SecretStore({ dataDir: dir }).read('c', conn)).toBeNull()
+    // Left under the key the old record read — which no record reads now.
+    expect(keychain.entries.get(nameKey())).toBe('old')
   })
 
-  it('re-points, the password cleared, where the keychain has no entry', async () => {
-    const result = await retarget(false)
-    expect(result.passwordCleared).toBe(true)
-    expect(loadConfig(dir).connections.c?.baseUrl).toBe(NEW)
+  it('drops the old target’s password once the config no longer reads it', async () => {
+    await expect(retarget(false)).resolves.toMatchObject({ passwordCleared: true })
+    expect(keychain.entries.has(nameKey())).toBe(false)
   })
 
-  it('stays best-effort under --insecure-storage, which never reads the keychain', async () => {
+  it('under --insecure-storage too', async () => {
     keychain.deleteFails = true
     await expect(retarget(true)).resolves.toMatchObject({ passwordCleared: true })
-    expect(loadConfig(dir).connections.c?.baseUrl).toBe(NEW)
+    expect(await new SecretStore({ dataDir: dir }).read('c', loadConfig(dir).connections.c)).toBeNull()
   })
 })
 
@@ -120,22 +129,31 @@ describe('a password written while the keychain cannot store it (#257)', () => {
     expect(loadConfig(dir).connections.c?.baseUrl).toBe(NEW)
     unlockKeychain()
     expect(keychain.entries.get(keychainKey())).toBe('old')
-    expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'new', source: 'file' })
-    expect(await new SecretStore({ dataDir: dir }).source('c')).toBe('file')
+    expect(await new SecretStore({ dataDir: dir }).read('c', loadConfig(dir).connections['c'])).toEqual({
+      password: 'new',
+      source: 'file',
+    })
+    expect(await new SecretStore({ dataDir: dir }).source('c', loadConfig(dir).connections['c'])).toBe('file')
   })
 
   it('on a host without a working keychain (set and delete fail alike, nothing stored) the password goes to the file', async () => {
     keychain.setFails = true
     keychain.deleteFails = true
     await expect(writeNew()).resolves.toMatchObject({ passwordBackend: 'file' })
-    expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'new', source: 'file' })
+    expect(await new SecretStore({ dataDir: dir }).read('c', loadConfig(dir).connections['c'])).toEqual({
+      password: 'new',
+      source: 'file',
+    })
   })
 
   it('a file written under --insecure-storage outranks the keychain copy for a process that reads the keychain', async () => {
     keychain.entries.set(keychainKey(), 'old')
     keychain.deleteFails = true
     await expect(writeNew(true)).resolves.toMatchObject({ passwordBackend: 'file' })
-    expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'new', source: 'file' })
+    expect(await new SecretStore({ dataDir: dir }).read('c', loadConfig(dir).connections['c'])).toEqual({
+      password: 'new',
+      source: 'file',
+    })
   })
 
   it('drops the old keychain copy where it can', async () => {
@@ -158,7 +176,10 @@ describe('a password written while the keychain cannot store it (#257)', () => {
       password: 'newer',
       overwrite: true,
     })
-    expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'newer', source: 'keychain' })
+    expect(await new SecretStore({ dataDir: dir }).read('c', loadConfig(dir).connections['c'])).toEqual({
+      password: 'newer',
+      source: 'keychain',
+    })
   })
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
@@ -174,7 +195,7 @@ describe('a password written while the keychain cannot store it (#257)', () => {
           upsertConnection({
             dataDir: dir,
             name: 'c',
-            baseUrl: OLD,
+            baseUrl: NEW,
             login: 'u',
             serverTimezone: 'Europe/Moscow',
             password: 'newer',
@@ -186,7 +207,10 @@ describe('a password written while the keychain cannot store it (#257)', () => {
       }
       // The write failed as a whole: the config keeps its target, which still reads its own password.
       expect(loadConfig(dir).connections.c?.baseUrl).toBe(NEW)
-      expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'new', source: 'file' })
+      expect(await new SecretStore({ dataDir: dir }).read('c', loadConfig(dir).connections['c'])).toEqual({
+        password: 'new',
+        source: 'file',
+      })
     },
   )
 
@@ -205,7 +229,10 @@ describe('a password written while the keychain cannot store it (#257)', () => {
       }
       keychain.setFails = false
       expect(loadConfig(dir).connections.c?.baseUrl).toBe(OLD)
-      expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'old', source: 'keychain' })
+      expect(await new SecretStore({ dataDir: dir }).read('c', loadConfig(dir).connections['c'])).toEqual({
+        password: 'old',
+        source: 'keychain',
+      })
     },
   )
 })
@@ -241,6 +268,9 @@ describe('an agent’s connection reads only a password stored for its own targe
     expect(await resolved()).toBe('persons')
   })
 
+  /** The key a person's connection `c` on `baseUrl` keeps its password under (#272). */
+  const personKey = (baseUrl: string) => secretKey('c', { baseUrl, passwordKey: 'target' })
+
   it.each([
     ['another server', EVIL],
     ['the same server', OLD],
@@ -250,8 +280,8 @@ describe('an agent’s connection reads only a password stored for its own targe
       keychain.deleteFails = true
       expect(await removeConnection({ dataDir: dir, name: 'c' })).toBe(true)
       keychain.deleteFails = false
-      // The person's password is still in the keychain, under the name.
-      expect(keychain.entries.get(`${keychainServiceName(dir)}/c`)).toBe('persons')
+      // The person's password is still in the keychain, under the person's key for OLD.
+      expect(keychain.entries.get(`${keychainServiceName(dir)}/${personKey(OLD)}`)).toBe('persons')
       await agentAdds(url)
       expect(loadConfig(dir).connections.c).toMatchObject({ baseUrl: url, addedBy: 'agent' })
       expect(await resolved()).toBeNull()
@@ -263,6 +293,7 @@ describe('an agent’s connection reads only a password stored for its own targe
     await removeConnection({ dataDir: dir, name: 'c' })
     await agentAdds(EVIL, 'agents')
     const conn = loadConfig(dir).connections.c
+    if (conn === undefined) throw new Error('c missing')
     expect(secretKey('c', conn)).toMatch(/^c@[0-9a-f]{16}$/)
     expect(keychain.entries.get(`${keychainServiceName(dir)}/${secretKey('c', conn)}`)).toBe('agents')
     expect(await resolved()).toBe('agents')
@@ -282,6 +313,9 @@ describe('an agent’s connection reads only a password stored for its own targe
     expect(agent(' http://x:y@agent.test/odata/standard.odata ')).toBe(agent(EVIL))
     expect(agent(OLD)).not.toBe(agent(EVIL))
     expect(secretKey('c', { baseUrl: EVIL })).toBe('c')
+    expect(personKey(`${EVIL}/`)).toBe(personKey(EVIL))
+    expect(personKey(EVIL)).toMatch(/^c\+[0-9a-f]{16}$/)
+    expect(personKey(EVIL).slice(2)).toBe(agent(EVIL).slice(2)) // one hash, two forms
   })
 
   it('a person re-adding the agent’s target without a password clears what the agent stored, and leaves no stale one of theirs', async () => {
@@ -301,7 +335,8 @@ describe('an agent’s connection reads only a password stored for its own targe
     expect(result.passwordCleared).toBe(true)
     expect(loadConfig(dir).connections.c?.addedBy).toBeUndefined()
     expect(await resolved()).toBeNull()
-    expect([...keychain.entries.keys()]).toEqual([])
+    // The agent's is gone; the person's old one stays keyed to OLD, the only target that reads it.
+    expect([...keychain.entries.keys()]).toEqual([`${keychainServiceName(dir)}/${personKey(OLD)}`])
   })
 
   it('remove_connection of an agent’s connection deletes its password under the target', async () => {

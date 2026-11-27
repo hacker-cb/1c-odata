@@ -114,7 +114,9 @@ describe('a cancelled connection check aborts its $metadata download and writes 
       password: 'pw',
     })
     expect(loadConfig(dir).connections.c).toBeUndefined()
-    expect(await new SecretStore({ dataDir: dir, insecure: true }).read('c')).toBeNull()
+    expect(
+      await new SecretStore({ dataDir: dir, insecure: true }).read('c', loadConfig(dir).connections['c']),
+    ).toBeNull()
   })
 
   it('set_credentials', async () => {
@@ -129,6 +131,8 @@ describe('a cancelled connection check aborts its $metadata download and writes 
     })
     await cancelDuringVerify('set_credentials', { connection: 'c', login: 'u2', password: 'new' })
     expect(loadConfig(dir).connections.c?.login).toBe('u')
-    expect((await new SecretStore({ dataDir: dir, insecure: true }).read('c'))?.password).toBe('old')
+    expect(
+      (await new SecretStore({ dataDir: dir, insecure: true }).read('c', loadConfig(dir).connections['c']))?.password,
+    ).toBe('old')
   })
 })

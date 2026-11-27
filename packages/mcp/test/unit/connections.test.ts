@@ -69,20 +69,27 @@ describe('upsertConnection', () => {
       baseUrl: 'http://host/odata/standard.odata',
       login: 'u',
       serverTimezone: 'Europe/Moscow',
+      passwordKey: 'target',
     })
-    expect(await fileStore().read('trade')).toEqual({ password: 'pw', source: 'file' })
+    expect(await fileStore().read('trade', loadConfig(dir).connections['trade'])).toEqual({
+      password: 'pw',
+      source: 'file',
+    })
   })
 
   it('stores the password verbatim — never trims edge whitespace', async () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: '  s p a c e s  ' })
-    expect(await fileStore().read('trade')).toEqual({ password: '  s p a c e s  ', source: 'file' })
+    expect(await fileStore().read('trade', loadConfig(dir).connections['trade'])).toEqual({
+      password: '  s p a c e s  ',
+      source: 'file',
+    })
   })
 
   it('saves config only when no password is given', async () => {
     const result = await upsertConnection({ ...base, dataDir: dir, name: 'trade' })
     expect(result.passwordBackend).toBeUndefined()
     expect(loadConfig(dir).connections.trade?.login).toBe('u')
-    expect(await fileStore().read('trade')).toBeNull()
+    expect(await fileStore().read('trade', loadConfig(dir).connections['trade'])).toBeNull()
   })
 
   it('trims surrounding whitespace from serverTimezone (so a valid zone is not rejected)', async () => {
@@ -151,14 +158,17 @@ describe('upsertConnection', () => {
       overwrite: true,
     })
     expect(r.passwordCleared).toBe(true)
-    expect(await fileStore().read('trade')).toBeNull()
+    expect(await fileStore().read('trade', loadConfig(dir).connections['trade'])).toBeNull()
   })
 
   it('keeps the stored password on a passwordless overwrite that does not change the auth target', async () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'pw' })
     const r = await upsertConnection({ ...base, dataDir: dir, name: 'trade', serverTimezone: 'UTC', overwrite: true })
     expect(r.passwordCleared).toBeUndefined()
-    expect(await fileStore().read('trade')).toEqual({ password: 'pw', source: 'file' })
+    expect(await fileStore().read('trade', loadConfig(dir).connections['trade'])).toEqual({
+      password: 'pw',
+      source: 'file',
+    })
   })
 })
 
@@ -210,7 +220,7 @@ describe('removeConnection', () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'pw' })
     expect(await removeConnection({ dataDir: dir, name: 'trade', insecure: true })).toBe(true)
     expect(loadConfig(dir).connections.trade).toBeUndefined()
-    expect(await fileStore().read('trade')).toBeNull()
+    expect(await fileStore().read('trade', loadConfig(dir).connections['trade'])).toBeNull()
   })
 
   it('returns false for an unknown connection', async () => {
@@ -244,7 +254,10 @@ describe('setConnectionLabel', () => {
     expect(loadConfig(dir).connections.trade?.label).toBe('Торговля')
     // Credentials and the rest of the descriptor are preserved.
     expect(loadConfig(dir).connections.trade?.login).toBe('u')
-    expect(await fileStore().read('trade')).toEqual({ password: 'pw', source: 'file' })
+    expect(await fileStore().read('trade', loadConfig(dir).connections['trade'])).toEqual({
+      password: 'pw',
+      source: 'file',
+    })
   })
 
   it('clears the label with a blank value (reverts to the name fallback)', async () => {
@@ -271,7 +284,10 @@ describe('updateConnectionCredentials', () => {
     })
     expect(result).toEqual({ loginUpdated: true, passwordUpdated: false })
     expect(loadConfig(dir).connections.trade?.login).toBe('newuser')
-    expect(await fileStore().read('trade')).toEqual({ password: 'pw', source: 'file' })
+    expect(await fileStore().read('trade', loadConfig(dir).connections['trade'])).toEqual({
+      password: 'pw',
+      source: 'file',
+    })
   })
 
   it('updates the password only, keeping the login', async () => {
@@ -285,7 +301,10 @@ describe('updateConnectionCredentials', () => {
     })
     expect(result).toEqual({ loginUpdated: false, passwordUpdated: true, passwordBackend: 'file' })
     expect(loadConfig(dir).connections.trade?.login).toBe('u')
-    expect(await fileStore().read('trade')).toEqual({ password: 'new', source: 'file' })
+    expect(await fileStore().read('trade', loadConfig(dir).connections['trade'])).toEqual({
+      password: 'new',
+      source: 'file',
+    })
   })
 
   it('updates both together and preserves the label', async () => {
@@ -302,7 +321,10 @@ describe('updateConnectionCredentials', () => {
     const conn = loadConfig(dir).connections.trade
     expect(conn?.login).toBe('newuser')
     expect(conn?.label).toBe('Торговля')
-    expect(await fileStore().read('trade')).toEqual({ password: 'new', source: 'file' })
+    expect(await fileStore().read('trade', loadConfig(dir).connections['trade'])).toEqual({
+      password: 'new',
+      source: 'file',
+    })
   })
 
   it('trims the login and reports loginUpdated false when it matches the current one', async () => {
@@ -392,7 +414,7 @@ describe('a write cancelled while it waits for the config lock writes nothing (#
     await first
     await expect(queued).rejects.toThrow()
     expect(loadConfig(dir).connections.a).toBeDefined()
-    expect(await fileStore().read('a')).toEqual({ password: 'pa', source: 'file' })
+    expect(await fileStore().read('a', loadConfig(dir).connections['a'])).toEqual({ password: 'pa', source: 'file' })
   })
 
   it('setConnectionLabel', async () => {

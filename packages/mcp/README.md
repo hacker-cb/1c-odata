@@ -93,9 +93,9 @@ target that a process holding it would send the password to. So, whatever its ow
   process: give it a password through `add_connection` / `set_credentials`, or have a person re-add it with the
   CLI `add --force`, which drops the mark. `list` and `list_connections` show the mark.
 - Such a connection also **reads only a password stored for its own server**: it is stored under
-  `<name>@<16 hex of sha256(base URL)>` (keychain account and `credentials.json` key), never under `<name>`,
-  where a person's connection keeps it. A password a person stored — even one a `remove_connection` could not
-  delete from the keychain — is never read for it, nor one stored for another server.
+  `<name>@<16 hex of sha256(base URL)>` (keychain account and `credentials.json` key), apart from a person's
+  connection of that name (`<name>+<…>`, below). A password a person stored — even one a `remove_connection`
+  could not delete from the keychain — is never read for it, nor one stored for another server.
 - Mixed versions: an MCP process older than this rule neither writes nor keeps the mark — update every process
   that shares the data directory.
 
@@ -180,7 +180,8 @@ nothing else would expand `~` in their `args` / `env`:
 are not expanded and stay a "not absolute" error.
 
 - **`config.json`** — connection descriptors *without* passwords (base URL, login, timezone, optional display
-  label, optional shape, and `"addedBy": "agent"` on a connection an agent added). Safe to read / surface to an
+  label, optional shape, `"addedBy": "agent"` on a connection an agent added, and `"passwordKey": "target"` on a
+  person's connection whose password is keyed to its server — see below). Safe to read / surface to an
   LLM. `shape` is written by hand (no command takes it); an overwrite (`add --force`, `add_connection` with
   `overwrite`) keeps it, as it keeps the label.
 - **Passwords** — stored in the OS keychain, or in `credentials.json` where it refuses; resolved in priority
@@ -192,8 +193,16 @@ are not expanded and stay a "not absolute" error.
     `ONEC_TVIP_TRADE_PASSWORD`, `bp_v3` → `ONEC_BP_V3_PASSWORD`.
   - **OS keychain** (`@napi-rs/keyring`, an optional dependency) — the entry is namespaced **per data
     directory**: service `1c-odata:<data-dir basename>:<first 8 hex of sha256(canonical data dir)>`, with the
-    connection name as the account (e.g. service `1c-odata:1c-odata:7149e725`, account `trade`) — for a
-    connection an agent added, `<name>@<16 hex of sha256(base URL)>`, the same key `credentials.json` uses. *Canonical* =
+    account keyed to the connection's **server** — the same key `credentials.json` uses:
+    `<name>+<16 hex of sha256(base URL)>` for a connection a person added (e.g. service
+    `1c-odata:1c-odata:7149e725`, account `trade+3f2a…`), `<name>@<the same hash>` for one an agent added. A
+    password is therefore only ever read for the server it was stored for: a copy a locked keychain kept, or one
+    another process could not delete, never reaches a server the connection was re-pointed to. The *base URL*
+    here is the connection's target: no userinfo, scheme and host lower-cased, a default port (`:80`, `:443`)
+    and a trailing `/` dropped, the path as written. A person's connection added before this scheme keeps its
+    password under the bare `<name>` (no `passwordKey` in `config.json`); the next change of it — an overwrite on
+    the same base URL, `set-credentials` — moves the password to the server's key, while a re-point to another
+    base URL without a password leaves the new key empty. *Canonical* =
     the absolute path resolved (`.`/`..` collapsed), lower-cased on Windows. The basename and account are
     human-readable hints in Keychain Access / Credential Manager; the hash isolates dirs. Two clients on the
     **same** data dir share the secret; a **different** `--data-dir` / `ONEC_MCP_DATA_DIR` is a separate
