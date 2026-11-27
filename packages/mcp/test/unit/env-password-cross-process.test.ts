@@ -112,7 +112,13 @@ const expectEnvPasswordNeverSentTo = (url: string) =>
 describe('an agent in a process without ONEC_<NAME>_PASSWORD cannot route it elsewhere (#253)', () => {
   it('add_connection with overwrite to another server is refused', async () => {
     const { call, close } = await agent()
-    const res = await call('add_connection', { connection: 'prod', baseUrl: EVIL, login: 'u', overwrite: true })
+    const res = await call('add_connection', {
+      serverTimezone: 'UTC',
+      connection: 'prod',
+      baseUrl: EVIL,
+      login: 'u',
+      overwrite: true,
+    })
     await close()
     expect(res.isError).toBe(true)
     expect(loadConfig(dir).connections.prod).toMatchObject({ baseUrl: OLD })
@@ -122,7 +128,9 @@ describe('an agent in a process without ONEC_<NAME>_PASSWORD cannot route it els
   it('remove_connection + add_connection: the re-created connection is the agent’s, and takes no env password', async () => {
     const { call, close } = await agent()
     expect((await call('remove_connection', { connection: 'prod' })).isError).toBe(false)
-    expect((await call('add_connection', { connection: 'prod', baseUrl: EVIL, login: 'u' })).isError).toBe(false)
+    expect(
+      (await call('add_connection', { serverTimezone: 'UTC', connection: 'prod', baseUrl: EVIL, login: 'u' })).isError,
+    ).toBe(false)
     await close()
     expect(loadConfig(dir).connections.prod).toMatchObject({ baseUrl: EVIL, addedBy: 'agent' })
 
@@ -137,7 +145,9 @@ describe('an agent in a process without ONEC_<NAME>_PASSWORD cannot route it els
 
   it('a name nobody added yet: the agent’s connection takes no env password either', async () => {
     const { call, close } = await agent()
-    expect((await call('add_connection', { connection: 'new', baseUrl: EVIL, login: 'u' })).isError).toBe(false)
+    expect(
+      (await call('add_connection', { serverTimezone: 'UTC', connection: 'new', baseUrl: EVIL, login: 'u' })).isError,
+    ).toBe(false)
     await close()
     processA()
     await expect(pool().get('new')).rejects.toThrow(/No password for "new"/)
@@ -148,7 +158,15 @@ describe('an agent in a process without ONEC_<NAME>_PASSWORD cannot route it els
     const { call, close } = await agent()
     await call('remove_connection', { connection: 'prod' })
     expect(
-      (await call('add_connection', { connection: 'prod', baseUrl: EVIL, login: 'u', password: 'agents-own' })).isError,
+      (
+        await call('add_connection', {
+          serverTimezone: 'UTC',
+          connection: 'prod',
+          baseUrl: EVIL,
+          login: 'u',
+          password: 'agents-own',
+        })
+      ).isError,
     ).toBe(false)
     await close()
     processA()
@@ -178,8 +196,9 @@ describe('an agent in a process without ONEC_<NAME>_PASSWORD cannot route it els
 
   it('an overwrite keeping the target keeps who chose it: an agent’s stays an agent’s', async () => {
     const { call, close } = await agent()
-    await call('add_connection', { connection: 'new', baseUrl: EVIL, login: 'u' })
+    await call('add_connection', { serverTimezone: 'UTC', connection: 'new', baseUrl: EVIL, login: 'u' })
     const res = await call('add_connection', {
+      serverTimezone: 'UTC',
       connection: 'new',
       baseUrl: EVIL,
       login: 'u',
@@ -193,9 +212,9 @@ describe('an agent in a process without ONEC_<NAME>_PASSWORD cannot route it els
 
   it('the CLI add --force — a person choosing the target — drops the mark, and the env password applies again', async () => {
     const { call, close } = await agent()
-    await call('add_connection', { connection: 'new', baseUrl: EVIL, login: 'u' })
+    await call('add_connection', { serverTimezone: 'UTC', connection: 'new', baseUrl: EVIL, login: 'u' })
     await close()
-    await runAdd({ dataDir: dir, insecure: true, name: 'new', url: OLD, login: 'u', force: true })
+    await runAdd({ timezone: 'UTC', dataDir: dir, insecure: true, name: 'new', url: OLD, login: 'u', force: true })
     expect(loadConfig(dir).connections.new?.addedBy).toBeUndefined()
     processA()
     sent = []
@@ -205,11 +224,20 @@ describe('an agent in a process without ONEC_<NAME>_PASSWORD cannot route it els
 
   it('the CLI add --force refuses a typed password where it makes the env var apply: reads would not use it', async () => {
     const { call, close } = await agent()
-    await call('add_connection', { connection: 'new', baseUrl: EVIL, login: 'u' })
+    await call('add_connection', { serverTimezone: 'UTC', connection: 'new', baseUrl: EVIL, login: 'u' })
     await close()
     processA()
     await expect(
-      runAdd({ dataDir: dir, insecure: true, name: 'new', url: EVIL, login: 'u', password: 'typed', force: true }),
+      runAdd({
+        timezone: 'UTC',
+        dataDir: dir,
+        insecure: true,
+        name: 'new',
+        url: EVIL,
+        login: 'u',
+        password: 'typed',
+        force: true,
+      }),
     ).rejects.toThrow(/ONEC_NEW_PASSWORD/)
     expect(sent).toEqual([])
     expect(loadConfig(dir).connections.new?.addedBy).toBe('agent')
@@ -217,17 +245,17 @@ describe('an agent in a process without ONEC_<NAME>_PASSWORD cannot route it els
 
   it('the CLI add --force re-points an agent’s connection under a set env var: a person chooses where it goes', async () => {
     const { call, close } = await agent()
-    await call('add_connection', { connection: 'new', baseUrl: EVIL, login: 'u' })
+    await call('add_connection', { serverTimezone: 'UTC', connection: 'new', baseUrl: EVIL, login: 'u' })
     await close()
     processA()
-    await runAdd({ dataDir: dir, insecure: true, name: 'new', url: OLD, login: 'u', force: true })
+    await runAdd({ timezone: 'UTC', dataDir: dir, insecure: true, name: 'new', url: OLD, login: 'u', force: true })
     expect(loadConfig(dir).connections.new).toMatchObject({ baseUrl: OLD })
     expect(sent).toEqual([{ url: `${OLD}/$metadata`, password: ENV_PASSWORD }])
   })
 
   it('credentials of an agent’s connection change under a set env var: reads would use them, not the env one', async () => {
     const { call, close } = await agent()
-    await call('add_connection', { connection: 'new', baseUrl: EVIL, login: 'u' })
+    await call('add_connection', { serverTimezone: 'UTC', connection: 'new', baseUrl: EVIL, login: 'u' })
     processA()
     const res = await call('set_credentials', { connection: 'new', password: 'agents-own' })
     await close()
@@ -245,7 +273,7 @@ describe('an agent in a process without ONEC_<NAME>_PASSWORD cannot route it els
 
   it('the CLI list says the env var is not used for an agent’s connection', async () => {
     const { call, close } = await agent()
-    await call('add_connection', { connection: 'new', baseUrl: EVIL, login: 'u' })
+    await call('add_connection', { serverTimezone: 'UTC', connection: 'new', baseUrl: EVIL, login: 'u' })
     await close()
     processA()
     const out: string[] = []

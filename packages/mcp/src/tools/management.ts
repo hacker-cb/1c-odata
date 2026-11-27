@@ -40,9 +40,9 @@ interface AddConnectionArgs {
   connection: string
   baseUrl: string
   login: string
+  serverTimezone: string
   // `| undefined` (not just optional) to match the zod-inferred args under
   // exactOptionalPropertyTypes — the tool callback always passes every key.
-  serverTimezone?: string | undefined
   label?: string | undefined
   password?: string | undefined
   overwrite?: boolean | undefined
@@ -76,7 +76,7 @@ async function addConnection(
     name: connection,
     baseUrl,
     login,
-    serverTimezone: serverTimezone ?? 'Europe/Moscow',
+    serverTimezone,
     ...(label !== undefined ? { label } : {}),
     ...(hasPassword ? { password } : {}),
     insecure: opts.insecure ?? false,
@@ -212,7 +212,11 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
           ),
         baseUrl: z.string().describe('Service root URL, e.g. http://host/base/odata/standard.odata/'),
         login: z.string().describe('Basic-auth username'),
-        serverTimezone: z.string().optional().describe('IANA timezone (default Europe/Moscow)'),
+        serverTimezone: z
+          .string()
+          .describe(
+            'IANA timezone of the 1С server, e.g. "Europe/Moscow". Required, no default: a wrong zone silently shifts every DateTime the base returns or receives.',
+          ),
         label: z
           .string()
           .optional()

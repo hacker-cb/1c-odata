@@ -75,6 +75,13 @@ async function gatherNonInteractive(opts: AddOptions): Promise<ResolvedFields> {
   assertAddable(opts.dataDir, name, opts.force === true)
   const login = (opts.login ?? '').trim()
   if (login === '') throw new InvalidArgumentError('--login is required in non-interactive mode', { argument: 'login' })
+  const serverTimezone = (opts.timezone ?? '').trim()
+  if (serverTimezone === '') {
+    throw new InvalidArgumentError(
+      '--timezone is required in non-interactive mode: the IANA zone of the 1С server, e.g. Europe/Moscow. There is no default — a wrong zone silently shifts every DateTime.',
+      { argument: 'timezone' },
+    )
+  }
   warnIfUrlHasUserinfo((opts.url ?? '').trim())
   const resolved = await resolveNonInteractivePassword(opts, name)
   const label = opts.label?.trim()
@@ -84,10 +91,25 @@ async function gatherNonInteractive(opts: AddOptions): Promise<ResolvedFields> {
     login,
     ...(resolved !== undefined ? { password: resolved.value } : {}),
     persistPassword: resolved?.persist ?? false,
-    serverTimezone: opts.timezone ?? 'Europe/Moscow',
+    serverTimezone,
     ...(label !== undefined && label !== '' ? { label } : {}),
     overwrite: opts.force === true,
   }
+}
+
+/** How many blank answers the timezone question takes before giving up (stdin may have run dry). */
+const TIMEZONE_ATTEMPTS = 3
+
+/** Ask for the server timezone — no default offered: a wrong one silently shifts every DateTime. */
+async function promptTimezone(): Promise<string> {
+  for (let attempt = 0; attempt < TIMEZONE_ATTEMPTS; attempt++) {
+    const answer = (await promptLine('Server timezone (IANA, e.g. Europe/Moscow): ')).trim()
+    if (answer !== '') return answer
+    process.stdout.write('A timezone is required — there is no default.\n')
+  }
+  throw new InvalidArgumentError('Server timezone is required (an IANA zone, e.g. Europe/Moscow)', {
+    argument: 'timezone',
+  })
 }
 
 async function gatherInteractive(opts: AddOptions): Promise<ResolvedFields | null> {
@@ -105,7 +127,7 @@ async function gatherInteractive(opts: AddOptions): Promise<ResolvedFields | nul
   warnIfUrlHasUserinfo(baseUrl)
   const login = (await promptLine('Login: ')).trim()
   const password = await promptHidden('Password: ')
-  const serverTimezone = await promptLine('Server timezone [Europe/Moscow]: ', { default: 'Europe/Moscow' })
+  const serverTimezone = await promptTimezone()
   const label = (await promptLine('Label (optional, shown in lists): ')).trim()
   return {
     name,

@@ -24,7 +24,7 @@ Works against any 1С base at runtime via the live `$metadata` (dynamic mode) �
 | `get_entity` | Fetch a single entity by `Ref_Key`. |
 | `count` | Count rows matching an optional `$filter`. |
 | `register_query` | Register virtual tables: balance / turnovers / slices / accounting (read-only analytics). `select` picks fields and, on the aggregating tables of some 1С configurations (БП turnovers — not УТ `ТоварыНаСкладах` balance), also rolls the rows up; `filter` narrows the resulting rows; `orderBy` sorts on the server (with `top` — a top-N). Paged by 1С itself: each call reads one page (`skip` / `top`) and, in a parallel request, 1С's `total` (with `select`, rolled up — below the rows where 1С returns them un-rolled); on a big table a page still costs seconds, since 1С computes the whole virtual table every time. |
-| `add_connection` | Add a connection, or update one keeping its base URL and login (writes config; optional `label` + password; password stored securely, never returned). Never re-points an existing connection; one it creates never takes `ONEC_<NAME>_PASSWORD`. |
+| `add_connection` | Add a connection, or update one keeping its base URL and login (writes config; required `serverTimezone`, no default; optional `label` + password; password stored securely, never returned). Never re-points an existing connection; one it creates never takes `ONEC_<NAME>_PASSWORD`. |
 | `set_credentials` | Change a connection's login and/or password in place (keeps URL/timezone/label; password never returned). |
 | `set_label` | Set or clear a connection's display label (empty clears it → falls back to the name). |
 | `remove_connection` | Remove a connection and delete its stored password. |
@@ -48,7 +48,7 @@ $ npx @1c-odata/mcp add my-base
 Base URL: https://your-1c-host/base/odata/standard.odata/
 Login: your-user
 Password: ********            # typed with no echo — never stored in shell history or argv
-Server timezone [Europe/Moscow]: Europe/Moscow
+Server timezone (IANA, e.g. Europe/Moscow): Europe/Moscow   # required — no default
 Label (optional, shown in lists):
 Verifying connection… OK
 ✓ Connection "my-base" saved.
@@ -61,13 +61,15 @@ form shown here is the no-install equivalent. Other commands: `list` (no passwor
 `test <name>`, `label <name> [label]` (set/clear the display label), and `set-credentials <name>` (rotate the
 login and/or password — e.g. `set-credentials my-base --password-stdin <<<"$NEW"`).
 
-Non-interactive (scripts / CI) — pass `--url` to skip the prompts:
+Non-interactive (scripts / CI) — pass `--url` to skip the prompts; `--timezone` is then required. There is no
+default zone: the server's IANA timezone decides how every DateTime is read and written, and a wrong one shifts
+them all silently, so `add` and `add_connection` ask for it every time.
 
 ```bash
 # password from stdin (not visible in `ps`):
-npx @1c-odata/mcp add my-base --url https://host/base/odata/standard.odata/ --login user --password-stdin <<<"$PW"
+npx @1c-odata/mcp add my-base --url https://host/base/odata/standard.odata/ --login user --timezone Europe/Moscow --password-stdin <<<"$PW"
 # or store only the non-secret config and supply the password via env at runtime:
-ONEC_MY_BASE_PASSWORD=… npx @1c-odata/mcp add my-base --url https://host/base/odata/standard.odata/ --login user
+ONEC_MY_BASE_PASSWORD=… npx @1c-odata/mcp add my-base --url https://host/base/odata/standard.odata/ --login user --timezone Europe/Moscow
 ```
 
 The interactive `add` (no `--url`) needs a real terminal; in a non-TTY context (CI, an agent) it errors and

@@ -107,6 +107,7 @@ async function cancelDuringVerify(name: string, args: Record<string, unknown>): 
 describe('a cancelled connection check aborts its $metadata download and writes nothing (#236)', () => {
   it('add_connection', async () => {
     await cancelDuringVerify('add_connection', {
+      serverTimezone: 'UTC',
       connection: 'c',
       baseUrl: 'http://1c.test/odata/standard.odata',
       login: 'u',
