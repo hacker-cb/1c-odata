@@ -66,6 +66,9 @@ export interface CollectionResult<T> {
 
 const DATETIME_FIELD = /^(?:\d{4})-(?:\d{2})-(?:\d{2})T(?:\d{2}):(?:\d{2}):(?:\d{2})(?:\.\d+)?$/
 
+/** The wire form of an `Edm.Int64` 1С sends — a decimal integer string, optionally negative. */
+const INT64_WIRE = /^-?\d+$/
+
 /**
  * Parse a V3 collection response. Maps (in `dateMode='date'`, the default):
  *   - `odata.count` (string in 1С) → `number`
@@ -73,7 +76,9 @@ const DATETIME_FIELD = /^(?:\d{4})-(?:\d{2})-(?:\d{2})T(?:\d{2}):(?:\d{2}):(?:\d
  *     except sentinel `0001-01-01T00:00:00` → `null` (sentinel check runs first)
  *   - `@navigationLinkUrl` fields are passed through as strings
  *   - When `metadataIndex` + `typeHint` present: Edm.Int64 → bigint/number per
- *     `shape.int64Mode`; ValueStorage triples → ValueStorage object (or null on
+ *     `shape.int64Mode` (a value that is neither null, a decimal integer
+ *     string within the 64-bit range nor a safe-integer JSON number is a
+ *     `ParseError` in both, untouched in `'string'`); ValueStorage triples → ValueStorage object (or null on
  *     null halves; halves removed from output regardless)
  *
  * In `dateMode='string'` mode parser passes Edm.DateTime through as wire string —
@@ -241,6 +246,12 @@ function mapValue(
   opts: ParseOptions,
 ): unknown {
   const propType = schema?.properties[fieldName]?.type
+  if (propType === 'Edm.Int64') {
+    // Defaults to 'number' per the DataShape contract in connection.ts: no shape (or one without `int64Mode`)
+    // means "behave like the documented default", not "leave the wire value untouched".
+    const mode = shape?.int64Mode ?? DEFAULT_SHAPE.int64Mode
+    if (mode === 'bigint' || mode === 'number') return int64Value(v, fieldName, mode)
+  }
   if (typeof v === 'string') return convertStringValue(v, fieldName, propType, shape, opts)
   // A schema-typed date-time is a string or null on the wire; anything else would reach a `Date`-typed field
   // as-is. `dateMode: 'string'` passes values through untouched, this one included.
@@ -269,6 +280,47 @@ function mapValue(
   return v
 }
 
+/**
+ * An `Edm.Int64` wire value converted per `int64Mode` — `null`, a decimal
+ * integer string within the signed 64-bit range (what 1С sends), or a JSON
+ * number that is a safe integer. Anything else is a `ParseError` naming the
+ * field and the value, where `BigInt` threw a bare `SyntaxError` on `12x` and
+ * read `''` / ` 0x1f ` as 0n / 31n, `Number` made `12x` NaN and `''` 0, and a
+ * JSON number reached a `bigint`-typed field as-is, a fraction included.
+ */
+function int64Value(v: unknown, fieldName: string, mode: 'bigint' | 'number'): unknown {
+  if (v === null) return null
+  // A JSON number is no Edm.Int64 by the OData V3 spec, but a server or proxy sending a whole one costs no
+  // value as long as it is a safe integer — refusing it would fail every read of the set for nothing.
+  const n =
+    typeof v === 'string' ? int64OfWire(v) : typeof v === 'number' && Number.isSafeInteger(v) ? BigInt(v) : undefined
+  if (n === undefined) {
+    throw new ParseError(
+      `Edm.Int64 field ${fieldName}: expected a 64-bit integer string, a safe integer or null, got ${describeJson(v)}`,
+    )
+  }
+  if (mode === 'bigint') return n
+  const num = Number(n)
+  return num === 0 ? 0 : num // `-0` reads as 0, as it reads as 0n
+}
+
+const INT64_MIN = -(2n ** 63n)
+const INT64_MAX = 2n ** 63n - 1n
+
+/**
+ * `v` as a `bigint` where it is a decimal integer string within the signed
+ * 64-bit range, else `undefined`. Past 19 significant digits it is out of range
+ * without `BigInt` ever reading it — a long string costs no arbitrary-precision
+ * parse.
+ */
+function int64OfWire(v: string): bigint | undefined {
+  if (!INT64_WIRE.test(v)) return undefined
+  const significant = v.length - (v.match(/^-?0*/)?.[0].length ?? 0)
+  if (significant > 19) return undefined
+  const n = BigInt(v)
+  return n >= INT64_MIN && n <= INT64_MAX ? n : undefined
+}
+
 /** Convert a string wire value per its declared (or heuristically-detected) type. */
 function convertStringValue(
   v: string,
@@ -277,16 +329,6 @@ function convertStringValue(
   shape: DataShape | undefined,
   opts: ParseOptions,
 ): unknown {
-  // Edm.Int64 — apply `shape.int64Mode`. Defaults to 'number' per the DataShape
-  // contract in connection.ts; absence of an explicit shape (or an explicit
-  // shape without `int64Mode`) means "behave like the documented default", not
-  // "leave the wire string untouched".
-  if (propType === 'Edm.Int64') {
-    const mode = shape?.int64Mode ?? DEFAULT_SHAPE.int64Mode
-    if (mode === 'bigint') return BigInt(v)
-    if (mode === 'number') return Number(v)
-    return v
-  }
   // Edm.DateTime — by schema or regex heuristic.
   // `Collection(Edm.DateTime)` not handled here — 0 empirical occurrences in real
   // 1С EDMX; emitter falls back to generic `Date[]` typing, runtime leaves wire

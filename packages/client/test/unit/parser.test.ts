@@ -200,6 +200,117 @@ describe('schema-aware parsing', () => {
     expect(r.LineNumber).toBe('1234567890')
   })
 
+  describe('Edm.Int64 that is no decimal integer (#276)', () => {
+    const single = (lineNumber: unknown, int64Mode: 'number' | 'bigint' | 'string') =>
+      parseV3Single<{ LineNumber: unknown }>(JSON.stringify({ Ref_Key: 'guid', LineNumber: lineNumber }), {
+        serverTimezone: 'UTC',
+        typeHint: 'Catalog_X',
+        metadataIndex,
+        shape: { int64Mode },
+      })
+
+    const bad = ['12x', '1.5', '', ' 12', '12 ', '0x1f', '0b101', '+5', '1e3', '--1', '-']
+
+    it.each(bad.flatMap((v) => (['number', 'bigint'] as const).map((mode) => [mode, v] as const)))(
+      'int64Mode %s: %j is a ParseError naming the field and the value',
+      (mode, v) => {
+        let caught: unknown
+        try {
+          single(v, mode)
+        } catch (err) {
+          caught = err
+        }
+        expect(caught).toBeInstanceOf(ParseError)
+        expect((caught as Error).message).toBe(
+          `Edm.Int64 field LineNumber: expected a 64-bit integer string, a safe integer or null, got string ${JSON.stringify(v)}`,
+        )
+      },
+    )
+
+    it.each(bad)('int64Mode string: %j passes through untouched', (v) => {
+      expect(single(v, 'string').LineNumber).toBe(v)
+    })
+
+    it('a negative or zero-padded integer still converts in both modes', () => {
+      expect(single('-42', 'number').LineNumber).toBe(-42)
+      expect(single('-42', 'bigint').LineNumber).toBe(-42n)
+      expect(single('007', 'number').LineNumber).toBe(7)
+      expect(single('0000000000000000000000001', 'bigint').LineNumber).toBe(1n)
+      expect(single(`-${'0'.repeat(40)}9223372036854775808`, 'bigint').LineNumber).toBe(-9223372036854775808n)
+    })
+
+    it('`-0` reads as 0 in number mode, as it reads as 0n in bigint mode', () => {
+      expect(Object.is(single('-0', 'number').LineNumber, 0)).toBe(true)
+      expect(single('-0', 'bigint').LineNumber).toBe(0n)
+    })
+
+    it('null stays null in both modes', () => {
+      expect(single(null, 'number').LineNumber).toBeNull()
+      expect(single(null, 'bigint').LineNumber).toBeNull()
+    })
+
+    it('the signed 64-bit bounds convert; one past either is a ParseError', () => {
+      expect(single('9223372036854775807', 'bigint').LineNumber).toBe(9223372036854775807n)
+      expect(single('-9223372036854775808', 'bigint').LineNumber).toBe(-9223372036854775808n)
+      for (const mode of ['number', 'bigint'] as const) {
+        for (const v of ['9223372036854775808', '-9223372036854775809', '9'.repeat(309), `1${'0'.repeat(19)}`]) {
+          expect(() => single(v, mode)).toThrow(ParseError)
+        }
+      }
+    })
+
+    it('a JSON number that is a safe integer converts by the mode; `-0` reads as 0', () => {
+      expect(single(42, 'number').LineNumber).toBe(42)
+      expect(single(42, 'bigint').LineNumber).toBe(42n)
+      expect(single(-9007199254740991, 'bigint').LineNumber).toBe(-9007199254740991n)
+      // A raw body: JSON.stringify would write -0 as 0.
+      const negZero = (int64Mode: 'number' | 'bigint') =>
+        parseV3Single<{ LineNumber: unknown }>('{"LineNumber":-0}', {
+          serverTimezone: 'UTC',
+          typeHint: 'Catalog_X',
+          metadataIndex,
+          shape: { int64Mode },
+        }).LineNumber
+      expect(Object.is(negZero('number'), 0)).toBe(true)
+      expect(negZero('bigint')).toBe(0n)
+      expect(single(42, 'string').LineNumber).toBe(42)
+    })
+
+    it.each([
+      [1.5, 'number 1.5'],
+      [9007199254740992, 'number 9007199254740992'],
+      [1e300, 'number 1e+300'],
+      [true, 'boolean true'],
+      [{}, 'an object'],
+      [[], 'an array'],
+    ])('a JSON %j — no string, no safe integer — is a ParseError in both converting modes', (v, shown) => {
+      for (const mode of ['number', 'bigint'] as const) {
+        expect(() => single(v, mode)).toThrow(
+          `Edm.Int64 field LineNumber: expected a 64-bit integer string, a safe integer or null, got ${shown}`,
+        )
+      }
+      expect(single(v, 'string').LineNumber).toEqual(v)
+    })
+
+    it('a long value is cut in the message, never quoted whole', () => {
+      expect(() => single(`${'9'.repeat(60)}x`, 'bigint')).toThrow(
+        `Edm.Int64 field LineNumber: expected a 64-bit integer string, a safe integer or null, got string "${'9'.repeat(50)}…"`,
+      )
+    })
+
+    it('fails a collection read too — the response, not just one row', () => {
+      const body = JSON.stringify({
+        value: [
+          { Ref_Key: 'a', LineNumber: '1' },
+          { Ref_Key: 'b', LineNumber: '1.5' },
+        ],
+      })
+      expect(() => parseV3Collection(body, { serverTimezone: 'UTC', typeHint: 'Catalog_X', metadataIndex })).toThrow(
+        ParseError,
+      )
+    })
+  })
+
   it('keeps composite ref pair as separate flat string fields (no synthetic grouping)', () => {
     const body = JSON.stringify({
       'odata.metadata': '...',
