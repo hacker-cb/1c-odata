@@ -157,6 +157,34 @@ describe('a password written while the keychain cannot store it (#257)', () => {
     expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'newer', source: 'keychain' })
   })
 
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'a keychain write whose file copy cannot be deleted fails, and the old password stays the one read',
+    async () => {
+      keychain.setFails = true
+      await writeNew() // an earlier fallback: 'new' in the file, the config at NEW
+      keychain.setFails = false
+      chmodSync(dir, 0o500)
+      try {
+        await expect(
+          upsertConnection({
+            dataDir: dir,
+            name: 'c',
+            baseUrl: OLD,
+            login: 'u',
+            serverTimezone: 'Europe/Moscow',
+            password: 'newer',
+            overwrite: true,
+          }),
+        ).rejects.toThrow()
+      } finally {
+        chmodSync(dir, 0o700)
+      }
+      // The write failed as a whole: the config keeps its target, which still reads its own password.
+      expect(loadConfig(dir).connections.c?.baseUrl).toBe(NEW)
+      expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'new', source: 'file' })
+    },
+  )
+
   // A mode-0500 directory refuses the write only where permissions bind: not on Windows, not for root.
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'a file write that fails loses nothing: the keychain copy stays, the config keeps its target',
