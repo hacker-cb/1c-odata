@@ -192,6 +192,7 @@ describe('an overwrite keeps the stored shape (#256)', () => {
       name: 'trade',
       url: 'http://other/odata/standard.odata',
       login: 'u',
+      timezone: 'UTC',
       force: true,
     })
     expect(loadConfig(dir).connections.trade).toMatchObject({ baseUrl: 'http://other/odata/standard.odata', shape })
