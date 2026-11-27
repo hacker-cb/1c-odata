@@ -35,6 +35,8 @@ export interface DataShape {
    *          The client serializes bigint write payloads as the wire string form
    *          automatically — read → write round-trips work out of the box.
    * 'string' — wire passthrough; no automatic conversion, user-managed.
+   * In 'number' and 'bigint' a wire value that is no decimal integer (`12x`,
+   * `1.5`, `''`) fails the read with a `ParseError` naming the field.
    */
   int64Mode?: Int64Mode
   /**

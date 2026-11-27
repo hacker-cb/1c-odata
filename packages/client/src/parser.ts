@@ -66,6 +66,9 @@ export interface CollectionResult<T> {
 
 const DATETIME_FIELD = /^(?:\d{4})-(?:\d{2})-(?:\d{2})T(?:\d{2}):(?:\d{2}):(?:\d{2})(?:\.\d+)?$/
 
+/** The wire form of an `Edm.Int64` 1С sends — a decimal integer string, optionally negative. */
+const INT64_WIRE = /^-?\d+$/
+
 /**
  * Parse a V3 collection response. Maps (in `dateMode='date'`, the default):
  *   - `odata.count` (string in 1С) → `number`
@@ -73,7 +76,8 @@ const DATETIME_FIELD = /^(?:\d{4})-(?:\d{2})-(?:\d{2})T(?:\d{2}):(?:\d{2}):(?:\d
  *     except sentinel `0001-01-01T00:00:00` → `null` (sentinel check runs first)
  *   - `@navigationLinkUrl` fields are passed through as strings
  *   - When `metadataIndex` + `typeHint` present: Edm.Int64 → bigint/number per
- *     `shape.int64Mode`; ValueStorage triples → ValueStorage object (or null on
+ *     `shape.int64Mode` (a string that is no decimal integer is a `ParseError`
+ *     in both, untouched in `'string'`); ValueStorage triples → ValueStorage object (or null on
  *     null halves; halves removed from output regardless)
  *
  * In `dateMode='string'` mode parser passes Edm.DateTime through as wire string —
@@ -283,9 +287,13 @@ function convertStringValue(
   // "leave the wire string untouched".
   if (propType === 'Edm.Int64') {
     const mode = shape?.int64Mode ?? DEFAULT_SHAPE.int64Mode
-    if (mode === 'bigint') return BigInt(v)
-    if (mode === 'number') return Number(v)
-    return v
+    if (mode !== 'bigint' && mode !== 'number') return v
+    // Both converting modes take only a decimal integer: `BigInt` throws a bare `SyntaxError` on `12x` and
+    // reads `''` / ` 0x1f ` as 0n / 31n, `Number` turns `12x` into NaN and `''` into 0 — silently.
+    if (!INT64_WIRE.test(v)) {
+      throw new ParseError(`Edm.Int64 field ${fieldName}: expected an integer string, got ${describeJson(v)}`)
+    }
+    return mode === 'bigint' ? BigInt(v) : Number(v)
   }
   // Edm.DateTime — by schema or regex heuristic.
   // `Collection(Edm.DateTime)` not handled here — 0 empirical occurrences in real
