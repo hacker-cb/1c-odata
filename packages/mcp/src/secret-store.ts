@@ -180,7 +180,11 @@ export class SecretStore {
     return 'none'
   }
 
-  /** Store a password. Prefers the keychain; falls back to the 0600 file loudly. */
+  /**
+   * Store a password. Prefers the keychain; falls back to the 0600 file loudly —
+   * and refuses, writing nothing, where the keychain holds an old copy it cannot
+   * delete, as that copy would be read instead of the new password.
+   */
   async write(name: string, password: string): Promise<{ backend: 'keychain' | 'file' }> {
     if (!this.insecure) {
       const mod = await this.keyringModule()
@@ -202,8 +206,12 @@ export class SecretStore {
         )
       }
     }
-    // File backend — also drop any stale keychain copy so a later read can't pick it up.
-    await this.keychainDelete(name)
+    // File backend — first drop any stale keychain copy, which reads take before
+    // the file: one left behind would outrank the password written here once the
+    // keychain answers again (#257). Strict where this store reads the keychain:
+    // a copy that cannot be deleted refuses the write, nothing changed.
+    // `--insecure-storage` never reads it, so its delete stays best-effort.
+    await this.keychainDelete(name, !this.insecure)
     this.fileWrite(name, password)
     return { backend: 'file' }
   }
