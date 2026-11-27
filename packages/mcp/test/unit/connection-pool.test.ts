@@ -193,7 +193,7 @@ describe('ConnectionPool.get — a connection another process changed (#274)', (
     await expect(serve.get('trade')).resolves.toBe(built)
     expect((await serve.list()).find((c) => c.name === 'trade')?.loaded).toBe(true)
     // A descriptor changed too: nothing to build with, so it fails as password-less.
-    await change({ serverTimezone: 'Asia/Novosibirsk', password: undefined })
+    await change({ serverTimezone: 'Asia/Novosibirsk' })
     write('credentials.json', {})
     await expect(serve.get('trade')).rejects.toThrow(/No password for "trade"/)
     write('credentials.json', { trade: 'pw' })
