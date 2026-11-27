@@ -88,4 +88,9 @@ describe('readFormat (#289)', () => {
     )
     expect(readFormat(index, 'Catalog_Контрагенты', { expand: ['Висячая,Логотип'] })).toBe(MINIMALMETADATA_JSON)
   })
+
+  it('reads `*` only at the end of an $expand path — inside one it names nothing, however long the path', () => {
+    const path = Array(40).fill('*').concat('Логотип').join('/')
+    expect(readFormat(index, 'Catalog_Контрагенты', { select: ['Ref_Key'], expand: [path] })).toBe(NOMETADATA_JSON)
+  })
 })

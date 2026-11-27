@@ -32,7 +32,9 @@ export class V3EntitySetHandle<T> {
    *
    * Library-managed headers **cannot** be overridden on write operations:
    * `Content-Type` (always `application/json` when there's a body) wins against
-   * any `withHeader` attempt. Content-Length is set by fetch/undici from the
+   * any `withHeader` attempt, and so does the `Accept` of a type with a
+   * ValueStorage (`application/json;odata=minimalmetadata`, which brings the
+   * storage's `_Type` — #289). Content-Length is set by fetch/undici from the
    * body, except an explicit `Content-Length: 0` on a body-less write.
    */
   withHeader(name: string, value: string): this {
@@ -93,8 +95,8 @@ export class V3EntityHandle<T> {
    * override against `baseHeaders` (e.g. `.withHeader('authorization', ...)`
    * overrides the basic-auth header), later `withHeader` calls win against
    * earlier ones on the same case-insensitive name, and the library-managed
-   * `Content-Type` header wins against any `withHeader` attempt on write
-   * operations.
+   * `Content-Type` header — and the `Accept` of a type with a ValueStorage —
+   * wins against any `withHeader` attempt on write operations.
    */
   withHeader(name: string, value: string): this {
     this.extraHeaders[name] = value

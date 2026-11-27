@@ -389,12 +389,12 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
    *
    * @internal
    */
-  async transportFetch(url: string, callOpts: RequestOptions, accept = NOMETADATA_JSON): Promise<Response> {
+  async transportFetch(url: string, callOpts: RequestOptions): Promise<Response> {
     const raw = await request(
       {
         method: 'GET',
         url,
-        headers: this.readHeaders(accept),
+        headers: this.baseHeaders(),
         ...(callOpts.signal !== undefined ? { signal: callOpts.signal } : {}),
       },
       this.callTransportOpts(callOpts),

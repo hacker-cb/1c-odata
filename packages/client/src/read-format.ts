@@ -27,7 +27,7 @@ export interface ReadShape {
  * - the row, where its type has a storage and the `$select` is empty, holds
  *   `*` / `**`, or names a storage's base or either half;
  * - an entity an `$expand` path reaches through `EntitySchema.navigation` (`*`
- *   reaching every navigation of its level), where its type has a storage and
+ *   ending a path reaches every navigation of its level), where its type has a storage and
  *   the `$select` keeps it whole — is empty, holds a root `*` / `**`, or names
  *   the path, one of its ancestors, or `<that>/*` / `<that>/**` — or names a
  *   storage of it (`<path>/<base or half>`).
@@ -60,6 +60,9 @@ function expandCarriesStorage(
 ): boolean {
   const [segment, ...rest] = segments
   if (segment === undefined || segment === '') return false
+  // `*` names every navigation of its level, and only ends a path (1С allows it nowhere else): one inside a
+  // path names nothing here, rather than walk every navigation at every level after it.
+  if (segment === '*' && rest.length > 0) return false
   const navs = segment === '*' ? Object.keys(schema.navigation ?? {}) : [segment]
   for (const nav of navs) {
     const target = schemaOfType(index, typeNameOfNavigation(index, schema, nav))
