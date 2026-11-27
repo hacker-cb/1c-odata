@@ -157,7 +157,8 @@ describe('a password written while the keychain cannot store it (#257)', () => {
     expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'newer', source: 'keychain' })
   })
 
-  it.skipIf(process.platform === 'win32')(
+  // A mode-0500 directory refuses the write only where permissions bind: not on Windows, not for root.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'a file write that fails loses nothing: the keychain copy stays, the config keeps its target',
     async () => {
       keychain.entries.set(keychainKey(), 'old')

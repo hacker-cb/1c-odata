@@ -369,7 +369,14 @@ export class SecretStore {
           `(expected 0600). Run: chmod 600 ${this.credentialsPath}`,
       )
     }
-    const raw = readFileSync(this.credentialsPath, 'utf8')
+    let raw: string
+    try {
+      raw = readFileSync(this.credentialsPath, 'utf8')
+    } catch (err) {
+      // Gone since the stat: a keychain write in another process took its last copy away.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {}
+      throw err
+    }
     let parsed: unknown
     try {
       parsed = JSON.parse(raw)
