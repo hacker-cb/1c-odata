@@ -11,7 +11,7 @@ import { fetchMetadataXml } from '@1c-odata/metadata'
 import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfig } from './config.js'
 import { DEFAULT_METADATA_TIMEOUT_MS, DEFAULT_REACHABILITY_TIMEOUT_MS } from './constants.js'
 import { stripUrlUserinfo } from './redact.js'
-import { connectionEnvPassword, passwordEnvVar, SecretStore } from './secret-store.js'
+import { connectionEnvPassword, envPassword, passwordEnvVar, SecretStore } from './secret-store.js'
 
 /**
  * Throw if `name`'s password env-var slug collides with a DIFFERENT existing
@@ -65,8 +65,10 @@ export interface AddTarget {
  *   whatever this process's environment holds, as another MCP process sharing
  *   the config may hold `ONEC_<NAME>_PASSWORD` and would send it there (#253);
  *   a person re-points one with the CLI `add --force`;
- * - where the connection takes its password from `ONEC_<NAME>_PASSWORD`
- *   ({@link connectionEnvPassword}): an agent creating it, anyone pointing it
+ * - an agent creating a connection under a set `ONEC_<NAME>_PASSWORD`: a person
+ *   adds that one through the CLI;
+ * - where the connection, as the add leaves it, takes its password from
+ *   `ONEC_<NAME>_PASSWORD` ({@link connectionEnvPassword}): pointing it
  *   elsewhere (an overwrite clears only the stored password, and the env one
  *   would go to the new server), or storing a password reads would not use.
  */
@@ -76,28 +78,29 @@ function assertAddTargetAllowed(
   next: { baseUrl: string; login: string },
   add: AddTarget,
 ): void {
+  const envVar = passwordEnvVar(name)
+  if (add.byAgent && existing === undefined) {
+    if (envPassword(name) === undefined) return
+    throw new InvalidArgumentError(
+      `The password of connection "${name}" would come from ${envVar}, which is set: a connection under this name is added through the CLI (\`1c-odata-mcp add\`), not by an agent, so that a person chooses where that password goes.`,
+      { argument: 'connection' },
+    )
+  }
   if (add.byAgent && existing !== undefined && !sameAuthTarget(existing, next)) {
     throw new InvalidArgumentError(
       `add_connection does not point the existing connection "${name}" at another server or login: a person re-points it with the CLI (\`1c-odata-mcp add ${name} --force\`). Add the new target under another connection name instead.`,
       { argument: changedTargetArgument(existing, next) },
     )
   }
-  if (connectionEnvPassword(name, existing) === undefined) return
-  const envVar = passwordEnvVar(name)
+  // Judged on the connection as written: a person's add drops an agent's mark, so the env var applies to it again.
+  if (connectionEnvPassword(name, add.byAgent ? existing : undefined) === undefined) return
   if (add.storesPassword) {
     throw new InvalidArgumentError(
       `The password of connection "${name}" comes from ${envVar}, which outranks a stored one: reads would keep sending it, not the password given here. Change or unset ${envVar} instead.`,
       { argument: 'password' },
     )
   }
-  if (existing === undefined) {
-    if (!add.byAgent) return
-    throw new InvalidArgumentError(
-      `The password of connection "${name}" would come from ${envVar}, which is set: a connection under this name is added through the CLI (\`1c-odata-mcp add\`), not by an agent, so that a person chooses where that password goes.`,
-      { argument: 'connection' },
-    )
-  }
-  if (!sameAuthTarget(existing, next)) {
+  if (existing !== undefined && !sameAuthTarget(existing, next)) {
     throw new InvalidArgumentError(
       `The password of connection "${name}" comes from ${envVar}; pointing the connection at another server or login would send that password there. Unset ${envVar} first, or add the new target under another connection name.`,
       { argument: changedTargetArgument(existing, next) },

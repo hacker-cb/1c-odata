@@ -203,6 +203,18 @@ describe('an agent in a process without ONEC_<NAME>_PASSWORD cannot route it els
     expect(sent).toEqual([{ url: `${OLD}/$metadata`, password: ENV_PASSWORD }])
   })
 
+  it('the CLI add --force refuses a typed password where it makes the env var apply: reads would not use it', async () => {
+    const { call, close } = await agent()
+    await call('add_connection', { connection: 'new', baseUrl: EVIL, login: 'u' })
+    await close()
+    processA()
+    await expect(
+      runAdd({ dataDir: dir, insecure: true, name: 'new', url: EVIL, login: 'u', password: 'typed', force: true }),
+    ).rejects.toThrow(/ONEC_NEW_PASSWORD/)
+    expect(sent).toEqual([])
+    expect(loadConfig(dir).connections.new?.addedBy).toBe('agent')
+  })
+
   it('credentials of an agent’s connection change under a set env var: reads would use them, not the env one', async () => {
     const { call, close } = await agent()
     await call('add_connection', { connection: 'new', baseUrl: EVIL, login: 'u' })
