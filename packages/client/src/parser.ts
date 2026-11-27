@@ -148,7 +148,8 @@ function inlineCount(raw: unknown): number | undefined {
   if (raw === undefined) return undefined
   if (typeof raw === 'string') return strictCount(raw, 'odata.count')
   if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw >= 0) return raw
-  throw new ParseError(`Expected a non-negative integer row count in odata.count, got: ${String(raw).slice(0, 50)}`)
+  // Not `String(raw)`: a JSON object with a `"toString"` key fails it with a TypeError.
+  throw new ParseError(`Expected a non-negative integer row count in odata.count, got ${describeJson(raw)}`)
 }
 
 /**
