@@ -350,8 +350,8 @@ export function makeGuidLiteral(value: string): FieldExpr<Guid> {
 /**
  * The row schema of a tabular part `field` — what `any()`/`all()` give their
  * lambda's fields — resolved from its declared `Collection(<ns>.<Row>)` type
- * through the context's index by `schema-lookup.ts` — the rule `parser.ts`
- * resolves a nested value's type by.
+ * through the context's index with `schema-lookup.ts` — the same rule
+ * `parser.ts` uses for the type of a nested value.
  * `undefined` without an index, for a field the proxy built with no schema, or
  * for a row type the index does not hold.
  *
