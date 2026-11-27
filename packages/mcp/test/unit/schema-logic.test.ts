@@ -22,14 +22,18 @@ describe('describeEntity', () => {
     }
   })
 
-  it('resolves a set only where the index holds its type’s schema, as the read and write paths do', () => {
+  it('describes every set list_entities lists — a set whose type has no schema too, without properties', () => {
     const idx = {
       schemaNamespace: 'StandardODATA',
       schemas: { Catalog_X: { properties: { Ref_Key: { type: 'Edm.Guid', nullable: false } } } },
       entitySetToType: { Catalog_X: 'Catalog_X', Catalog_Orphan: 'Catalog_Missing' },
     } as unknown as MetadataIndex
     expect(describeEntity(idx, edmx, 'Catalog_X')).toMatchObject({ entitySet: 'Catalog_X', entityType: 'Catalog_X' })
-    expect(() => describeEntity(idx, edmx, 'Catalog_Orphan')).toThrow(/Unknown entity/)
+    expect(describeEntity(idx, edmx, 'Catalog_Orphan')).toMatchObject({
+      entitySet: 'Catalog_Orphan',
+      entityType: 'Catalog_Missing',
+      properties: [],
+    })
   })
 
   it('resolves a set and a type named `__proto__` held as own keys', () => {
