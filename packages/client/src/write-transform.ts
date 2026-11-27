@@ -76,9 +76,14 @@ export function bigintToStringReplacer(_key: string, v: unknown): unknown {
 
 /** Type guard for the grouped ValueStorage read form `{ contentType, base64Data }`. */
 function isValueStorageObject(v: unknown): v is { contentType: string; base64Data: string } {
-  if (typeof v !== 'object' || v === null) return false
+  if (typeof v !== 'object' || v === null || serializesItself(v)) return false
   const o = v as Record<string, unknown>
   return typeof o.contentType === 'string' && typeof o.base64Data === 'string'
+}
+
+/** Whether `v` has a `toJSON` (own or inherited) — `JSON.stringify` sends what it returns, not `v`'s fields. */
+function serializesItself(v: object): boolean {
+  return typeof (v as { toJSON?: unknown }).toJSON === 'function'
 }
 
 /** Recurse into a Collection(<ns>.Foo) field, transforming each element. */
@@ -127,15 +132,10 @@ function transformNestedComplex(
  * value heuristic — `Date` instances convert via `transformDateValuesUntyped`.
  * Recursive for nested entities (tabular parts and single nested ComplexType).
  *
- * ValueStorage fields: the read side groups `<base>_Base64Data` + `<base>_Type`
- * into a single `{ contentType, base64Data }` object under `<base>`. This
- * splits that object back into the two wire halves (same shape `writeStream`
- * PATCHes), so the read form is a valid write form — a natural read → modify →
- * patch round-trip otherwise sends a body 1С does not understand.
+ * ValueStorage fields are not this function's: {@link splitValueStorages}
+ * writes them back as their wire halves, in every `dateMode`.
  *
- * In `dateMode: 'string'` mode this function is a no-op — full passthrough
- * (the client also short-circuits before calling it, so ValueStorage splitting
- * does not apply in that advanced raw-wire mode; use `writeStream` instead).
+ * In `dateMode: 'string'` mode this function is a no-op — full passthrough.
  *
  * @internal
  */
@@ -190,19 +190,100 @@ export function transformDatesToWire(
     setOwn(out, name, v)
   }
 
-  // Split each grouped ValueStorage back into its two wire halves — symmetric
-  // with the read-side grouping in parser.ts `mapEntity`. EntityTypes and tabular row types (ComplexTypes, #290)
-  // carry `valueStorages`; a string/undefined value (the user passed wire halves directly, or cleared the field)
-  // is left untouched.
-  for (const base of schema.valueStorages ?? []) {
-    // Own only: a base named `__proto__` the payload does not carry would read the accessor.
-    const grouped = Object.hasOwn(out, base) ? out[base] : undefined
-    if (isValueStorageObject(grouped)) {
-      out[`${base}_Type`] = grouped.contentType
-      out[`${base}_Base64Data`] = grouped.base64Data
-      delete out[base]
+  return out
+}
+
+/**
+ * Write every grouped ValueStorage of a write body back as the wire halves 1С
+ * edits a storage through (#293) — of the body and of its tabular rows and
+ * nested ComplexTypes, as `schema` and `metadataIndex` declare them — so the
+ * read form (`parser.ts` `mapEntity`) is a valid write form, in every
+ * `dateMode` (a storage is no date):
+ * - `{ contentType, base64Data }` → `<base>_Type` + `<base>_Base64Data`;
+ * - `null` → `<base>_Base64Data: null`, `<base>_Type` left out — 1С edits a
+ *   storage through `_Base64Data` alone, and its docs name no form for
+ *   clearing one;
+ * - a half the payload sets itself (not `undefined`) wins over `<base>`, the
+ *   other half taken from `<base>`: a row read back with new bytes written
+ *   into `<base>_Base64Data` keeps them, not the stale `<base>` beside them;
+ * - anything else under `<base>` is left as it came.
+ * A body, row or value with a `toJSON` serializes itself and is sent as it
+ * serializes — nothing in it is split; any other is split over its own
+ * enumerable fields (what `JSON.stringify` sends), each read once. An object
+ * nothing changes in is returned as it came; a changed one is a plain object.
+ *
+ * @internal
+ */
+export function splitValueStorages(
+  body: Record<string, unknown>,
+  schema: EntitySchema,
+  metadataIndex: MetadataIndex,
+): Record<string, unknown> {
+  if (!carriesStorage(schema, metadataIndex)) return body
+  // A body that serializes itself (`toJSON`, read once) goes as it serializes: nothing in it is split. Any other is
+  // split over its own enumerable fields — what `JSON.stringify` sends — each read once.
+  if (serializesItself(body)) return body
+  const fields = new Map(Object.entries(body))
+  let changed = false
+  for (const [name, v] of fields) {
+    const propType = Object.hasOwn(schema.properties, name) ? schema.properties[name]?.type : undefined
+    if (propType === undefined || propType.startsWith('Edm.')) continue
+    const inner = schemaOfRef(metadataIndex, propType)
+    if (inner === undefined || !carriesStorage(inner, metadataIndex)) continue
+    if (Array.isArray(v) && propType.startsWith('Collection(')) {
+      let rowsChanged = false
+      const rows = v.map((row) => {
+        if (typeof row !== 'object' || row === null || Array.isArray(row)) return row
+        const next = splitValueStorages(row as Record<string, unknown>, inner, metadataIndex)
+        if (next !== row) rowsChanged = true
+        return next
+      })
+      if (rowsChanged) {
+        fields.set(name, rows)
+        changed = true
+      }
+    } else if (typeof v === 'object' && v !== null && !Array.isArray(v) && !propType.startsWith('Collection(')) {
+      const next = splitValueStorages(v as Record<string, unknown>, inner, metadataIndex)
+      if (next !== v) {
+        fields.set(name, next)
+        changed = true
+      }
     }
   }
-
+  for (const base of schema.valueStorages ?? []) {
+    if (!fields.has(base)) continue
+    const grouped = fields.get(base)
+    if (grouped !== null && !isValueStorageObject(grouped)) continue
+    const b64Key = `${base}_Base64Data`
+    const typeKey = `${base}_Type`
+    const b64 = fields.get(b64Key) !== undefined ? fields.get(b64Key) : grouped === null ? null : grouped.base64Data
+    const type =
+      fields.get(typeKey) !== undefined ? fields.get(typeKey) : grouped === null ? undefined : grouped.contentType
+    fields.delete(base)
+    fields.set(b64Key, b64)
+    if (type !== undefined) fields.set(typeKey, type)
+    else fields.delete(typeKey)
+    changed = true
+  }
+  if (!changed) return body
+  // Fields are written as own keys (`setOwn`) — `__proto__` included.
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of fields) setOwn(out, k, v)
   return out
+}
+
+/**
+ * Whether an entity of `schema` can carry a ValueStorage — its own, or one of
+ * a tabular row or nested ComplexType it declares, at any depth.
+ */
+function carriesStorage(schema: EntitySchema, metadataIndex: MetadataIndex, seen = new Set<EntitySchema>()): boolean {
+  if ((schema.valueStorages ?? []).length > 0) return true
+  if (seen.has(schema)) return false
+  seen.add(schema)
+  for (const prop of Object.values(schema.properties)) {
+    if (prop.type.startsWith('Edm.')) continue
+    const inner = schemaOfRef(metadataIndex, prop.type)
+    if (inner !== undefined && carriesStorage(inner, metadataIndex, seen)) return true
+  }
+  return false
 }

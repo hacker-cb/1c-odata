@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { EntitySchema, MetadataIndex } from '../../src/validate.js'
-import { bigintToStringReplacer, transformDatesToWire, transformDateValuesUntyped } from '../../src/write-transform.js'
+import {
+  bigintToStringReplacer,
+  splitValueStorages,
+  transformDatesToWire,
+  transformDateValuesUntyped,
+} from '../../src/write-transform.js'
 
 const TZ = 'Europe/Moscow'
 
@@ -80,55 +85,114 @@ describe('transformDatesToWire — dateMode=date', () => {
   })
 })
 
-describe('transformDatesToWire — ValueStorage round-trip', () => {
+describe('splitValueStorages — a storage read back is written by its halves (#293)', () => {
   const withVs: EntitySchema = {
     properties: {
       Ref_Key: { type: 'Edm.Guid', nullable: false },
       Файл: { type: 'Edm.Stream', nullable: true },
       Файл_Base64Data: { type: 'Edm.Binary', nullable: true },
       Файл_Type: { type: 'Edm.String', nullable: true },
+      Товары: { type: 'Collection(StandardODATA.Строка)', nullable: true },
     },
     valueStorages: ['Файл'],
   }
+  const index: MetadataIndex = {
+    ...baseMetadata,
+    schemas: { ...baseMetadata.schemas, Строка: { properties: {}, valueStorages: ['Скан'] } },
+  }
+  const split = (body: Record<string, unknown>) => splitValueStorages(body, withVs, index)
 
   it('splits a grouped ValueStorage object back into the two wire halves', () => {
-    const out = transformDatesToWire(
-      { Ref_Key: 'g', Файл: { contentType: 'image/png', base64Data: 'aGk=' } },
-      withVs,
-      TZ,
-      baseMetadata,
-      'date',
-    )
-    expect(out.Файл_Type).toBe('image/png')
-    expect(out.Файл_Base64Data).toBe('aGk=')
-    expect(out).not.toHaveProperty('Файл')
+    expect(split({ Ref_Key: 'g', Файл: { contentType: 'image/png', base64Data: 'aGk=' } })).toEqual({
+      Ref_Key: 'g',
+      Файл_Type: 'image/png',
+      Файл_Base64Data: 'aGk=',
+    })
   })
 
-  it('leaves already-split wire halves untouched (no double processing)', () => {
-    const out = transformDatesToWire(
-      { Файл_Type: 'image/png', Файл_Base64Data: 'aGk=' },
-      withVs,
-      TZ,
-      baseMetadata,
-      'date',
-    )
-    expect(out.Файл_Type).toBe('image/png')
-    expect(out.Файл_Base64Data).toBe('aGk=')
-    expect(out).not.toHaveProperty('Файл')
+  it('writes a null storage as `_Base64Data: null`, `_Type` left out', () => {
+    expect(split({ Файл: null })).toEqual({ Файл_Base64Data: null })
   })
 
-  it('does not split a non-ValueStorage-shaped value under the base key', () => {
-    // A bare string (e.g. user clearing the field) is not the grouped object.
-    const out = transformDatesToWire({ Файл: '' }, withVs, TZ, baseMetadata, 'date')
-    expect(out.Файл).toBe('')
-    expect(out).not.toHaveProperty('Файл_Type')
+  it('lets each half the payload sets win, the other taken from the grouped value', () => {
+    const stale = { contentType: 'image/png', base64Data: 'b2xk' }
+    expect(split({ Файл: stale, Файл_Base64Data: 'bmV3' })).toEqual({ Файл_Type: 'image/png', Файл_Base64Data: 'bmV3' })
+    expect(split({ Файл: stale, Файл_Type: 'image/jpeg' })).toEqual({
+      Файл_Type: 'image/jpeg',
+      Файл_Base64Data: 'b2xk',
+    })
+    expect(split({ Файл: null, Файл_Type: 'image/jpeg' })).toEqual({ Файл_Type: 'image/jpeg', Файл_Base64Data: null })
   })
 
-  it('leaves a null base value untouched (no split, no crash)', () => {
-    const out = transformDatesToWire({ Файл: null }, withVs, TZ, baseMetadata, 'date')
-    expect(out.Файл).toBeNull()
-    expect(out).not.toHaveProperty('Файл_Type')
-    expect(out).not.toHaveProperty('Файл_Base64Data')
+  it('reads a half set to undefined as not set — the grouped value is not lost to it', () => {
+    const out = split({ Файл: { contentType: 'image/png', base64Data: 'bmV3' }, Файл_Base64Data: undefined })
+    expect(out).toEqual({ Файл_Type: 'image/png', Файл_Base64Data: 'bmV3' })
+  })
+
+  it('splits a storage of a tabular row too', () => {
+    expect(split({ Товары: [{ Скан: { contentType: 'image/png', base64Data: 'aGk=' } }, { Скан: null }, 5] })).toEqual({
+      Товары: [{ Скан_Type: 'image/png', Скан_Base64Data: 'aGk=' }, { Скан_Base64Data: null }, 5],
+    })
+  })
+
+  it('leaves halves alone, and any other value under the base, as they came', () => {
+    expect(split({ Файл_Type: 'image/png', Файл_Base64Data: 'aGk=' })).toEqual({
+      Файл_Type: 'image/png',
+      Файл_Base64Data: 'aGk=',
+    })
+    expect(split({ Файл: '' })).toEqual({ Файл: '' })
+  })
+
+  it('leaves what serializes itself as it serializes; splits own enumerable fields, each read once', () => {
+    const cached = { contentType: 'image/png', base64Data: 'b2xk' }
+    // toJSON leaves the cached storage out: nothing to split, the body goes as it came.
+    const onlyComment = { Комментарий: 'x', Файл: cached, toJSON: () => ({ Комментарий: 'x' }) }
+    expect(split(onlyComment)).toBe(onlyComment)
+    // A body that serializes itself goes as it serializes, whatever its toJSON returns.
+    const withFile = { toJSON: () => ({ Файл: cached }) }
+    expect(split(withFile)).toBe(withFile)
+    // So does a value under the base that serializes itself: it is no grouped storage.
+    const raw = { contentType: 'image/png', base64Data: 'aGk=', toJSON: () => 'raw' }
+    const withRaw = { Файл: raw }
+    expect(split(withRaw)).toBe(withRaw)
+    // A non-enumerable storage is never sent, so never split.
+    const hidden = Object.defineProperty({ Комментарий: 'x' }, 'Файл', { value: cached, enumerable: false })
+    expect(split(hidden)).toBe(hidden)
+    // A getter is read once.
+    let reads = 0
+    const once = {
+      Файл: cached,
+      get Файл_Base64Data() {
+        reads++
+        return reads === 1 ? 'bmV3' : undefined
+      },
+    }
+    expect(split(once)).toEqual({ Файл_Type: 'image/png', Файл_Base64Data: 'bmV3' })
+    expect(reads).toBe(1)
+  })
+
+  it('returns a body nothing changes in as it came — itself, its prototype included', () => {
+    class Row {
+      Ref_Key = 'g'
+      toJSON() {
+        return { Ref_Key: 'from toJSON' }
+      }
+    }
+    const row = new Row()
+    expect(splitValueStorages(row as unknown as Record<string, unknown>, withVs, index)).toBe(row)
+    const rows = { Товары: [{ LineNumber: 1 }] }
+    expect(split(rows)).toBe(rows)
+  })
+})
+
+describe('transformDatesToWire — leaves ValueStorages to splitValueStorages', () => {
+  it('passes a grouped value through untouched', () => {
+    const schema: EntitySchema = {
+      properties: { Файл: { type: 'Edm.Stream', nullable: true } },
+      valueStorages: ['Файл'],
+    }
+    const grouped = { contentType: 'image/png', base64Data: 'aGk=' }
+    expect(transformDatesToWire({ Файл: grouped }, schema, TZ, baseMetadata, 'date')).toEqual({ Файл: grouped })
   })
 })
 
@@ -223,7 +287,7 @@ describe('transformDatesToWire — a `__proto__` key is written as the payload�
   })
 })
 
-describe('transformDatesToWire — a ValueStorage base named `__proto__` (#275)', () => {
+describe('splitValueStorages — a ValueStorage base named `__proto__` (#275)', () => {
   const schema: EntitySchema = {
     properties: {
       __proto___Base64Data: { type: 'Edm.Binary', nullable: true },
@@ -233,20 +297,14 @@ describe('transformDatesToWire — a ValueStorage base named `__proto__` (#275)'
   }
 
   it('wire halves alone pass through, the accessor never read as the grouped value', () => {
-    const out = transformDatesToWire(
-      { __proto___Type: 'text/plain', __proto___Base64Data: 'QQ==' },
-      schema,
-      TZ,
-      baseMetadata,
-      'date',
-    )
+    const out = splitValueStorages({ __proto___Type: 'text/plain', __proto___Base64Data: 'QQ==' }, schema, baseMetadata)
     expect(out).toEqual({ __proto___Type: 'text/plain', __proto___Base64Data: 'QQ==' })
     expect(Object.getPrototypeOf(out)).toBe(Object.prototype)
   })
 
   it('a grouped value under an own `__proto__` key splits into the halves', () => {
     const body = JSON.parse('{"__proto__":{"contentType":"text/plain","base64Data":"QQ=="}}')
-    const out = transformDatesToWire(body, schema, TZ, baseMetadata, 'date')
+    const out = splitValueStorages(body, schema, baseMetadata)
     expect(out).toEqual({ __proto___Type: 'text/plain', __proto___Base64Data: 'QQ==' })
     expect(Object.hasOwn(out, '__proto__')).toBe(false)
   })

@@ -230,10 +230,10 @@ function mapEntity(obj: Record<string, unknown>, opts: ParseOptions): Record<str
     setOwn(out, k, mapValue(v, k, schema, shape, opts))
   }
 
-  // Group ValueStorage triples: <X>_Base64Data + <X>_Type → ValueStorage, a null half → out[base] = null; the
-  // flat halves go once grouped (emitted TS does not declare them). Only a pair is grouped: a half the body
-  // sent alone (`$select` named one) — or a pair of values neither form fits — stays the field it came as, where
-  // removing it lost the value the caller asked for.
+  // Group ValueStorage triples: <X>_Base64Data + <X>_Type → ValueStorage, a null `_Base64Data` → out[base] = null;
+  // the flat halves go once grouped (emitted TS does not declare them). Only a pair is grouped: a half the body
+  // sent alone (`$select` named one) — or a pair neither form fits, bytes beside a null `_Type` among them —
+  // stays the fields it came as: read as `null`, such bytes would be cleared by writing the row back (#293).
   if (schema !== undefined) {
     for (const base of schema.valueStorages ?? []) {
       const b64Key = `${base}_Base64Data`
@@ -243,7 +243,7 @@ function mapEntity(obj: Record<string, unknown>, opts: ParseOptions): Record<str
       const ct = out[ctKey]
       if (typeof b64 === 'string' && typeof ct === 'string') {
         setOwn(out, base, { contentType: ct, base64Data: b64 })
-      } else if (b64 === null || ct === null) {
+      } else if (b64 === null && (ct === null || typeof ct === 'string')) {
         setOwn(out, base, null)
       } else {
         continue

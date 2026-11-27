@@ -429,6 +429,11 @@ describe('schema-aware parsing', () => {
       expect(r).toEqual({ Ref_Key: 'g', Файл_Base64Data: 1, Файл_Type: 'image/png' })
     })
 
+    it('keeps bytes beside a null `_Type` as they came — read as null, writing the row back would clear them (#293)', () => {
+      const r = single({ Ref_Key: 'g', Файл_Base64Data: 'aGk=', Файл_Type: null })
+      expect(r).toEqual({ Ref_Key: 'g', Файл_Base64Data: 'aGk=', Файл_Type: null })
+    })
+
     it('still groups a pair with one null half into null', () => {
       const r = single({ Ref_Key: 'g', Файл_Base64Data: null, Файл_Type: 'image/png' })
       expect(r).toEqual({ Ref_Key: 'g', Файл: null })
