@@ -76,9 +76,9 @@ const INT64_WIRE = /^-?\d+$/
  *     except sentinel `0001-01-01T00:00:00` → `null` (sentinel check runs first)
  *   - `@navigationLinkUrl` fields are passed through as strings
  *   - When `metadataIndex` + `typeHint` present: Edm.Int64 → bigint/number per
- *     `shape.int64Mode` (a value that is neither null nor a decimal integer
- *     string within the 64-bit range is a `ParseError` in both, untouched in
- *     `'string'`); ValueStorage triples → ValueStorage object (or null on
+ *     `shape.int64Mode` (a value that is neither null, a decimal integer
+ *     string within the 64-bit range nor a safe-integer JSON number is a
+ *     `ParseError` in both, untouched in `'string'`); ValueStorage triples → ValueStorage object (or null on
  *     null halves; halves removed from output regardless)
  *
  * In `dateMode='string'` mode parser passes Edm.DateTime through as wire string —
@@ -281,18 +281,22 @@ function mapValue(
 }
 
 /**
- * An `Edm.Int64` wire value converted per `int64Mode` — `null`, or a decimal
- * integer string within the signed 64-bit range: what 1С sends. Anything else
- * is a `ParseError` naming the field and the value, where `BigInt` threw a bare
- * `SyntaxError` on `12x` and read `''` / ` 0x1f ` as 0n / 31n, `Number` made
- * `12x` NaN and `''` 0, and a JSON number reached a `bigint`-typed field as-is.
+ * An `Edm.Int64` wire value converted per `int64Mode` — `null`, a decimal
+ * integer string within the signed 64-bit range (what 1С sends), or a JSON
+ * number that is a safe integer. Anything else is a `ParseError` naming the
+ * field and the value, where `BigInt` threw a bare `SyntaxError` on `12x` and
+ * read `''` / ` 0x1f ` as 0n / 31n, `Number` made `12x` NaN and `''` 0, and a
+ * JSON number reached a `bigint`-typed field as-is, a fraction included.
  */
 function int64Value(v: unknown, fieldName: string, mode: 'bigint' | 'number'): unknown {
   if (v === null) return null
-  const n = typeof v === 'string' ? int64OfWire(v) : undefined
+  // A JSON number is no Edm.Int64 by the OData V3 spec, but a server or proxy sending a whole one costs no
+  // value as long as it is a safe integer — refusing it would fail every read of the set for nothing.
+  const n =
+    typeof v === 'string' ? int64OfWire(v) : typeof v === 'number' && Number.isSafeInteger(v) ? BigInt(v) : undefined
   if (n === undefined) {
     throw new ParseError(
-      `Edm.Int64 field ${fieldName}: expected a 64-bit integer string or null, got ${describeJson(v)}`,
+      `Edm.Int64 field ${fieldName}: expected a 64-bit integer string, a safe integer or null, got ${describeJson(v)}`,
     )
   }
   if (mode === 'bigint') return n

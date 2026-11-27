@@ -35,9 +35,10 @@ export interface DataShape {
    *          The client serializes bigint write payloads as the wire string form
    *          automatically — read → write round-trips work out of the box.
    * 'string' — wire passthrough; no automatic conversion, user-managed.
-   * In 'number' and 'bigint' a wire value that is neither null nor a decimal
-   * integer string within the 64-bit range (`12x`, `1.5`, `''`, a JSON number)
-   * fails the read with a `ParseError` naming the field.
+   * In 'number' and 'bigint' a wire value that is neither null, a decimal
+   * integer string within the 64-bit range nor a safe-integer JSON number
+   * (`12x`, `1.5`, `''`, a JSON `1.5`) fails the read with a `ParseError`
+   * naming the field.
    */
   int64Mode?: Int64Mode
   /**

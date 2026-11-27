@@ -2,9 +2,9 @@
 '@1c-odata/client': minor
 ---
 
-An `Edm.Int64` value that is no 64-bit integer string fails a read with a `ParseError` under the default `int64Mode: 'number'` too, where it read silently as whatever `Number` made of it — `12x` → `NaN`, `1.5` → `1.5`, `0x1f` → `31`, `''` → `0` — and a JSON number passed through as-is (#276).
+An `Edm.Int64` value that is no 64-bit integer fails a read with a `ParseError` under the default `int64Mode: 'number'` too, where it read silently as whatever `Number` made of it — `12x` → `NaN`, `1.5` → `1.5`, `0x1f` → `31`, `''` → `0` — and a JSON number passed through as-is, a fraction included (#276).
 
-The check is the one `'bigint'` now applies: the wire value must be `null` or match `-?\d+` within the signed 64-bit range, and anything else is a `ParseError` naming the field and the value. `-0` reads as `0`. `int64Mode: 'string'` passes the wire value through untouched, as before. 1С sends `Edm.Int64` as a decimal integer string, so nothing changes for a response from 1С itself.
+The check is the one `'bigint'` now applies: the wire value must be `null`, a string matching `-?\d+` within the signed 64-bit range, or a JSON number that is a safe integer (a server or proxy sending a whole `Edm.Int64` as a number still reads); anything else — a fraction, a number past the safe range, a boolean, an object — is a `ParseError` naming the field and the value. `-0` reads as `0`. `int64Mode: 'string'` passes the wire value through untouched, as before. 1С sends `Edm.Int64` as a decimal integer string, so nothing changes for a response from 1С itself.
 
 The check runs wherever an entity is parsed — a read, and the entity `create()` / `patch()` / `put()` gets back: there such a value is a `ParseError` after the server has written, as a malformed `Edm.DateTime` already was.
 
