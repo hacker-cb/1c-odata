@@ -649,6 +649,10 @@ describe('schema-aware parsing', () => {
       expect(r.value[0]?.Строки).toEqual([{ Код: 1 }, { Код: 2 }])
     })
 
+    it('keeps a lone ValueStorage half of the expanded entity as it came (#284)', () => {
+      expect(single({ Контрагент: { Файл_Base64Data: 'aGk=' } }).Контрагент).toEqual({ Файл_Base64Data: 'aGk=' })
+    })
+
     it('keeps null for an expanded reference to nothing', () => {
       expect(single({ Контрагент: null }).Контрагент).toBeNull()
     })
