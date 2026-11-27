@@ -274,7 +274,8 @@ async function dropOldKey(
  * Build the stored descriptor. A non-blank `input.label` sets/replaces the label;
  * otherwise an existing label is preserved (so an unrelated overwrite — e.g. a
  * timezone fix — doesn't drop one set via {@link setConnectionLabel}; clearing is
- * done there). `addedBy: 'agent'` marks a connection an agent created, and stays
+ * done there). `shape` likewise: neither `add` nor `add_connection` takes one, so
+ * an overwrite keeps the stored one, re-pointed or not (#256). `addedBy: 'agent'` marks a connection an agent created, and stays
  * on one it only overwrites (it cannot re-point it); a person's add drops it.
  */
 function buildStoredConnection(
@@ -285,13 +286,14 @@ function buildStoredConnection(
 ): StoredConnection {
   const label = input.label?.trim()
   const resolvedLabel = label !== undefined && label !== '' ? label : existing?.label
+  const shape = input.shape ?? existing?.shape
   const agentTarget = byAgent && (existing === undefined || existing.addedBy === 'agent')
   return {
     baseUrl: next.baseUrl,
     login: next.login,
     serverTimezone: next.serverTimezone,
     ...(resolvedLabel !== undefined && resolvedLabel !== '' ? { label: resolvedLabel } : {}),
-    ...(input.shape !== undefined ? { shape: input.shape } : {}),
+    ...(shape !== undefined ? { shape } : {}),
     ...(agentTarget ? { addedBy: 'agent' as const } : {}),
   }
 }

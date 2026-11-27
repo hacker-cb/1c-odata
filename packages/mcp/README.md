@@ -178,7 +178,8 @@ are not expanded and stay a "not absolute" error.
 
 - **`config.json`** — connection descriptors *without* passwords (base URL, login, timezone, optional display
   label, optional shape, and `"addedBy": "agent"` on a connection an agent added). Safe to read / surface to an
-  LLM.
+  LLM. `shape` is written by hand (no command takes it); an overwrite (`add --force`, `add_connection` with
+  `overwrite`) keeps it, as it keeps the label.
 - **Passwords** — stored in the OS keychain, or in `credentials.json` where it refuses; resolved in priority
   order **env → `credentials.json` (0600) → OS keychain**:
   - **`ONEC_<NAME>_PASSWORD`** always wins — use it for CI / secret managers / agent configs — except on a
