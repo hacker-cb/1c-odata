@@ -58,7 +58,12 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
    * path in it needs its `expand()`.
    */
   async count(opts: RequestOptions = {}): Promise<number> {
-    const url = buildV3CountUrl(this.client.baseUrl, this, queryWire(this.client, this).select)
+    const index = this.client.metadataIndex
+    const url = buildV3CountUrl(
+      this.client.baseUrl,
+      this,
+      wireSelect(index, typeNameOfSet(index, this.entitySet), this.state.select),
+    )
     const raw = await this.client.transportGet(url, opts)
     return parseV3Count(raw.body)
   }
