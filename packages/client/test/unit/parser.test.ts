@@ -374,6 +374,50 @@ describe('schema-aware parsing', () => {
     expect(r.File_Type).toBeUndefined()
   })
 
+  describe('a ValueStorage half without its pair (#284)', () => {
+    const metadataIndex: MetadataIndex = {
+      schemaNamespace: 'StandardODATA',
+      schemas: {
+        Catalog_X: {
+          properties: {
+            Ref_Key: { type: 'Edm.Guid', nullable: false },
+            File: { type: 'Edm.Stream', nullable: true },
+            File_Base64Data: { type: 'Edm.Binary', nullable: true },
+            File_Type: { type: 'Edm.String', nullable: true },
+          },
+          valueStorages: ['File'],
+        },
+      },
+      entitySetToType: { Catalog_X: 'Catalog_X' },
+    }
+    const single = (row: Record<string, unknown>) =>
+      parseV3Single<Record<string, unknown>>(JSON.stringify(row), {
+        serverTimezone: 'UTC',
+        typeHint: 'Catalog_X',
+        metadataIndex,
+      })
+
+    it.each([
+      ['File_Base64Data', 'aGVsbG8='],
+      ['File_Type', 'image/png'],
+      ['File_Base64Data', null],
+      ['File_Type', null],
+    ])('keeps %s = %j sent alone as the field it came as', (key, value) => {
+      const r = single({ Ref_Key: 'g', [key]: value })
+      expect(r).toEqual({ Ref_Key: 'g', [key]: value })
+    })
+
+    it('keeps a pair neither form fits as it came', () => {
+      const r = single({ Ref_Key: 'g', File_Base64Data: 1, File_Type: 'image/png' })
+      expect(r).toEqual({ Ref_Key: 'g', File_Base64Data: 1, File_Type: 'image/png' })
+    })
+
+    it('still groups a pair with one null half into null', () => {
+      const r = single({ Ref_Key: 'g', File_Base64Data: null, File_Type: 'image/png' })
+      expect(r).toEqual({ Ref_Key: 'g', File: null })
+    })
+  })
+
   it('falls back to date-regex heuristic when no metadataIndex', () => {
     const input = '2025-03-15T00:00:00'
     const body = JSON.stringify({ 'odata.metadata': '...', SomeDate: input })

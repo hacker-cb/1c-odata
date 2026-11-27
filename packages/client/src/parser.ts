@@ -221,20 +221,26 @@ function mapEntity(obj: Record<string, unknown>, opts: ParseOptions): Record<str
     setOwn(out, k, mapValue(v, k, schema, shape, opts))
   }
 
-  // Group ValueStorage triples: <X>_Base64Data + <X>_Type → ValueStorage.
-  // Null halves: collapse to out[base] = null and remove flat halves
-  // (they're not declared in emitted TS — leaving them would leak).
+  // Group ValueStorage triples: <X>_Base64Data + <X>_Type → ValueStorage, a null half → out[base] = null; the
+  // flat halves go once grouped (emitted TS does not declare them). Only a pair is grouped: a half the body
+  // sent alone (`$select` named one) — or a pair of values neither form fits — stays the field it came as, where
+  // removing it lost the value the caller asked for.
   if (schema !== undefined) {
     for (const base of schema.valueStorages ?? []) {
-      const b64 = out[`${base}_Base64Data`]
-      const ct = out[`${base}_Type`]
+      const b64Key = `${base}_Base64Data`
+      const ctKey = `${base}_Type`
+      if (!Object.hasOwn(out, b64Key) || !Object.hasOwn(out, ctKey)) continue
+      const b64 = out[b64Key]
+      const ct = out[ctKey]
       if (typeof b64 === 'string' && typeof ct === 'string') {
         setOwn(out, base, { contentType: ct, base64Data: b64 })
       } else if (b64 === null || ct === null) {
         setOwn(out, base, null)
+      } else {
+        continue
       }
-      delete out[`${base}_Base64Data`]
-      delete out[`${base}_Type`]
+      delete out[b64Key]
+      delete out[ctKey]
     }
   }
 
