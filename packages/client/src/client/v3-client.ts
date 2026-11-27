@@ -6,6 +6,7 @@ import type { ODataV3FunctionsBase, WithInstanceRef } from '../functions.js'
 import { requestWithRetry } from '../http/retry.js'
 import { request, requestStream } from '../http/transport.js'
 import { RegisterHelper } from '../register.js'
+import { schemaOfSet } from '../schema-lookup.js'
 import { type EntityKey, normalizeBaseUrl } from '../url-builder.js'
 import { type EntitySchema, type MetadataIndex, ValidationError, validateEntity } from '../validate.js'
 import { bigintToStringReplacer, transformDatesToWire, transformDateValuesUntyped } from '../write-transform.js'
@@ -194,16 +195,13 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
    * Resolve the EntityType schema for an entity set via
    * `entitySetToType` → `schemas`. Returns `undefined` when there is no loaded
    * index, or for an entity set absent from it (forward-compat with a newer
-   * server schema). Shared by `validateBeforeWrite` and `transformWriteBody`.
+   * server schema) — own keys only, per `schema-lookup.ts`. Shared by
+   * `validateBeforeWrite` and `transformWriteBody`.
    *
    * @internal
    */
   private schemaForSet(entitySet: string): EntitySchema | undefined {
-    const idx = this.v3Opts.metadataIndex
-    if (idx === undefined) return undefined
-    const typeName = idx.entitySetToType[entitySet]
-    if (typeName === undefined) return undefined
-    return idx.schemas[typeName]
+    return schemaOfSet(this.v3Opts.metadataIndex, entitySet)
   }
 
   /**

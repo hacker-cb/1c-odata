@@ -13,7 +13,7 @@ describe('parseOptsFor', () => {
     const idx: MetadataIndex = {
       schemaNamespace: 'StandardODATA',
       entitySetToType: { AccountingRegister_X: 'AccountingRegister_X' },
-      schemas: {},
+      schemas: { AccountingRegister_X: { properties: {} } },
       shape: {},
     }
     expect(parseOptsFor({ serverTimezone: tz, metadataIndex: idx }, 'AccountingRegister_X', false)).toEqual({
@@ -27,12 +27,26 @@ describe('parseOptsFor', () => {
     const idx: MetadataIndex = {
       schemaNamespace: 'StandardODATA',
       entitySetToType: { Catalog_Items: 'Catalog_Items' },
-      schemas: {},
+      schemas: { Catalog_Items: { properties: {} } },
       shape: {},
     }
     expect(parseOptsFor({ serverTimezone: tz, metadataIndex: idx }, 'Catalog_Items')).toEqual({
       serverTimezone: tz,
       typeHint: 'Catalog_Items',
+      metadataIndex: idx,
+      shape: {},
+    })
+  })
+
+  it('omits typeHint for a set whose type the index holds no schema for (#258)', () => {
+    const idx: MetadataIndex = {
+      schemaNamespace: 'StandardODATA',
+      entitySetToType: { Catalog_Items: 'Catalog_Items' },
+      schemas: {},
+      shape: {},
+    }
+    expect(parseOptsFor({ serverTimezone: tz, metadataIndex: idx }, 'Catalog_Items')).toEqual({
+      serverTimezone: tz,
       metadataIndex: idx,
       shape: {},
     })

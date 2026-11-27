@@ -198,6 +198,32 @@ describe('FilterBuilder — numeric literal validation', () => {
     ).toThrow(InvalidArgumentError)
   })
 
+  it('refuses a non-number from untyped code with InvalidArgumentError, its toString never called', () => {
+    // `String({ toString: null })` itself throws a TypeError — the message must not go through it.
+    const odd = { toString: null } as unknown as number
+    for (const build of [
+      (f: FieldExprMap<SampleEntity>) => f.Code.substring(odd).eq('x'),
+      (f: FieldExprMap<SampleEntity>) => f.Code.substring(0, odd).eq('x'),
+      (f: FieldExprMap<SampleEntity>) => f.Date.dateadd('day', odd).gt(new Date(0)),
+    ]) {
+      let caught: unknown
+      try {
+        compileFilter<SampleEntity>('Europe/Moscow', build)
+      } catch (e) {
+        caught = e
+      }
+      expect(caught).toBeInstanceOf(InvalidArgumentError)
+      expect((caught as InvalidArgumentError).message).toMatch(/must be an integer; received an object$/)
+      expect((caught as InvalidArgumentError).received).toBe(odd)
+    }
+    expect(() =>
+      compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.substring(undefined as never).eq('x')),
+    ).toThrow('"Code:substring.start" must be an integer; received undefined')
+    expect(() => compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.substring('2' as never).eq('x'))).toThrow(
+      '"Code:substring.start" must be an integer; received "2"',
+    )
+  })
+
   it('still emits a valid substring with finite args (regression guard)', () => {
     expect(compileFilter<SampleEntity>('Europe/Moscow', (f) => f.Code.substring(1, 3).eq('abc'))).toBe(
       `substring(Code, 1, 3) eq 'abc'`,

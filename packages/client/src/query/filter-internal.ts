@@ -1,6 +1,7 @@
 // packages/client/src/query/filter-internal.ts
 import { InvalidArgumentError, ODataError } from '../errors.js'
 import { formatNumberLiteral } from '../format-number.js'
+import { schemaOfRef } from '../schema-lookup.js'
 import type { Guid } from '../types/core.js'
 import { formatScalarLiteral, GUID_RE } from '../url-builder.js'
 import type { EntitySchema, MetadataIndex } from '../validate.js'
@@ -349,20 +350,15 @@ export function makeGuidLiteral(value: string): FieldExpr<Guid> {
 /**
  * The row schema of a tabular part `field` — what `any()`/`all()` give their
  * lambda's fields — resolved from its declared `Collection(<ns>.<Row>)` type
- * through the context's index (as `parser.ts` resolves a nested value's type).
+ * through the context's index with `schema-lookup.ts` — the same rule
+ * `parser.ts` uses for the type of a nested value.
  * `undefined` without an index, for a field the proxy built with no schema, or
  * for a row type the index does not hold.
  *
  * @internal
  */
 export function rowSchemaOf(field: object, ctx: CompileContext): EntitySchema | undefined {
-  const index = ctx.metadataIndex
-  let t = fieldTypes.get(field)
-  if (index === undefined || t === undefined) return undefined
-  if (t.startsWith('Collection(') && t.endsWith(')')) t = t.slice('Collection('.length, -1)
-  const prefix = `${index.schemaNamespace}.`
-  const local = t.startsWith(prefix) ? t.slice(prefix.length) : t
-  return Object.hasOwn(index.schemas, local) ? index.schemas[local] : undefined
+  return schemaOfRef(ctx.metadataIndex, fieldTypes.get(field))
 }
 
 /**
@@ -530,9 +526,24 @@ interface RefOps {
  */
 function intLiteral(v: number, argument: string): string {
   if (!Number.isSafeInteger(v)) {
-    throw new InvalidArgumentError(`"${argument}" must be an integer; received ${String(v)}`, { argument, received: v })
+    throw new InvalidArgumentError(`"${argument}" must be an integer; received ${shownArgument(v)}`, {
+      argument,
+      received: v,
+    })
   }
   return formatNumberLiteral(v, argument)
+}
+
+/**
+ * An argument as the message shows it — never through `String()` on an object,
+ * which untyped code may hand over with a `toString` that is not callable
+ * (`{ toString: null }`) and so fail the message itself with a `TypeError`.
+ */
+function shownArgument(v: unknown): string {
+  if (typeof v === 'string') return JSON.stringify(v.length > 50 ? `${v.slice(0, 50)}…` : v)
+  if (typeof v === 'number' || typeof v === 'bigint' || typeof v === 'boolean') return String(v)
+  if (v === null || v === undefined) return String(v)
+  return `${typeof v === 'object' ? 'an' : 'a'} ${typeof v}`
 }
 
 /** The units `dateadd` / `datedifference` take — the `DateOps` signature's list. */
