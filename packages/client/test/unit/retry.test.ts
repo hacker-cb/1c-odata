@@ -564,3 +564,70 @@ describe('requestWithRetry — an attempt replaced by a retry keeps its signal (
     expect(signals.map((s) => s?.aborted)).toEqual([true, true, true])
   })
 })
+
+describe('requestWithRetry — the event beforeRequest returns is read once (#259)', () => {
+  const get = { method: 'GET' as const, url: `${base}/Catalog_X`, headers: { Authorization: auth.header } }
+
+  it('a url getter throwing on its first read is the hook’s own error: not a NetworkError, the hook not called again', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const getterErr = new Error('url unavailable')
+    let calls = 0
+    const err = await requestWithRetry(get, {
+      retry: retryPolicy,
+      hooks: {
+        beforeRequest: (req) => {
+          calls++
+          // Throws once: read inside the fetch's network error handling, it
+          // used to become a NetworkError — and the GET was sent again.
+          let reads = 0
+          const url = req.url
+          return Object.defineProperty({ ...req }, 'url', {
+            get() {
+              reads++
+              if (reads === 1) throw getterErr
+              return url
+            },
+          })
+        },
+      },
+    }).catch((e: unknown) => e)
+    expect(err).toBe(getterErr)
+    expect(calls).toBe(1)
+    expect(n).toBe(0)
+  })
+
+  it('a throwing getter on a header is the hook’s own error, never retried', async () => {
+    let n = 0
+    server.use(
+      http.get(`${base}/Catalog_X`, () => {
+        n++
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const getterErr = new Error('token unavailable')
+    let calls = 0
+    const err = await requestWithRetry(get, {
+      retry: retryPolicy,
+      hooks: {
+        beforeRequest: (req) => {
+          calls++
+          Object.defineProperty(req.headers, 'X-Token', {
+            enumerable: true,
+            get() {
+              throw getterErr
+            },
+          })
+        },
+      },
+    }).catch((e: unknown) => e)
+    expect(err).toBe(getterErr)
+    expect(calls).toBe(1)
+    expect(n).toBe(0)
+  })
+})

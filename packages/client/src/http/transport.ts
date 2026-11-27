@@ -46,8 +46,22 @@ export interface StreamResponse {
   durationMs: number
 }
 
+/**
+ * What the transport sends and reports, read once from the event
+ * `beforeRequest` left — the snapshot nothing after the hook reads past.
+ * Hooks are still handed the event itself; the transport reads only this.
+ */
+interface WireRequest {
+  method: RequestEvent['method']
+  url: string
+  headers: RequestEvent['headers']
+  body?: string
+}
+
 interface PreparedRequest {
+  /** The event later hooks are handed — the one `beforeRequest` left, carrying the request signal. */
   reqEvent: RequestEvent
+  wire: WireRequest
   fetchInit: RequestInit
   start: number
   timeoutId: ReturnType<typeof setTimeout> | undefined
@@ -115,6 +129,7 @@ async function prepareRequest(
   // beforeRequest hook may mutate headers, body, etc.
   // Read inside runHook, so even a throwing `hooks` getter counts as the hook's.
   let fetchInit: RequestInit
+  let wire: WireRequest
   try {
     // Already aborted (a caller's abort before the call, or during a retry's
     // pause): end here, before the hook is called — the same path as an abort
@@ -125,21 +140,22 @@ async function prepareRequest(
       combined,
     )
     if (result) reqEvent = result
-    // The event keeps the call's signal — the fetch runs under it, and later
-    // hooks are promised it — whether the hook returned a replacement without
-    // one or dropped it from the event it was given.
-    reqEvent = withSignal(reqEvent, combined)
-    // Read once, still inside: the method the trace records is the method sent,
-    // and a throwing getter on the event the hook returned is the hook's own
-    // error — the call ends below, its timer cleared.
-    const method = reqEvent.method
-    if (trace) trace.method = method
-    const body = reqEvent.body
+    // The snapshot, read once and still inside: a throwing getter on the event
+    // the hook returned is the hook's own error — the call ends below, its
+    // timer cleared, never retried. Nothing after this reads the event's fields
+    // for the transport: the fetch, the method the trace records and the
+    // request an error reports are the snapshot's.
+    wire = readWire(reqEvent)
+    if (trace) trace.method = wire.method
+    // The event keeps the call's signal — later hooks are promised it — whether
+    // the hook returned a replacement without one or dropped it from the event
+    // it was given.
+    reqEvent = withSignal(reqEvent, combined, wire)
     fetchInit = {
-      method,
-      headers: reqEvent.headers,
+      method: wire.method,
+      headers: wire.headers,
       signal: combined,
-      ...(body !== undefined ? { body } : {}),
+      ...(wire.body !== undefined ? { body: wire.body } : {}),
     }
   } catch (e) {
     // The callers' `finally` that clears the timer is not reached from here.
@@ -148,9 +164,18 @@ async function prepareRequest(
     // abort — rather than with the hook: classified as on the wire (a
     // TimeoutError with onError, or the caller's own reason).
     if (combined.aborted && e === combined.reason) {
+      // What the request was when the wait ended — the event as the hook left
+      // it so far, or, where reading it throws, the request as asked.
+      let asked: WireRequest
+      try {
+        asked = readWire(reqEvent)
+      } catch {
+        asked = readWire(config)
+      }
       await translateAndFireError(
         e,
         reqEvent,
+        asked,
         () => callOpts.hooks,
         timeoutSignal,
         timeoutMs,
@@ -167,17 +192,67 @@ async function prepareRequest(
     throw e
   }
 
-  return { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs, callController, signal: combined }
+  return { reqEvent, wire, fetchInit, start, timeoutId, timeoutSignal, timeoutMs, callController, signal: combined }
 }
 
 /**
- * `event` carrying `signal`: set in place where it lacks it, so the event a
- * hook returned stays the one later hooks see (its prototype and identity
- * intact); a copy only where the object refuses the write (frozen).
+ * Read the request off `event` once: `method`, `url` (as a string), `headers`
+ * and `body`. A plain headers object is copied, so a getter on a header is
+ * read here rather than inside the fetch; one fetch would iterate (`Headers`,
+ * pairs) is read into a `Headers` here for the same reason. What throws here
+ * throws to the caller of this function.
  */
-function withSignal(event: RequestEvent, signal: AbortSignal): RequestEvent {
-  if (event.signal === signal || Reflect.set(event, 'signal', signal)) return event
-  return { ...event, signal }
+function readWire(event: RequestEvent | RequestConfig): WireRequest {
+  const method = event.method
+  const url = String(event.url)
+  const headers = copyHeaders(event.headers)
+  const body = event.body
+  return body !== undefined ? { method, url, headers, body } : { method, url, headers }
+}
+
+type FetchHeaders = ConstructorParameters<typeof Headers>[0]
+
+function copyHeaders(headers: RequestEvent['headers']): RequestEvent['headers'] {
+  if (typeof headers !== 'object' || headers === null) return headers
+  // Cast: a `Headers` (or pairs) is no `Record`, but fetch takes it, and so
+  // did the transport before the snapshot — kept working, not narrowed.
+  if (Symbol.iterator in headers) return new Headers(headers as FetchHeaders) as unknown as RequestEvent['headers']
+  return { ...headers }
+}
+
+/** The snapshot's request as an event carrying `signal` — what a hook gets where its own event will not do. */
+function wireEvent(wire: WireRequest, signal: AbortSignal): RequestEvent {
+  return { ...wire, signal }
+}
+
+/**
+ * `event` carrying `signal`, for `beforeRequest`'s result, inside its error
+ * handling — what throws here is the hook's own. Set in place where it lacks
+ * it, so the event a hook returned stays the one later hooks see (its
+ * prototype and identity intact), the write read back: an object refusing it —
+ * frozen, or a setter that ignores the write — gets a copy instead, its own
+ * fields kept and the request's fields and the signal the snapshot's.
+ */
+function withSignal(event: RequestEvent, signal: AbortSignal, wire: WireRequest): RequestEvent {
+  if (event.signal === signal) return event
+  if (Reflect.set(event, 'signal', signal) && event.signal === signal) return event
+  return { ...event, ...wireEvent(wire, signal) }
+}
+
+/**
+ * `event` carrying `signal` again before a later hook, outside any hook's
+ * error handling: what an earlier hook did to the event — dropped the signal,
+ * froze it, a getter or setter that throws — never fails the call. Where it
+ * will not take the signal, the hook gets the snapshot's request instead.
+ */
+function keepSignal(event: RequestEvent, signal: AbortSignal, wire: WireRequest): RequestEvent {
+  try {
+    if (event.signal === signal) return event
+    if (Reflect.set(event, 'signal', signal) && event.signal === signal) return event
+  } catch {
+    // Read below from the snapshot.
+  }
+  return wireEvent(wire, signal)
 }
 
 /**
@@ -393,6 +468,7 @@ function isAbort(e: unknown, signal: AbortSignal | null | undefined): boolean {
 async function translateAndFireError(
   e: unknown,
   reqEvent: RequestEvent,
+  wire: WireRequest,
   readHooks: () => RequestHooks | undefined,
   timeoutSignal: AbortController | undefined,
   timeoutMs: number | undefined,
@@ -400,9 +476,10 @@ async function translateAndFireError(
   trace: AttemptTrace | undefined,
   callController: AbortController,
 ): Promise<never> {
-  const request: RequestContext = { method: reqEvent.method, url: reqEvent.url }
+  // The snapshot's, never the event's: a getter on it is not read again here.
+  const request: RequestContext = { method: wire.method, url: wire.url }
   // onError is promised the signal, whatever an earlier hook did to the event.
-  const event = requestSignal ? withSignal(reqEvent, requestSignal) : reqEvent
+  const event = requestSignal ? keepSignal(reqEvent, requestSignal, wire) : reqEvent
   // The request signal carries the reason of whichever source aborted it
   // first: a timeout only where the timer was first.
   const timedOut = (): boolean =>
@@ -505,7 +582,7 @@ export async function request(
   trace?: AttemptTrace,
 ): Promise<RawResponse> {
   const prepared = await prepareRequest(config, callOpts, trace)
-  const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs, callController, signal } = prepared
+  const { reqEvent, wire, fetchInit, start, timeoutId, timeoutSignal, timeoutMs, callController, signal } = prepared
 
   try {
     // Only the wire — the fetch and reading the body — can fail as a network
@@ -518,7 +595,7 @@ export async function request(
       // Node 22+ globalThis.fetch is undici-based; transport-level options
       // (TLS/proxy) are configured process-wide via env vars / CLI flags,
       // not per-request.
-      response = await globalThis.fetch(reqEvent.url, fetchInit)
+      response = await globalThis.fetch(wire.url, fetchInit)
       body = await response.text()
       // The exchange with 1С is over: the timeout bounded it and stops here, so
       // it never aborts req.signal under afterResponse / onError below.
@@ -528,6 +605,7 @@ export async function request(
       return await translateAndFireError(
         e,
         reqEvent,
+        wire,
         () => callOpts.hooks,
         timeoutSignal,
         timeoutMs,
@@ -560,12 +638,12 @@ export async function request(
 
     if (response.status >= 400) {
       const err = await mapResponseToError(response.status, response.statusText, headers, body, {
-        method: reqEvent.method,
-        url: reqEvent.url,
+        method: wire.method,
+        url: wire.url,
       })
       // Not bounded by the timeout — the exchange is over and the timer stopped
       // with the body read — but a caller's abort ends the wait.
-      const event = withSignal(reqEvent, signal)
+      const event = keepSignal(reqEvent, signal, wire)
       return await awaitOnError(() => callOpts.hooks?.onError?.(event, err), err, signal, callController, trace)
     }
 
@@ -617,18 +695,19 @@ export async function requestStream(
   trace?: AttemptTrace,
 ): Promise<StreamResponse> {
   const prepared = await prepareRequest(config, callOpts, trace)
-  const { reqEvent, fetchInit, start, timeoutId, timeoutSignal, timeoutMs, callController, signal } = prepared
+  const { reqEvent, wire, fetchInit, start, timeoutId, timeoutSignal, timeoutMs, callController, signal } = prepared
 
   try {
     // As in `request()`: only the fetch and reading an error body are the wire.
     let response: Response
     try {
-      response = await globalThis.fetch(reqEvent.url, fetchInit)
+      response = await globalThis.fetch(wire.url, fetchInit)
     } catch (e) {
       // The timer runs on: it bounds onError's wait below (translateAndFireError).
       return await translateAndFireError(
         e,
         reqEvent,
+        wire,
         () => callOpts.hooks,
         timeoutSignal,
         timeoutMs,
@@ -672,6 +751,7 @@ export async function requestStream(
       return await translateAndFireError(
         e,
         reqEvent,
+        wire,
         () => hooks,
         timeoutSignal,
         timeoutMs,
@@ -695,6 +775,7 @@ export async function requestStream(
         return await translateAndFireError(
           e,
           reqEvent,
+          wire,
           () => callOpts.hooks,
           timeoutSignal,
           timeoutMs,
@@ -704,11 +785,11 @@ export async function requestStream(
         )
       }
       const err = await mapResponseToError(response.status, response.statusText, headers, body, {
-        method: reqEvent.method,
-        url: reqEvent.url,
+        method: wire.method,
+        url: wire.url,
       })
       // As in request(): a caller's abort ends the wait, the timeout does not.
-      const event = withSignal(reqEvent, signal)
+      const event = keepSignal(reqEvent, signal, wire)
       return await awaitOnError(() => hooks?.onError?.(event, err), err, signal, callController, trace)
     }
 
