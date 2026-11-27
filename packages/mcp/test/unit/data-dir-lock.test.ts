@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -28,12 +29,20 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-/** Write a lock file as another owner would, its mtime `ageMs` in the past. */
+/** This process's pid namespace on Linux — a lock of this host names it. */
+const PID_NAMESPACE = process.platform === 'linux' ? readlinkSync('/proc/self/ns/pid') : undefined
+
+/** Write a lock file as another owner would (on this host: in this pid namespace), its mtime `ageMs` in the past. */
 function plantLock(owner: { pid: number; hostname: string } | string, ageMs = 0): void {
   const raw =
     typeof owner === 'string'
       ? owner
-      : JSON.stringify({ ...owner, token: 'theirs', since: new Date(Date.now() - ageMs).toISOString() })
+      : JSON.stringify({
+          ...owner,
+          ...(owner.hostname === hostname() && PID_NAMESPACE !== undefined ? { pidns: PID_NAMESPACE } : {}),
+          token: 'theirs',
+          since: new Date(Date.now() - ageMs).toISOString(),
+        })
   writeFileSync(lockPath, raw)
   const at = new Date(Date.now() - ageMs)
   utimesSync(lockPath, at, at)
