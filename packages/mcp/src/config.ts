@@ -26,6 +26,15 @@ export interface StoredConnection {
   label?: string
   /** Optional data-shape overrides forwarded to the client. */
   shape?: DataShape
+  /**
+   * `'agent'` where an agent chose this connection's target (`baseUrl` +
+   * `login`) — the MCP `add_connection` created it. Such a connection never
+   * takes its password from `ONEC_<NAME>_PASSWORD`: that variable is set for a
+   * server a person chose, and another MCP process sharing this config may hold
+   * it (#253). Absent ⇒ a person chose the target (the CLI `add`, or a
+   * hand-written / older config).
+   */
+  addedBy?: 'agent'
 }
 
 /** Shape of `<dataDir>/config.json`. */
@@ -207,21 +216,30 @@ function normalizeConfig(data: unknown): McpConfig {
   const sanitized: Record<string, StoredConnection> = Object.create(null)
   for (const [name, conn] of Object.entries(connections as Record<string, unknown>)) {
     if (!isValidConnectionName(name)) continue
-    if (conn === null || typeof conn !== 'object') continue
-    const c = conn as Partial<StoredConnection>
-    if (typeof c.baseUrl !== 'string' || typeof c.login !== 'string' || typeof c.serverTimezone !== 'string') continue
-    // Keep `label` only when it is a non-blank string (a hand-edited config may
-    // carry a blank or non-string label); blank ⇒ name fallback at display time.
-    const label = typeof c.label === 'string' ? c.label.trim() : ''
-    sanitized[name] = {
-      baseUrl: stripUrlUserinfo(c.baseUrl),
-      login: c.login,
-      serverTimezone: c.serverTimezone,
-      ...(label !== '' ? { label } : {}),
-      ...(c.shape !== undefined ? { shape: c.shape } : {}),
-    }
+    const entry = normalizeEntry(conn)
+    if (entry !== undefined) sanitized[name] = entry
   }
   return { connections: sanitized }
+}
+
+/** One `config.json` entry as stored, or `undefined` where it lacks a required string field. */
+function normalizeEntry(conn: unknown): StoredConnection | undefined {
+  if (conn === null || typeof conn !== 'object') return undefined
+  const c = conn as Partial<StoredConnection>
+  if (typeof c.baseUrl !== 'string' || typeof c.login !== 'string' || typeof c.serverTimezone !== 'string') {
+    return undefined
+  }
+  // Keep `label` only when it is a non-blank string (a hand-edited config may
+  // carry a blank or non-string label); blank ⇒ name fallback at display time.
+  const label = typeof c.label === 'string' ? c.label.trim() : ''
+  return {
+    baseUrl: stripUrlUserinfo(c.baseUrl),
+    login: c.login,
+    serverTimezone: c.serverTimezone,
+    ...(label !== '' ? { label } : {}),
+    ...(c.shape !== undefined ? { shape: c.shape } : {}),
+    ...(c.addedBy === 'agent' ? { addedBy: 'agent' as const } : {}),
+  }
 }
 
 /**

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { writeFileAtomic } from './atomic-write.js'
+import type { StoredConnection } from './config.js'
 
 /**
  * Where a connection's password was resolved from (or `none`).
@@ -90,6 +91,22 @@ export function envPassword(name: string, env: NodeJS.ProcessEnv = process.env):
   return value !== undefined && value !== '' ? value : undefined
 }
 
+/**
+ * The password `ONEC_<NAME>_PASSWORD` gives connection `name` stored as `conn`
+ * (`undefined` — not stored yet): as {@link envPassword}, except for a
+ * connection whose target an agent chose (`addedBy: 'agent'`), which never takes
+ * it — the variable was set for a server a person chose, and an MCP process
+ * that does not hold it may have pointed the connection elsewhere (#253). The
+ * one rule every read of a connection's password and every env guard goes by.
+ */
+export function connectionEnvPassword(
+  name: string,
+  conn: Pick<StoredConnection, 'addedBy'> | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return conn?.addedBy === 'agent' ? undefined : envPassword(name, env)
+}
+
 interface FileSecrets {
   [name: string]: string
 }
@@ -138,9 +155,13 @@ export class SecretStore {
     return this.keyring
   }
 
-  /** Read a password following env → keychain → file. `null` if none found. */
-  async read(name: string): Promise<ReadResult | null> {
-    const fromEnv = envPassword(name, this.env)
+  /**
+   * Read a password following env → keychain → file. `null` if none found.
+   * Pass the stored connection: one an agent added skips the env var
+   * ({@link connectionEnvPassword}).
+   */
+  async read(name: string, conn?: Pick<StoredConnection, 'addedBy'>): Promise<ReadResult | null> {
+    const fromEnv = connectionEnvPassword(name, conn, this.env)
     if (fromEnv !== undefined) return { password: fromEnv, source: 'env' }
     if (!this.insecure) {
       const fromKeychain = await this.keychainRead(name)
@@ -151,9 +172,9 @@ export class SecretStore {
     return null
   }
 
-  /** Where the password for `name` lives, WITHOUT revealing it (for `list`). */
-  async source(name: string): Promise<SecretSource> {
-    if (envPassword(name, this.env) !== undefined) return 'env'
+  /** Where the password for `name` lives, WITHOUT revealing it (for `list`); `conn` as for {@link read}. */
+  async source(name: string, conn?: Pick<StoredConnection, 'addedBy'>): Promise<SecretSource> {
+    if (connectionEnvPassword(name, conn, this.env) !== undefined) return 'env'
     if (!this.insecure && (await this.keychainRead(name)) !== null) return 'keychain'
     if (this.fileRead(name) !== null) return 'file'
     return 'none'

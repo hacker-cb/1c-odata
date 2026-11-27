@@ -34,15 +34,19 @@ export class FileConnectionSource implements ConnectionSource {
     return Object.entries(loadConfig(this.dataDir).connections).map(([name, c]) => ({ name, ...c }))
   }
 
-  async getSecret(name: string): Promise<string | null> {
-    return (await this.store.read(name))?.password ?? null
+  /** The password `name` resolves to — none from `ONEC_<NAME>_PASSWORD` for a connection an agent added. */
+  async getSecret(name: string, base?: StoredConnection): Promise<string | null> {
+    return (await this.store.read(name, base ?? (await this.getBase(name))))?.password ?? null
   }
 
-  async secretSource(name: string): Promise<SecretSource> {
-    return this.store.source(name)
+  async secretSource(name: string, base?: StoredConnection): Promise<SecretSource> {
+    return this.store.source(name, base ?? (await this.getBase(name)))
   }
 
-  missingSecretHint(name: string): string {
+  missingSecretHint(name: string, base?: StoredConnection): string {
+    if (base?.addedBy === 'agent') {
+      return `An agent added it, so ${passwordEnvVar(name)} is not used: set a password with set_credentials, or re-add it with the CLI: 1c-odata-mcp add ${name} --force`
+    }
     return `Set ${passwordEnvVar(name)} or run: 1c-odata-mcp add ${name}`
   }
 }

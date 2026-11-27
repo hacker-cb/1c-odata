@@ -11,7 +11,7 @@ import { fetchMetadataXml } from '@1c-odata/metadata'
 import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfig } from './config.js'
 import { DEFAULT_METADATA_TIMEOUT_MS, DEFAULT_REACHABILITY_TIMEOUT_MS } from './constants.js'
 import { stripUrlUserinfo } from './redact.js'
-import { envPassword, passwordEnvVar, SecretStore } from './secret-store.js'
+import { connectionEnvPassword, envPassword, passwordEnvVar, SecretStore } from './secret-store.js'
 
 /**
  * Throw if `name`'s password env-var slug collides with a DIFFERENT existing
@@ -47,78 +47,102 @@ function storedConnection(connections: Record<string, StoredConnection>, name: s
 }
 
 /**
- * What an add may do to a connection whose password comes from
- * `ONEC_<NAME>_PASSWORD` — which outranks a stored password on read:
- * `create` — whether it may create the connection (a person through the CLI
- * may, choosing where the env password goes; an agent through `add_connection`
- * may not, or a `remove_connection` + `add_connection` would point it anywhere);
- * `storesPassword` — whether it stores a password, which reads would not use.
+ * Who chose an add's target, and what it stores: `byAgent` — an agent through
+ * the MCP `add_connection`, which may neither point an existing connection at
+ * another base URL or login nor create one under a set `ONEC_<NAME>_PASSWORD`
+ * (a person through the CLI may do both); `storesPassword` — whether it stores
+ * a password.
  */
-export interface EnvPasswordAdd {
-  create: boolean
+export interface AddTarget {
+  byAgent: boolean
   storesPassword: boolean
 }
 
 /**
- * Throw where an add would send the env password of `name` somewhere it was
- * not set up for, or store what reads would not use: create the connection
- * where `add.create` forbids it, point an existing one at another base URL or
- * login (an overwrite clears only the stored password, and the env one would
- * go to the new server), or store a password.
+ * Throw where an add would send a password somewhere a person did not choose,
+ * or store what reads would not use:
+ * - an agent pointing an existing connection at another base URL or login —
+ *   whatever this process's environment holds, as another MCP process sharing
+ *   the config may hold `ONEC_<NAME>_PASSWORD` and would send it there (#253);
+ *   a person re-points one with the CLI `add --force`;
+ * - an agent creating a connection under a set `ONEC_<NAME>_PASSWORD`: a person
+ *   adds that one through the CLI;
+ * - pointing elsewhere a connection that takes its password from
+ *   `ONEC_<NAME>_PASSWORD` ({@link connectionEnvPassword}) — an overwrite
+ *   clears only the stored password, and the env one would go to the new server;
+ * - storing a password the connection, as the add leaves it, would not use
+ *   for the env one.
  */
-function assertEnvPasswordStaysPut(
+function assertAddTargetAllowed(
   name: string,
   existing: StoredConnection | undefined,
   next: { baseUrl: string; login: string },
-  add: EnvPasswordAdd,
+  add: AddTarget,
 ): void {
-  if (envPassword(name) === undefined) return
   const envVar = passwordEnvVar(name)
-  if (add.storesPassword) {
-    throw new InvalidArgumentError(
-      `The password of connection "${name}" comes from ${envVar}, which outranks a stored one: reads would keep sending it, not the password given here. Change or unset ${envVar} instead.`,
-      { argument: 'password' },
-    )
-  }
-  if (existing === undefined) {
-    if (add.create) return
+  if (add.byAgent && existing === undefined) {
+    if (envPassword(name) === undefined) return
     throw new InvalidArgumentError(
       `The password of connection "${name}" would come from ${envVar}, which is set: a connection under this name is added through the CLI (\`1c-odata-mcp add\`), not by an agent, so that a person chooses where that password goes.`,
       { argument: 'connection' },
     )
   }
-  if (!sameAuthTarget(existing, next)) {
+  if (add.byAgent && existing !== undefined && !sameAuthTarget(existing, next)) {
+    throw new InvalidArgumentError(
+      `add_connection does not point the existing connection "${name}" at another server or login: a person re-points it with the CLI (\`1c-odata-mcp add ${name} --force\`). Add the new target under another connection name instead.`,
+      { argument: changedTargetArgument(existing, next) },
+    )
+  }
+  // A stored password is judged on the connection as written — a person's add
+  // drops an agent's mark, so the env var applies to it again — and a re-point on
+  // the connection as it stands: only a password it takes now would follow it.
+  if (add.storesPassword && connectionEnvPassword(name, add.byAgent ? existing : undefined) !== undefined) {
+    throw new InvalidArgumentError(
+      `The password of connection "${name}" comes from ${envVar}, which outranks a stored one: reads would keep sending it, not the password given here. Change or unset ${envVar} instead.`,
+      { argument: 'password' },
+    )
+  }
+  if (
+    existing !== undefined &&
+    connectionEnvPassword(name, existing) !== undefined &&
+    !sameAuthTarget(existing, next)
+  ) {
     throw new InvalidArgumentError(
       `The password of connection "${name}" comes from ${envVar}; pointing the connection at another server or login would send that password there. Unset ${envVar} first, or add the new target under another connection name.`,
-      { argument: authTarget(existing.baseUrl, existing.login).baseUrl !== next.baseUrl ? 'baseUrl' : 'login' },
+      { argument: changedTargetArgument(existing, next) },
     )
   }
 }
 
-/**
- * Preflight for an add, BEFORE its credentials are verified — see
- * {@link EnvPasswordAdd} for what it refuses where `name`'s password comes
- * from `ONEC_<NAME>_PASSWORD`. {@link upsertConnection} re-checks under the
- * config lock what does not turn on the caller.
- */
-export function assertEnvPasswordStaysPutOnAdd(
-  dataDir: string,
-  name: string,
-  next: { baseUrl: string; login: string },
-  add: EnvPasswordAdd,
-): void {
-  const existing = storedConnection(loadConfig(dataDir).connections, name)
-  assertEnvPasswordStaysPut(name, existing, authTarget(next.baseUrl, next.login), add)
+/** Which half of the auth target an add changes: `baseUrl`, else `login`. */
+function changedTargetArgument(existing: StoredConnection, next: { baseUrl: string; login: string }): string {
+  return authTarget(existing.baseUrl, existing.login).baseUrl !== next.baseUrl ? 'baseUrl' : 'login'
 }
 
 /**
- * Throw where `name`'s password comes from `ONEC_<NAME>_PASSWORD`: that
- * outranks a stored password on read, so a credential change would neither be
- * used nor — verified against the new pair — be what the reads send. Checked
- * before verifying and again by {@link updateConnectionCredentials}.
+ * Preflight for an add, BEFORE its credentials are verified — see
+ * {@link assertAddTargetAllowed} for what it refuses. {@link upsertConnection}
+ * re-checks under the config lock.
  */
-export function assertNoEnvPassword(name: string): void {
-  if (envPassword(name) === undefined) return
+export function assertAddTargetAllowedOnAdd(
+  dataDir: string,
+  name: string,
+  next: { baseUrl: string; login: string },
+  add: AddTarget,
+): void {
+  const existing = storedConnection(loadConfig(dataDir).connections, name)
+  assertAddTargetAllowed(name, existing, authTarget(next.baseUrl, next.login), add)
+}
+
+/**
+ * Throw where connection `name`, stored as `conn`, takes its password from
+ * `ONEC_<NAME>_PASSWORD` ({@link connectionEnvPassword}): that outranks a
+ * stored password on read, so a credential change would neither be used nor —
+ * verified against the new pair — be what the reads send. Checked before
+ * verifying and again by {@link updateConnectionCredentials}.
+ */
+export function assertNoEnvPassword(name: string, conn: StoredConnection): void {
+  if (connectionEnvPassword(name, conn) === undefined) return
   const envVar = passwordEnvVar(name)
   throw new InvalidArgumentError(
     `The password of connection "${name}" comes from ${envVar}, which outranks a stored one: reads would keep sending it whatever is changed here. Change or unset ${envVar} instead.`,
@@ -177,11 +201,13 @@ export interface UpsertConnectionInput {
   /** Replace an existing connection. Default `false` → throws if it exists. */
   overwrite?: boolean
   /**
-   * Whether the connection may be created while `ONEC_<NAME>_PASSWORD` is set
-   * (default `true`): `false` where an agent chose the target — the MCP
-   * `add_connection` — so the env password never goes where it did (#233 batch).
+   * Whether an agent chose the target — the MCP `add_connection` (default
+   * `false`: a person, through the CLI). An agent's add may not re-point an
+   * existing connection nor create one under a set `ONEC_<NAME>_PASSWORD`, and
+   * a connection it creates is marked `addedBy: 'agent'`, which never takes the
+   * env password (#253).
    */
-  createUnderEnvPassword?: boolean
+  byAgent?: boolean
   /**
    * Aborted by the time the write's turn comes, nothing is written (#236). A
    * write once begun completes: the secret and the config are never left to
@@ -224,21 +250,25 @@ async function applyUpsertSecret(
  * Build the stored descriptor. A non-blank `input.label` sets/replaces the label;
  * otherwise an existing label is preserved (so an unrelated overwrite — e.g. a
  * timezone fix — doesn't drop one set via {@link setConnectionLabel}; clearing is
- * done there).
+ * done there). `addedBy: 'agent'` marks a connection an agent created, and stays
+ * on one it only overwrites (it cannot re-point it); a person's add drops it.
  */
 function buildStoredConnection(
   next: { baseUrl: string; login: string; serverTimezone: string },
   input: Pick<UpsertConnectionInput, 'label' | 'shape'>,
   existing: StoredConnection | undefined,
+  byAgent: boolean,
 ): StoredConnection {
   const label = input.label?.trim()
   const resolvedLabel = label !== undefined && label !== '' ? label : existing?.label
+  const agentTarget = byAgent && (existing === undefined || existing.addedBy === 'agent')
   return {
     baseUrl: next.baseUrl,
     login: next.login,
     serverTimezone: next.serverTimezone,
     ...(resolvedLabel !== undefined && resolvedLabel !== '' ? { label: resolvedLabel } : {}),
     ...(input.shape !== undefined ? { shape: input.shape } : {}),
+    ...(agentTarget ? { addedBy: 'agent' as const } : {}),
   }
 }
 
@@ -277,11 +307,12 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
 
     // Authoritative (under the lock) re-checks of the env-var guards.
     assertNoPasswordEnvCollision(config.connections, input.name)
-    assertEnvPasswordStaysPut(
+    const byAgent = input.byAgent === true
+    assertAddTargetAllowed(
       input.name,
       existing,
       { baseUrl, login },
-      { create: input.createUnderEnvPassword ?? true, storesPassword: password !== undefined && password !== '' },
+      { byAgent, storesPassword: password !== undefined && password !== '' },
     )
 
     // Mutate the secret store BEFORE persisting config: if a secret write/remove
@@ -290,7 +321,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
     const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
     const secret = await applyUpsertSecret(store, input.name, password, existing, { baseUrl, login })
 
-    config.connections[input.name] = buildStoredConnection({ baseUrl, login, serverTimezone }, input, existing)
+    config.connections[input.name] = buildStoredConnection({ baseUrl, login, serverTimezone }, input, existing, byAgent)
     saveConfig(input.dataDir, config)
 
     return {
@@ -480,7 +511,7 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
     if (existing === undefined) {
       throw new InvalidArgumentError(`No connection named "${input.name}"`, { argument: 'connection' })
     }
-    assertNoEnvPassword(input.name)
+    assertNoEnvPassword(input.name, existing)
     // Write the secret BEFORE the config so a login change is never persisted
     // while its matching password write is still pending or has failed.
     const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
