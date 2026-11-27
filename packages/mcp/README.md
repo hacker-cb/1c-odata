@@ -211,7 +211,10 @@ are not expanded and stay a "not absolute" error.
   and the password together — so concurrent changes from several MCP clients and the CLI never overwrite each
   other. A change waits up to 10 s for it, then fails naming the process that holds it. A lock left by a
   process that died is taken over on its own: at once where that process ran on this host, after 60 s where
-  it cannot be checked. Reads never take it.
+  it cannot be checked (another host, another container's pid namespace); one whose pid another program has
+  since taken stays until you delete it, as the error says. Reads never take it. Only processes of a version
+  that takes the lock respect it: after upgrading, restart the MCP clients, so no older server keeps writing
+  without it.
 
 **Connection names** are an ASCII alias — a letter or digit first, then letters, digits, `-`, `_`
 (`/^[A-Za-z0-9][A-Za-z0-9_-]*$/`); a Cyrillic 1С base name needs such an alias. Because the env-var slug

@@ -1,5 +1,16 @@
 import { randomBytes } from 'node:crypto'
-import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, unlinkSync, utimesSync, writeSync } from 'node:fs'
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readlinkSync,
+  unlinkSync,
+  utimesSync,
+  writeSync,
+} from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 
@@ -13,8 +24,9 @@ import { join } from 'node:path'
  * every {@link DataDirLockTimings.heartbeatMs} while it holds it, and deletes it
  * on release — only while the token in it is still its own.
  *
- * A lock is stale where its owner is gone: on this host, a pid that no longer
- * runs; elsewhere, or where the file names no owner, an mtime older than
+ * A lock is stale where its owner is gone: on this host (and, on Linux, in this
+ * pid namespace), a pid that no longer runs; elsewhere, or where the file names
+ * no owner, an mtime older than
  * {@link DataDirLockTimings.staleMs}. A live owner on this host is never judged
  * stale — a pid since reused by another process leaves the lock for a person to
  * delete, which the wait's error names. A stale lock is deleted only under a
@@ -64,8 +76,30 @@ const heldHere = new Set<string>()
 interface LockOwner {
   pid: number
   hostname: string
+  /** Linux: the owner's pid namespace — a container sharing the host name may not see its pid. */
+  pidns?: string
   token: string
   since: string
+}
+
+/** This process's pid namespace on Linux (`pid:[4026531836]`), `undefined` elsewhere. */
+const PID_NAMESPACE = (() => {
+  if (process.platform !== 'linux') return undefined
+  try {
+    return readlinkSync('/proc/self/ns/pid')
+  } catch {
+    return undefined
+  }
+})()
+
+/** The handle a task holds: {@link DataDirLock.assertHeld} before each write. */
+export interface DataDirLock {
+  /**
+   * Throw where the lock is no longer this holder's — another process judged it
+   * stale (this one stalled past {@link DataDirLockTimings.staleMs}) and took it.
+   * Called right before each write, so a holder that lost the lock writes nothing more.
+   */
+  assertHeld(): void
 }
 
 /** Thrown where the data directory stays locked by another process past the wait. */
@@ -94,7 +128,7 @@ export function dataDirLockPath(dataDir: string): string {
  */
 export async function withDataDirLock<T>(
   dataDir: string,
-  task: () => Promise<T>,
+  task: (lock: DataDirLock) => Promise<T>,
   opts: { signal?: AbortSignal | undefined; timings?: Partial<DataDirLockTimings> } = {},
 ): Promise<T> {
   opts.signal?.throwIfAborted()
@@ -110,8 +144,16 @@ export async function withDataDirLock<T>(
   }
   const heartbeat = setInterval(() => touch(lockPath), timings.heartbeatMs)
   heartbeat.unref()
+  const lock: DataDirLock = {
+    assertHeld() {
+      if (stillHeld(lockPath, token)) return
+      throw new Error(
+        `The 1c-odata data-dir lock ${lockPath} was taken over by another process while this change ran (it stalled past ${timings.staleMs / 1000} s); nothing more was written. Check the connection and retry.`,
+      )
+    },
+  }
   try {
-    return await task()
+    return await task(lock)
   } finally {
     clearInterval(heartbeat)
     heldHere.delete(token)
@@ -130,6 +172,7 @@ async function acquire(
   const content = JSON.stringify({
     pid: process.pid,
     hostname: hostname(),
+    ...(PID_NAMESPACE !== undefined ? { pidns: PID_NAMESPACE } : {}),
     token,
     since: new Date().toISOString(),
   } satisfies LockOwner)
@@ -185,7 +228,8 @@ interface HeldLock {
 function readLock(path: string): HeldLock | undefined {
   let fd: number
   try {
-    fd = openSync(path, 'r')
+    // Non-blocking: a FIFO planted at the path must not hang the open.
+    fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     // Open elsewhere for a moment (Windows): held, owner unknown — waited on, never judged stale.
@@ -193,8 +237,9 @@ function readLock(path: string): HeldLock | undefined {
     throw unreadable(path, err)
   }
   try {
-    const mtimeMs = fstatSync(fd).mtimeMs
-    return { owner: parseOwner(readFileSync(fd, 'utf8')), mtimeMs }
+    const stat = fstatSync(fd)
+    if (!stat.isFile()) throw new Error('not a regular file')
+    return { owner: parseOwner(readFileSync(fd, 'utf8')), mtimeMs: stat.mtimeMs }
   } catch (err) {
     throw unreadable(path, err)
   } finally {
@@ -219,9 +264,16 @@ function parseOwner(raw: string): LockOwner | undefined {
       typeof data.pid === 'number' &&
       typeof data.hostname === 'string' &&
       typeof data.token === 'string' &&
-      typeof data.since === 'string'
+      typeof data.since === 'string' &&
+      (data.pidns === undefined || typeof data.pidns === 'string')
     ) {
-      return { pid: data.pid, hostname: data.hostname, token: data.token, since: data.since }
+      return {
+        pid: data.pid,
+        hostname: data.hostname,
+        ...(data.pidns !== undefined ? { pidns: data.pidns } : {}),
+        token: data.token,
+        since: data.since,
+      }
     }
   } catch {
     // not JSON (yet)
@@ -231,7 +283,8 @@ function parseOwner(raw: string): LockOwner | undefined {
 
 function isStale(held: HeldLock, timings: DataDirLockTimings): boolean {
   const { owner } = held
-  if (owner !== undefined && owner.hostname === hostname()) {
+  // Its pid is checkable only on this host, in this pid namespace.
+  if (owner !== undefined && owner.hostname === hostname() && owner.pidns === PID_NAMESPACE) {
     // This process's own, under a token it no longer holds: a release that could not delete it.
     if (owner.pid === process.pid) return !heldHere.has(owner.token)
     return !isRunning(owner.pid)
@@ -274,6 +327,21 @@ function takeOver(lockPath: string, timings: DataDirLockTimings): boolean {
   } finally {
     bestEffortUnlink(guard)
   }
+}
+
+/**
+ * Whether the lock is still `token`'s. One that cannot be told apart for a
+ * moment (busy on Windows, being rewritten) is read again; one still unclear
+ * counts as held — only a lock read as another's, or gone, is lost.
+ */
+function stillHeld(lockPath: string, token: string): boolean {
+  for (let attempt = 0; attempt < RELEASE_ATTEMPTS; attempt++) {
+    const held = readLock(lockPath)
+    if (held === undefined) return false
+    if (held.owner !== undefined) return held.owner.token === token
+    pause(RELEASE_RETRY_MS)
+  }
+  return true
 }
 
 /** Delete the lock where it is still this holder's; never throws — it runs in a `finally`. */

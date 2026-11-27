@@ -147,6 +147,35 @@ describe('withDataDirLock', () => {
     },
   )
 
+  it('a holder whose lock was taken over writes nothing more: assertHeld throws', async () => {
+    await withDataDirLock(dir, async (lock) => {
+      lock.assertHeld()
+      plantLock({ pid: process.ppid, hostname: hostname() })
+      expect(() => lock.assertHeld()).toThrow(/was taken over by another process.*nothing more was written/)
+    })
+  })
+
+  it('judges a same-host lock from another pid namespace by its mtime, not its pid', async () => {
+    const otherNs = (ageMs: number) => {
+      plantLock({ pid: deadPid(), hostname: hostname() }, ageMs)
+      const owner = JSON.parse(readFileSync(lockPath, 'utf8'))
+      writeFileSync(lockPath, JSON.stringify({ ...owner, pidns: 'pid:[1]' }))
+      const at = new Date(Date.now() - ageMs)
+      utimesSync(lockPath, at, at)
+    }
+    otherNs(0)
+    await expect(withDataDirLock(dir, async () => 'ran', { timings: fast })).rejects.toBeInstanceOf(DataDirLockedError)
+    otherNs(120_000)
+    await expect(withDataDirLock(dir, async () => 'ran', { timings: fast })).resolves.toBe('ran')
+  })
+
+  it.skipIf(process.platform === 'win32')('names a FIFO at the lock path instead of hanging on it', async () => {
+    spawnSync('mkfifo', [lockPath])
+    await expect(withDataDirLock(dir, async () => 'ran', { timings: fast })).rejects.toThrow(
+      /Cannot read the 1c-odata data-dir lock .*not a regular file/,
+    )
+  })
+
   it('an aborted signal stops it before anything is created', async () => {
     const nested = join(dir, 'never')
     await expect(

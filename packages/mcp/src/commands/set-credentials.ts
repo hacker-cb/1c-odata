@@ -59,13 +59,14 @@ async function verifyBeforeSave(
   existing: StoredConnection,
   effectiveLogin: string,
   pw: { value: string; prompted: boolean } | undefined,
-): Promise<{ proceed: boolean; storedPassword?: string }> {
+): Promise<{ proceed: boolean; storedPassword?: string | null | undefined }> {
   if (opts.noVerify === true) return { proceed: true }
   const store = new SecretStore({ dataDir: opts.dataDir, insecure: opts.insecure ?? false })
-  const storedPassword = pw === undefined ? (await store.read(opts.name, existing))?.password : undefined
-  const effectivePassword = pw?.value ?? storedPassword
-  if (effectivePassword === undefined) return { proceed: true }
-  const verified = { proceed: true, ...(storedPassword !== undefined ? { storedPassword } : {}) }
+  // A login-only change keeps the stored password: what it is now (none: `null`) is checked again under the lock.
+  const storedPassword = pw === undefined ? ((await store.read(opts.name, existing))?.password ?? null) : undefined
+  const effectivePassword = pw?.value ?? storedPassword ?? undefined
+  const verified = { proceed: true, storedPassword }
+  if (effectivePassword === undefined) return verified
   process.stdout.write('Verifying connection… ')
   try {
     await verifyConnectivity({ baseUrl: existing.baseUrl, login: effectiveLogin, password: effectivePassword })

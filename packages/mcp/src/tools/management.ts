@@ -127,18 +127,20 @@ async function verifyCredentialChange(
   connection: string,
   change: CredentialChange,
   signal: AbortSignal,
-): Promise<{ verified: boolean; storedPassword?: string }> {
+): Promise<{ verified: boolean; storedPassword?: string | null | undefined }> {
   const store = new SecretStore({ dataDir: opts.dataDir, insecure: opts.insecure ?? false })
-  const storedPassword = change.password === undefined ? (await store.read(connection, existing))?.password : undefined
-  const effectivePassword = change.password ?? storedPassword
-  if (effectivePassword === undefined) return { verified: false }
+  // A login-only change keeps the stored password: what it is now (none: `null`) is checked again under the lock.
+  const storedPassword =
+    change.password === undefined ? ((await store.read(connection, existing))?.password ?? null) : undefined
+  const effectivePassword = change.password ?? storedPassword ?? undefined
+  if (effectivePassword === undefined) return { verified: false, storedPassword }
   await verifyConnectivity({
     baseUrl: existing.baseUrl,
     login: change.login ?? existing.login,
     password: effectivePassword,
     signal,
   })
-  return { verified: true, ...(storedPassword !== undefined ? { storedPassword } : {}) }
+  return { verified: true, storedPassword }
 }
 
 function summarizeCredentialChange(
@@ -255,12 +257,13 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
         connection: z.string().describe('Connection name (see list_connections)'),
       },
     },
-    async ({ connection }) =>
+    async ({ connection }, { signal }) =>
       toolResult(async () => {
         const removed = await removeConnection({
           dataDir: opts.dataDir,
           name: connection,
           insecure: opts.insecure ?? false,
+          signal,
         })
         pool.refresh(connection)
         return {
@@ -283,9 +286,9 @@ export function registerManagementTools(server: McpServer, pool: ConnectionPool,
           .describe('New display label (free-form, may be Cyrillic). Empty string clears it (reverts to the name).'),
       },
     },
-    async ({ connection, label }) =>
+    async ({ connection, label }, { signal }) =>
       toolResult(async () => {
-        const result = await setConnectionLabel({ dataDir: opts.dataDir, name: connection, label })
+        const result = await setConnectionLabel({ dataDir: opts.dataDir, name: connection, label, signal })
         return {
           summary: result.cleared
             ? `Label for "${connection}" cleared — it falls back to the name "${connection}".`

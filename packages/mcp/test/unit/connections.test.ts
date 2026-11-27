@@ -382,6 +382,29 @@ describe('a write cancelled while it waits for the config lock writes nothing (#
     await expect(queued).rejects.toThrow()
     expect(loadConfig(dir).connections.a?.login).toBe('u')
   })
+
+  it('removeConnection', async () => {
+    await upsertConnection({ dataDir: dir, name: 'a', ...conn, password: 'pa' })
+    const first = upsertConnection({ dataDir: dir, name: 'b', ...conn })
+    const controller = new AbortController()
+    const queued = removeConnection({ dataDir: dir, name: 'a', insecure: true, signal: controller.signal })
+    controller.abort()
+    await first
+    await expect(queued).rejects.toThrow()
+    expect(loadConfig(dir).connections.a).toBeDefined()
+    expect(await fileStore().read('a')).toEqual({ password: 'pa', source: 'file' })
+  })
+
+  it('setConnectionLabel', async () => {
+    await upsertConnection({ dataDir: dir, name: 'a', ...conn, label: 'old' })
+    const first = upsertConnection({ dataDir: dir, name: 'b', ...conn })
+    const controller = new AbortController()
+    const queued = setConnectionLabel({ dataDir: dir, name: 'a', label: 'new', signal: controller.signal })
+    controller.abort()
+    await first
+    await expect(queued).rejects.toThrow()
+    expect(loadConfig(dir).connections.a?.label).toBe('old')
+  })
 })
 
 describe('verifyConnectivity', () => {

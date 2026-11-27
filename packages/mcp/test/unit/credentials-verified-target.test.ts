@@ -9,7 +9,9 @@ import { runSetCredentials } from '../../src/commands/set-credentials.js'
 import { loadConfig, saveConfig } from '../../src/config.js'
 import { ConnectionPool } from '../../src/connection-pool.js'
 import { updateConnectionCredentials, upsertConnection } from '../../src/connections.js'
+import { withDataDirLock } from '../../src/data-dir-lock.js'
 import { FileConnectionSource } from '../../src/file-connection-source.js'
+import { SecretStore } from '../../src/secret-store.js'
 import { registerManagementTools } from '../../src/tools/management.js'
 
 // Isolate from the real OS keychain.
@@ -173,6 +175,31 @@ describe('a credential change verified on one target is not stored for another (
     oneC.release()
     await expect(run).rejects.toThrow(/changed while its credentials were being verified — its stored password/)
     expect(loadConfig(dir).connections.prod?.login).toBe('u')
+  })
+
+  it('a login-only change decided with no stored password is refused where one was stored meanwhile', async () => {
+    await upsertConnection({
+      dataDir: dir,
+      name: 'bare',
+      baseUrl: S,
+      login: 'u',
+      serverTimezone: 'Europe/Moscow',
+      insecure: true,
+    })
+    vi.stubEnv('ONEC_BARE_PASSWORD', '')
+    let run!: Promise<void>
+    // Another process holds the data dir while it stores a password: the change read none, so verified nothing.
+    await withDataDirLock(dir, async () => {
+      run = runSetCredentials({ dataDir: dir, name: 'bare', login: 'u2', insecure: true })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      await new SecretStore({ dataDir: dir, insecure: true }).write(
+        'bare',
+        'appeared',
+        loadConfig(dir).connections.bare,
+      )
+    })
+    await expect(run).rejects.toThrow(/its stored password was changed/)
+    expect(loadConfig(dir).connections.bare?.login).toBe('u')
   })
 
   it('a login-only change keeps the stored password it was verified with', async () => {

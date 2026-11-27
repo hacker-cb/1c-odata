@@ -9,7 +9,7 @@ import { request } from '@1c-odata/client/internal'
 import { fetchMetadataXml } from '@1c-odata/metadata'
 import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfig, targetBaseUrl } from './config.js'
 import { DEFAULT_METADATA_TIMEOUT_MS, DEFAULT_REACHABILITY_TIMEOUT_MS } from './constants.js'
-import { withDataDirLock } from './data-dir-lock.js'
+import { type DataDirLock, withDataDirLock } from './data-dir-lock.js'
 import { stripUrlUserinfo } from './redact.js'
 import { connectionEnvPassword, envPassword, passwordEnvVar, SecretStore, secretKey } from './secret-store.js'
 
@@ -178,7 +178,7 @@ export function assertAddable(dataDir: string, name: string, overwrite: boolean)
  * operation re-checks under the lock what it rests on.
  */
 let configMutation: Promise<unknown> = Promise.resolve()
-function withConfigLock<T>(dataDir: string, task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+function withConfigLock<T>(dataDir: string, task: (lock: DataDirLock) => Promise<T>, signal?: AbortSignal): Promise<T> {
   const locked = () => withDataDirLock(dataDir, task, { signal })
   const run = configMutation.then(locked, locked)
   configMutation = run.then(
@@ -395,7 +395,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
 
   return withConfigLock(
     input.dataDir,
-    async () => {
+    async (lock) => {
       input.signal?.throwIfAborted()
       const config = loadConfig(input.dataDir)
       const existing = storedConnection(config.connections, input.name)
@@ -423,9 +423,11 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
       // new auth target (baseUrl/login) while a stale password still resolves.
       const written = buildStoredConnection({ baseUrl, login, serverTimezone }, input, existing, byAgent)
       const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
+      lock.assertHeld()
       const secret = await applyUpsertSecret(store, input.name, password, existing, written)
 
       config.connections[input.name] = written
+      lock.assertHeld()
       saveConfig(input.dataDir, config)
       await dropOldKey(store, input.name, existing, written)
 
@@ -446,18 +448,30 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
  * keyed to what it was stored for, and an agent re-creating the connection
  * never reads a person's. Returns false if absent.
  */
-export async function removeConnection(input: { dataDir: string; name: string; insecure?: boolean }): Promise<boolean> {
-  return withConfigLock(input.dataDir, async () => {
-    const config = loadConfig(input.dataDir)
-    const existing = config.connections[input.name]
-    if (existing === undefined) return false
-    delete config.connections[input.name]
-    saveConfig(input.dataDir, config)
-    const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
-    await store.remove(input.name)
-    if (existing.addedBy === 'agent') await store.remove(input.name, {}, existing)
-    return true
-  })
+export async function removeConnection(input: {
+  dataDir: string
+  name: string
+  insecure?: boolean
+  /** Aborted by the time the write's turn comes, nothing is removed (#236). */
+  signal?: AbortSignal
+}): Promise<boolean> {
+  return withConfigLock(
+    input.dataDir,
+    async (lock) => {
+      input.signal?.throwIfAborted()
+      const config = loadConfig(input.dataDir)
+      const existing = config.connections[input.name]
+      if (existing === undefined) return false
+      delete config.connections[input.name]
+      lock.assertHeld()
+      saveConfig(input.dataDir, config)
+      const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
+      await store.remove(input.name)
+      if (existing.addedBy === 'agent') await store.remove(input.name, {}, existing)
+      return true
+    },
+    input.signal,
+  )
 }
 
 /**
@@ -559,22 +573,30 @@ export async function setConnectionLabel(input: {
   dataDir: string
   name: string
   label: string
+  /** Aborted by the time the write's turn comes, nothing is changed (#236). */
+  signal?: AbortSignal
 }): Promise<SetLabelResult> {
-  return withConfigLock(input.dataDir, async () => {
-    const config = loadConfig(input.dataDir)
-    const existing = config.connections[input.name]
-    if (existing === undefined) {
-      throw new InvalidArgumentError(`No connection named "${input.name}"`, { argument: 'connection' })
-    }
-    const label = input.label.trim()
-    if (label === '') {
-      delete existing.label
-    } else {
-      existing.label = label
-    }
-    saveConfig(input.dataDir, config)
-    return { label: label === '' ? input.name : label, cleared: label === '' }
-  })
+  return withConfigLock(
+    input.dataDir,
+    async (lock) => {
+      input.signal?.throwIfAborted()
+      const config = loadConfig(input.dataDir)
+      const existing = config.connections[input.name]
+      if (existing === undefined) {
+        throw new InvalidArgumentError(`No connection named "${input.name}"`, { argument: 'connection' })
+      }
+      const label = input.label.trim()
+      if (label === '') {
+        delete existing.label
+      } else {
+        existing.label = label
+      }
+      lock.assertHeld()
+      saveConfig(input.dataDir, config)
+      return { label: label === '' ? input.name : label, cleared: label === '' }
+    },
+    input.signal,
+  )
 }
 
 export interface UpdateCredentialsInput {
@@ -587,14 +609,14 @@ export interface UpdateCredentialsInput {
   insecure?: boolean
   /**
    * The connection as the caller read it to decide and verify the change: its
-   * base URL and login, and — for a login-only change verified with the stored
-   * password — that password. The change is refused unless the connection
+   * base URL and login, and — for a login-only change — the stored password it
+   * was verified with, `null` where none was stored. The change is refused unless the connection
    * still stands so under the lock: another process may have re-pointed it, or
    * changed its password, while the caller verified, and a pair checked on one
    * server must not be stored for another, nor a new login paired with a
    * password it was never checked with (#273).
    */
-  expected: { baseUrl: string; login: string; password?: string | undefined }
+  expected: { baseUrl: string; login: string; password?: string | null | undefined }
   /**
    * Aborted by the time the write's turn comes, nothing is written (#236). A
    * write once begun completes: the secret and the config are never left to
@@ -632,7 +654,7 @@ async function assertAsExpected(
     throw changed(`it now points at ${targetBaseUrl(existing.baseUrl)} as "${existing.login}"`)
   }
   if (input.password === undefined && expected.password !== undefined) {
-    const stored = (await store.read(input.name, existing))?.password
+    const stored = (await store.read(input.name, existing))?.password ?? null
     if (stored !== expected.password) throw changed('its stored password was changed')
   }
 }
@@ -658,7 +680,7 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
   }
   return withConfigLock(
     input.dataDir,
-    async () => {
+    async (lock) => {
       input.signal?.throwIfAborted()
       const config = loadConfig(input.dataDir)
       const existing = config.connections[input.name]
@@ -672,11 +694,15 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
       // while its matching password write is still pending or has failed.
       let passwordBackend: 'keychain' | 'file' | undefined
       if (input.password !== undefined) {
+        lock.assertHeld()
         passwordBackend = (await store.write(input.name, input.password, existing)).backend
       }
       const loginUpdated = login !== undefined && login !== existing.login
-      if (loginUpdated) existing.login = login
-      saveConfig(input.dataDir, config)
+      if (loginUpdated) {
+        existing.login = login
+        lock.assertHeld()
+        saveConfig(input.dataDir, config)
+      }
       return {
         loginUpdated,
         passwordUpdated: input.password !== undefined,
