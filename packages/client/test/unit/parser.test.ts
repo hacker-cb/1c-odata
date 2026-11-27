@@ -596,7 +596,8 @@ describe('V3 parser — a `__proto__` key in the body is the row’s own field (
     expect(Object.getPrototypeOf(row)).toBe(Object.prototype)
     expect(row.x).toBeUndefined()
     expect(ownProto(row)).toEqual({ x: 1 })
-    expect(Object.hasOwn(row, 'a') && Object.hasOwn(row, 'a')).toBe(true)
+    // biome-ignore lint/suspicious/noPrototypeBuiltins: the point is that the row's own prototype method works
+    expect(row.hasOwnProperty('a')).toBe(true)
   })
 
   it('a single entity and a nested object do too', () => {

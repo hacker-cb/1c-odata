@@ -101,7 +101,9 @@ export function validateEntity(entity: Record<string, unknown>, schema: EntitySc
   const valueStorageMembers = collectValueStorageMembers(schema)
   for (const [name, prop] of Object.entries(schema.properties)) {
     if (valueStorageMembers.has(name)) continue
-    const v = entity[name]
+    // Own fields only — what `JSON.stringify` sends: a property named `__proto__` or `constructor` the payload
+    // lacks would otherwise read `Object.prototype` / `Object` and pass a `required` check.
+    const v = Object.hasOwn(entity, name) ? entity[name] : undefined
     if (v === undefined || v === null) {
       if (!prop.nullable) errors.push({ kind: 'required', field: name })
       continue

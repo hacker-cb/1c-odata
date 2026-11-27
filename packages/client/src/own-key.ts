@@ -12,6 +12,9 @@
  * dictionary keeps its own prototype — a parsed row is still a plain object
  * (`row.hasOwnProperty` works), only now with the field it was sent.
  *
+ * For a dictionary that is a plain object (`{}`), whose only inherited
+ * accessor is `__proto__` — every caller builds one.
+ *
  * Reached by `@1c-odata/metadata` through `@1c-odata/client/internal`, so it
  * carries no internal tag: `stripInternal` would drop it from that
  * entrypoint's types.
