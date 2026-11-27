@@ -61,14 +61,14 @@ async function addConnection(
   // Preflight the duplicate check BEFORE verifying, so a password is never sent
   // to baseUrl only to be rejected as "already exists" afterwards.
   assertAddable(opts.dataDir, connection, overwrite === true)
-  // A missing or mistyped zone (or URL) fails here, not after a multi-MB $metadata download.
-  assertAddFieldsOnAdd(opts.dataDir, connection, { baseUrl, login, serverTimezone })
   assertAddTargetAllowedOnAdd(
     opts.dataDir,
     connection,
     { baseUrl, login },
     { byAgent: true, storesPassword: hasPassword },
   )
+  // A missing or mistyped zone (or URL) fails here, not after a multi-MB $metadata download.
+  assertAddFieldsOnAdd(opts.dataDir, connection, { baseUrl, login, serverTimezone })
   // Verify before persisting when a password is available. The password is used
   // verbatim here so verify matches exactly what gets stored/used.
   if (hasPassword) {

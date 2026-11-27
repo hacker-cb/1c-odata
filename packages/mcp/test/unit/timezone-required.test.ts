@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -25,7 +25,7 @@ vi.mock('@napi-rs/keyring', () => ({
 }))
 
 /** The interactive `add`, answered without a terminal: the answers in order, and every question asked. */
-const prompts = vi.hoisted(() => ({ lines: [] as string[], asked: [] as string[] }))
+const prompts = vi.hoisted(() => ({ lines: [] as string[], asked: [] as string[], stdinRead: 0 }))
 vi.mock('../../src/commands/_prompt.js', () => ({
   promptLine: async (label: string, opts: { default?: string } = {}) => {
     prompts.asked.push(opts.default === undefined ? label : `${label} (default ${opts.default})`)
@@ -33,7 +33,10 @@ vi.mock('../../src/commands/_prompt.js', () => ({
   },
   promptHidden: async () => '',
   promptConfirm: async () => true,
-  readPasswordStdin: async () => '',
+  readPasswordStdin: async () => {
+    prompts.stdinRead++
+    return 'pw'
+  },
 }))
 
 const URL = 'http://base.test/odata/standard.odata'
@@ -47,6 +50,7 @@ beforeEach(() => {
   fetched = []
   prompts.lines = []
   prompts.asked = []
+  prompts.stdinRead = 0
   vi.stubGlobal('fetch', async (url: string | URL) => {
     fetched.push(String(url))
     return new Response('<edmx:Edmx/>', { headers: { 'content-type': 'application/xml' } })
@@ -129,7 +133,9 @@ describe('serverTimezone has no default (#254)', () => {
         password: 'pw',
         ...(timezone !== undefined ? { timezone } : {}),
       }),
-    ).rejects.toThrow(/server timezone \(serverTimezone \/ --timezone\) is required for the new connection/)
+    ).rejects.toThrow(
+      /server timezone \(serverTimezone \/ --timezone\) (is required for the new connection|of "c" is blank)/,
+    )
     expect(fetched).toEqual([])
     expect(loadConfig(dir).connections.c).toBeUndefined()
   })
@@ -222,5 +228,46 @@ describe('serverTimezone has no default (#254)', () => {
     await runAdd({ dataDir: dir, insecure: true, name: 'c' })
     expect(prompts.asked.filter((q) => /timezone/i.test(q))).toHaveLength(2)
     expect(loadConfig(dir).connections.c?.serverTimezone).toBe('Europe/Moscow')
+  })
+
+  it('the CLI add refuses a missing zone before reading --password-stdin', async () => {
+    await expect(
+      runAdd({ dataDir: dir, insecure: true, name: 'c', url: URL, login: 'u', passwordStdin: true }),
+    ).rejects.toThrow(/required for the new connection/)
+    expect(prompts.stdinRead).toBe(0)
+  })
+
+  describe('over a stored connection', () => {
+    const store = (serverTimezone: string) =>
+      writeFileSync(
+        join(dir, 'config.json'),
+        JSON.stringify({ connections: { c: { baseUrl: URL, login: 'u', serverTimezone } } }),
+      )
+
+    it('the interactive add keeps the stored zone on Enter where the base URL stays', async () => {
+      store('Asia/Yekaterinburg')
+      prompts.lines = [URL, 'u', '', '']
+      await runAdd({ dataDir: dir, insecure: true, name: 'c' })
+      expect(prompts.asked.find((q) => /timezone/i.test(q))).toContain('Enter keeps Asia/Yekaterinburg')
+      expect(loadConfig(dir).connections.c?.serverTimezone).toBe('Asia/Yekaterinburg')
+    })
+
+    it('a kept zone written with spaces is stored trimmed', async () => {
+      store(' Asia/Yekaterinburg ')
+      await runAdd({ dataDir: dir, insecure: true, name: 'c', url: URL, login: 'u', force: true })
+      expect(loadConfig(dir).connections.c?.serverTimezone).toBe('Asia/Yekaterinburg')
+    })
+
+    it('a zone given blank is refused, not taken for an omitted one', async () => {
+      store('Asia/Yekaterinburg')
+      await expect(
+        runAdd({ dataDir: dir, insecure: true, name: 'c', url: URL, login: 'u', timezone: ' ', force: true }),
+      ).rejects.toThrow(/is blank/)
+      const { call, close } = await agent()
+      const res = await call({ connection: 'c', baseUrl: URL, login: 'u', serverTimezone: '', overwrite: true })
+      await close()
+      expect(res.isError).toBe(true)
+      expect(res.text).toContain('is blank')
+    })
   })
 })

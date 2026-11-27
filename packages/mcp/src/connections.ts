@@ -315,9 +315,16 @@ export function addTimezone(
   given: string | undefined,
 ): string {
   const zone = given?.trim()
-  if (zone !== undefined && zone !== '') return zone
+  if (zone !== undefined) {
+    if (zone !== '') return zone
+    throw new InvalidArgumentError(
+      `The server timezone (serverTimezone / --timezone) of "${name}" is blank: give an IANA zone, or omit it to keep the stored one.`,
+      { argument: 'serverTimezone' },
+    )
+  }
   if (existing !== undefined && authTarget(existing.baseUrl, '').baseUrl === authTarget(baseUrl, '').baseUrl) {
-    return existing.serverTimezone
+    // Trimmed, as a given one is: a hand-written " Europe/Moscow " would pass the check and fail every read.
+    return existing.serverTimezone.trim()
   }
   const what =
     existing === undefined
