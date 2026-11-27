@@ -103,8 +103,8 @@ interface CacheSlot {
 
 /**
  * How many times one {@link ConnectionPool.get} reads its source while other
- * calls keep replacing or dropping the slot under it, before it goes on with
- * its last read.
+ * calls keep replacing or dropping the slot under it. Past that it answers
+ * from its last read and leaves the cache to the calls that moved it.
  */
 const MAX_SOURCE_READS = 3
 
@@ -200,28 +200,18 @@ export class ConnectionPool implements ReadPool {
   async get(name: string): Promise<PoolEntry> {
     // Taken before the source reads: a call still reading when abortDownloads runs fails with the rest.
     const signal = this.downloads.signal
-    let stored: StoredConnection | undefined
-    let secret: string | null = null
-    for (let reads = 1; ; reads++) {
-      const seen = this.cache.get(name)
-      stored = await this.source.getBase(name)
-      // The descriptor read above: the password is resolved for the target it goes to.
-      secret = stored === undefined ? null : await this.source.getSecret(name, stored)
-      signal.throwIfAborted()
-      // Another call replaced or dropped the slot while this one read: what it read may be newer — read again.
-      if (this.cache.get(name) === seen || reads === MAX_SOURCE_READS) break
-    }
+    const { stored, secret, settled } = await this.readSource(name, signal)
 
     // From here to the cache write nothing awaits: concurrent calls see one slot.
     if (stored === undefined) {
-      this.cache.delete(name)
+      if (settled) this.cache.delete(name)
       throw new InvalidArgumentError(`No connection named "${name}"`, { argument: 'connection' })
     }
     const descriptor = descriptorKey(stored)
     const cached = this.cache.get(name)
     if (cached?.descriptor === descriptor && (secret === null || cached.password === secret)) return cached.entry
     if (secret === null) {
-      this.cache.delete(name)
+      if (settled) this.cache.delete(name)
       const hint = this.source.missingSecretHint?.(name, stored)
       throw new InvalidArgumentError(`No password for "${name}".${hint !== undefined ? ` ${hint}` : ''}`, {
         argument: 'connection',
@@ -229,6 +219,8 @@ export class ConnectionPool implements ReadPool {
     }
 
     const pending = this.build(name, connectionOf(stored, secret), signal)
+    // The slot kept moving under this call: what it read may be older than what the movers cached.
+    if (!settled) return pending
     const slot: CacheSlot = { entry: pending, descriptor, password: secret }
     this.cache.set(name, slot)
     this.building.add(pending)
@@ -240,6 +232,28 @@ export class ConnectionPool implements ReadPool {
       throw err
     } finally {
       this.building.delete(pending)
+    }
+  }
+
+  /**
+   * Read `name`'s descriptor and password from the source — again, up to
+   * {@link MAX_SOURCE_READS} times, while other calls replace or drop its slot
+   * meanwhile. `settled`: the slot stood still through the last read, so the
+   * caller may change it.
+   */
+  private async readSource(
+    name: string,
+    signal: AbortSignal,
+  ): Promise<{ stored: StoredConnection | undefined; secret: string | null; settled: boolean }> {
+    for (let reads = 1; ; reads++) {
+      const seen = this.cache.get(name)
+      const stored = await this.source.getBase(name)
+      // The descriptor read above: the password is resolved for the target it goes to.
+      const secret = stored === undefined ? null : await this.source.getSecret(name, stored)
+      signal.throwIfAborted()
+      // Another call replaced or dropped the slot while this one read: what it read may be newer — read again.
+      const settled = this.cache.get(name) === seen
+      if (settled || reads === MAX_SOURCE_READS) return { stored, secret, settled }
     }
   }
 

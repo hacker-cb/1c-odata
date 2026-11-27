@@ -312,6 +312,26 @@ describe('ConnectionPool.get — a connection another process changed (#274)', (
     expect((await serve.list()).find((c) => c.name === 'trade')?.loaded).toBe(true)
   })
 
+  it('a call whose slot keeps moving under every read answers from its own read and leaves the cache alone', async () => {
+    const source = new FileConnectionSource({ dataDir: dir, insecure: true })
+    const serve = new ConnectionPool(source)
+    await serve.get('trade')
+    const cache = Reflect.get(serve, 'cache') as Map<string, unknown>
+    const getSecret = source.getSecret.bind(source)
+    // Every password read sees another call put a slot of its own in place.
+    let moved: unknown
+    vi.spyOn(source, 'getSecret').mockImplementation(async (name, base) => {
+      moved = { entry: new Promise(() => {}), descriptor: 'another', password: 'another' }
+      cache.set('trade', moved)
+      return getSecret(name, base)
+    })
+    const entry = await serve.get('trade')
+    expect(entry.connection.serverTimezone).toBe('Europe/Moscow')
+    expect(source.getSecret).toHaveBeenCalledTimes(3)
+    expect(cache.get('trade')).toBe(moved)
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2)
+  })
+
   it('a stale build that fails leaves the newer build cached', async () => {
     const serve = pool()
     let failStale: (err: Error) => void = () => {}
