@@ -54,9 +54,21 @@ export interface StreamResponse {
 interface WireRequest {
   method: RequestEvent['method']
   url: string
-  headers: RequestEvent['headers']
+  /** The transport's own copy ({@link readHeaders}) — read by nothing but it. */
+  headers: WireHeaders
   body?: string
 }
+
+/**
+ * Headers as the snapshot holds them: a plain object of strings, or string
+ * pairs where the hook gave `Headers` or pairs (`fromHeaders` tells which, so
+ * a copy for a later hook takes the form it had). Anything else — `undefined`,
+ * a value fetch will refuse — as given.
+ */
+type WireHeaders =
+  | { kind: 'record'; record: Record<string, string> }
+  | { kind: 'pairs'; pairs: [string, string][]; fromHeaders: boolean }
+  | { kind: 'other'; value: unknown }
 
 interface PreparedRequest {
   /** The event later hooks are handed — the one `beforeRequest` left, carrying the request signal. */
@@ -156,7 +168,7 @@ async function prepareRequest(
     if (!tookSignal) reqEvent = copyEvent(reqEvent, wire, combined)
     fetchInit = {
       method: wire.method,
-      headers: wire.headers,
+      ...fetchHeaders(wire.headers),
       signal: combined,
       ...(wire.body !== undefined ? { body: wire.body } : {}),
     }
@@ -196,39 +208,75 @@ async function prepareRequest(
  * asked. Its headers and body are left unread: nothing will be sent.
  */
 function askedRequest(event: RequestEvent, config: RequestConfig): WireRequest {
+  const asked = { method: config.method, url: config.url, headers: readHeaders(config.headers) }
   try {
-    return { ...config, method: event.method, url: event.url }
+    return { ...asked, method: event.method, url: event.url }
   } catch {
-    return config
+    return asked
   }
 }
 
 /**
- * Read the request off `event` once: `method`, `url`, `headers` and `body`. A
- * plain headers object is copied, each value as the string fetch would make
- * of it, so a getter on a header, or a value whose conversion throws, is read
- * here rather than inside the fetch. Headers fetch would iterate (`Headers`,
- * pairs) are kept as given. What throws here throws to the caller.
+ * Read the request off `event` once, in the order the transport always has:
+ * `method`, `url`, `body`, then `headers` ({@link readHeaders}). What throws
+ * here throws to the caller.
  */
 function readWire(event: RequestEvent): WireRequest {
   const method = event.method
   const url = event.url
-  const headers = copyHeaders(event.headers)
   const body = event.body
+  const headers = readHeaders(event.headers)
   return body !== undefined ? { method, url, headers, body } : { method, url, headers }
 }
 
-/** A plain headers object copied, its values strings; anything else as given. */
-function copyHeaders(headers: RequestEvent['headers']): RequestEvent['headers'] {
-  if (typeof headers !== 'object' || headers === null || Symbol.iterator in headers) return headers
-  const copy: Record<string, string> = {}
-  for (const [name, value] of Object.entries(headers)) copy[name] = String(value)
-  return copy
+/**
+ * Read headers the way fetch would, into the snapshot's own copy: a plain
+ * object key by key (own enumerable keys, each value read and made a string in
+ * turn), `Headers` or pairs pair by pair — so a getter, or a value whose
+ * conversion throws, does so here rather than inside the fetch. What throws
+ * here throws to the caller.
+ */
+function readHeaders(headers: unknown): WireHeaders {
+  if (typeof headers !== 'object' || headers === null) return { kind: 'other', value: headers }
+  if (Symbol.iterator in headers) {
+    const pairs = Array.from(headers as Iterable<Iterable<unknown>>, (item): [string, string] => {
+      const pair = Array.from(item)
+      if (pair.length !== 2) throw new TypeError('a header pair must have exactly two items')
+      return [`${pair[0]}`, `${pair[1]}`]
+    })
+    return { kind: 'pairs', pairs, fromHeaders: headers instanceof Headers }
+  }
+  const record: Record<string, string> = {}
+  const source = headers as Record<PropertyKey, unknown>
+  for (const key of Reflect.ownKeys(source)) {
+    if (!Object.getOwnPropertyDescriptor(source, key)?.enumerable) continue
+    // A template literal, not String(): a Symbol throws, as it does in fetch.
+    record[`${key as string}`] = `${source[key]}`
+  }
+  return { kind: 'record', record }
+}
+
+/** What fetch is handed: the snapshot's headers. */
+function fetchHeaders(headers: WireHeaders): Pick<RequestInit, 'headers'> {
+  if (headers.kind === 'record') return { headers: headers.record }
+  if (headers.kind === 'pairs') return { headers: headers.pairs }
+  return headers.value === undefined ? {} : { headers: headers.value as NonNullable<RequestInit['headers']> }
+}
+
+/** The snapshot's headers as an event's — a copy of their own, in the form the hook gave them. */
+function eventHeaders(headers: WireHeaders): RequestEvent['headers'] {
+  if (headers.kind === 'record') return { ...headers.record }
+  if (headers.kind === 'other') return headers.value as RequestEvent['headers']
+  const pairs = headers.pairs.map(([name, value]): [string, string] => [name, value])
+  // Cast: `Headers` and pairs are no `Record`, but fetch takes them, and a
+  // hook that gave them gets them back.
+  return (headers.fromHeaders ? new Headers(pairs) : pairs) as unknown as RequestEvent['headers']
 }
 
 /** The request fields of the snapshot, as an event's — headers a copy of their own, so a hook changing them changes no other. */
-function wireFields(wire: WireRequest): WireRequest {
-  return { ...wire, headers: copyHeaders(wire.headers) }
+function wireFields(wire: WireRequest): Omit<RequestEvent, 'signal'> {
+  const fields = { method: wire.method, url: wire.url, headers: eventHeaders(wire.headers) }
+  return wire.body !== undefined ? { ...fields, body: wire.body } : fields
 }
 
 /** The request fields every copy of an event takes from the snapshot. */
@@ -247,9 +295,9 @@ function takesSignal(event: RequestEvent, signal: AbortSignal): boolean {
 
 /**
  * A copy of `event` for the later hooks, carrying `signal`: its own fields
- * other than the request's kept as they are defined — a getter copied, not
- * called — and the request's fields the snapshot's. What throws here throws to
- * the caller.
+ * other than the request's kept as they are defined — a getter or setter
+ * copied, not called, and still run on `event` itself — and the request's
+ * fields the snapshot's. What throws here throws to the caller.
  */
 function copyEvent(event: RequestEvent, wire: WireRequest, signal: AbortSignal): RequestEvent {
   const copy = {}
@@ -257,7 +305,10 @@ function copyEvent(event: RequestEvent, wire: WireRequest, signal: AbortSignal):
   for (const key of Reflect.ownKeys(own)) {
     const d = own[key as keyof typeof own]
     if (d === undefined || !d.enumerable || WIRE_KEYS.has(key)) continue
-    Object.defineProperty(copy, key, { ...d, configurable: true, ...('value' in d ? { writable: true } : {}) })
+    const field: PropertyDescriptor = 'value' in d ? { value: d.value, writable: true } : {}
+    if (d.get) field.get = d.get.bind(event)
+    if (d.set) field.set = d.set.bind(event)
+    Object.defineProperty(copy, key, { ...field, enumerable: true, configurable: true })
   }
   return Object.assign(copy, wireFields(wire), { signal })
 }

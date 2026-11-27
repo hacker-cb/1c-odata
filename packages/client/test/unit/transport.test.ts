@@ -1507,7 +1507,7 @@ describe('transport — the request is read once, right after beforeRequest (#25
             get signal() {
               return foreign
             },
-            set signal(_: AbortSignal | undefined) {},
+            set signal(_: AbortSignal) {},
           }
         },
         afterResponse: (req) => {
@@ -1665,10 +1665,10 @@ describe('transport — the request is read once, right after beforeRequest (#25
           let signal: AbortSignal | undefined
           return {
             ...req,
-            get signal() {
-              return signal
+            get signal(): AbortSignal {
+              return signal as AbortSignal
             },
-            set signal(s: AbortSignal | undefined) {
+            set signal(s: AbortSignal) {
               signal = s
               req.headers = { ...req.headers, 'X-Bound': 'yes' }
             },
@@ -1725,6 +1725,126 @@ describe('transport — the request is read once, right after beforeRequest (#25
     expect(err).toBe(convErr)
     expect(trace.threw).toBe(true)
     expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('headers given as pairs are read pair by pair before the fetch: a throwing value is the hook’s own error', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
+    const getterErr = new Error('token unavailable')
+    const trace: AttemptTrace = { threw: false }
+    const pair = ['X-Token', '']
+    Object.defineProperty(pair, 1, {
+      get() {
+        throw getterErr
+      },
+    })
+    const err = await request(
+      target,
+      {
+        hooks: {
+          beforeRequest: (req) => ({ ...req, headers: [pair] as unknown as Record<string, string> }),
+        },
+      },
+      trace,
+    ).catch((e: unknown) => e)
+    expect(err).toBe(getterErr)
+    expect(trace.threw).toBe(true)
+  })
+
+  it('a copy of an event with Headers gets Headers of its own: afterResponse changing them leaves onError’s', async () => {
+    server.use(http.get(`${base}/X`, () => new HttpResponse('down', { status: 503 })))
+    let after: RequestEvent | undefined
+    let onErrorReq: RequestEvent | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: ({ signal: _, ...req }) =>
+          Object.freeze({ ...req, headers: new Headers(req.headers) as unknown as Record<string, string> }),
+        afterResponse: (req) => {
+          after = req
+          ;(req.headers as unknown as Headers).set('Authorization', 'changed')
+          delete req.signal
+          Object.freeze(req)
+        },
+        onError: (req) => {
+          onErrorReq = req
+        },
+      },
+    }).catch(() => {})
+    expect(after?.headers).toBeInstanceOf(Headers)
+    expect((onErrorReq?.headers as unknown as Headers | undefined)?.get('Authorization')).toBe(auth.header)
+  })
+
+  it('a header value of a Symbol is the hook’s own error, as fetch would refuse it', async () => {
+    const trace: AttemptTrace = { threw: false }
+    const err = await request(
+      target,
+      {
+        hooks: {
+          beforeRequest: (req) => {
+            req.headers['X-Bad'] = Symbol('bad') as unknown as string
+          },
+        },
+      },
+      trace,
+    ).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TypeError)
+    expect(trace.threw).toBe(true)
+  })
+
+  it('the body is read before the headers: a body getter setting a header gets it sent', async () => {
+    let captured: Record<string, string> = {}
+    server.use(
+      http.post(`${base}/X`, ({ request }) => {
+        captured = Object.fromEntries(request.headers.entries())
+        return HttpResponse.json({})
+      }),
+    )
+    await request(
+      { ...target, method: 'POST', body: '{}' },
+      {
+        hooks: {
+          beforeRequest: ({ signal: _, ...req }) => {
+            const headers = { ...req.headers }
+            return {
+              ...req,
+              headers,
+              get body() {
+                headers['X-Digest'] = 'd1'
+                return '{"a":1}'
+              },
+            }
+          },
+        },
+      },
+    )
+    expect(captured['x-digest']).toBe('d1')
+  })
+
+  it('a getter copied onto a frozen event’s copy still runs on the event itself', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
+    class Traced {
+      readonly #id = 't1'
+      constructor(req: RequestEvent) {
+        Object.assign(this, { method: req.method, url: req.url, headers: req.headers })
+        Object.defineProperty(this, 'traceId', {
+          enumerable: true,
+          get(this: Traced) {
+            return this.#id
+          },
+        })
+        Object.freeze(this)
+      }
+    }
+    let after: (RequestEvent & { traceId?: string }) | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: (req) => new Traced(req) as unknown as RequestEvent,
+        afterResponse: (req) => {
+          after = req
+        },
+      },
+    })
+    expect(after?.traceId).toBe('t1')
+    expect(after?.signal).toBeInstanceOf(AbortSignal)
   })
 
   it('a caller’s abort during beforeRequest leaves the event’s headers unread', async () => {
