@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { type DataShape, InvalidArgumentError } from '@1c-odata/client'
+import { type DataShape, InvalidArgumentError, normalizeBaseUrl } from '@1c-odata/client'
 import { writeFileAtomic } from './atomic-write.js'
 import { stripUrlUserinfo } from './redact.js'
 
@@ -35,6 +35,15 @@ export interface StoredConnection {
    * hand-written / older config).
    */
   addedBy?: 'agent'
+}
+
+/**
+ * A connection's base URL as its auth target: trimmed, without userinfo,
+ * normalized. The one form a target is compared and keyed by — the add guards
+ * and the key an agent's stored password lives under.
+ */
+export function targetBaseUrl(baseUrl: string): string {
+  return normalizeBaseUrl(stripUrlUserinfo(baseUrl.trim()))
 }
 
 /** Shape of `<dataDir>/config.json`. */

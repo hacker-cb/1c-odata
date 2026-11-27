@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { writeFileAtomic } from './atomic-write.js'
-import type { StoredConnection } from './config.js'
+import { type StoredConnection, targetBaseUrl } from './config.js'
 
 /**
  * Where a connection's password was resolved from (or `none`).
@@ -107,6 +107,24 @@ export function connectionEnvPassword(
   return conn?.addedBy === 'agent' ? undefined : envPassword(name, env)
 }
 
+/** What decides where a connection's password lives: whether an agent added it, and its target. */
+export type SecretOwner = Pick<StoredConnection, 'addedBy' | 'baseUrl'>
+
+/**
+ * The key connection `name`'s stored password lives under — the keychain
+ * account and the `credentials.json` key: `name` for a connection a person
+ * added; `name@<first 16 hex of sha256(its base URL as a target)>` for one an
+ * agent added. An agent's connection thus never reads a password stored for a
+ * person's connection of that name, nor one stored under another server — what
+ * another process failed to delete included (#253). `@` is no part of a
+ * connection name, so the two forms never meet.
+ */
+export function secretKey(name: string, conn: SecretOwner | undefined): string {
+  if (conn?.addedBy !== 'agent') return name
+  const hash = createHash('sha256').update(targetBaseUrl(conn.baseUrl)).digest('hex').slice(0, 16)
+  return `${name}@${hash}`
+}
+
 interface FileSecrets {
   [name: string]: string
 }
@@ -139,9 +157,9 @@ export class SecretStore {
     return join(this.dataDir, 'credentials.json')
   }
 
-  /** Keychain entry for `name` under this store's per-data-dir service. */
-  private keychainEntry(mod: KeyringModule, name: string): KeyringEntry {
-    return new mod.Entry(keychainServiceName(this.dataDir), name)
+  /** Keychain entry for `key` ({@link secretKey}) under this store's per-data-dir service. */
+  private keychainEntry(mod: KeyringModule, key: string): KeyringEntry {
+    return new mod.Entry(keychainServiceName(this.dataDir), key)
   }
 
   private async keyringModule(): Promise<KeyringModule | null> {
@@ -158,40 +176,45 @@ export class SecretStore {
   /**
    * Read a password following env → keychain → file. `null` if none found.
    * Pass the stored connection: one an agent added skips the env var
-   * ({@link connectionEnvPassword}).
+   * ({@link connectionEnvPassword}) and reads only what was stored for its
+   * target ({@link secretKey}).
    */
-  async read(name: string, conn?: Pick<StoredConnection, 'addedBy'>): Promise<ReadResult | null> {
+  async read(name: string, conn?: SecretOwner): Promise<ReadResult | null> {
     const fromEnv = connectionEnvPassword(name, conn, this.env)
     if (fromEnv !== undefined) return { password: fromEnv, source: 'env' }
+    const key = secretKey(name, conn)
     if (!this.insecure) {
-      const fromKeychain = await this.keychainRead(name)
+      const fromKeychain = await this.keychainRead(key)
       if (fromKeychain !== null) return { password: fromKeychain, source: 'keychain' }
     }
-    const fromFile = this.fileRead(name)
+    const fromFile = this.fileRead(key)
     if (fromFile !== null) return { password: fromFile, source: 'file' }
     return null
   }
 
   /** Where the password for `name` lives, WITHOUT revealing it (for `list`); `conn` as for {@link read}. */
-  async source(name: string, conn?: Pick<StoredConnection, 'addedBy'>): Promise<SecretSource> {
+  async source(name: string, conn?: SecretOwner): Promise<SecretSource> {
     if (connectionEnvPassword(name, conn, this.env) !== undefined) return 'env'
-    if (!this.insecure && (await this.keychainRead(name)) !== null) return 'keychain'
-    if (this.fileRead(name) !== null) return 'file'
+    const key = secretKey(name, conn)
+    if (!this.insecure && (await this.keychainRead(key)) !== null) return 'keychain'
+    if (this.fileRead(key) !== null) return 'file'
     return 'none'
   }
 
   /**
-   * Store a password. Prefers the keychain; falls back to the 0600 file loudly —
-   * and refuses, writing nothing, where the keychain holds an old copy it cannot
-   * delete, as that copy would be read instead of the new password.
+   * Store a password for connection `name`, stored as `conn` once written —
+   * under its {@link secretKey}. Prefers the keychain; falls back to the 0600
+   * file loudly — and refuses, writing nothing, where the keychain holds an old
+   * copy it cannot delete, as that copy would be read instead of the new password.
    */
-  async write(name: string, password: string): Promise<{ backend: 'keychain' | 'file' }> {
+  async write(name: string, password: string, conn?: SecretOwner): Promise<{ backend: 'keychain' | 'file' }> {
+    const key = secretKey(name, conn)
     if (!this.insecure) {
       const mod = await this.keyringModule()
       if (mod !== null) {
         try {
-          this.keychainEntry(mod, name).setPassword(password)
-          this.fileDelete(name) // drop any stale plaintext copy from a prior fallback
+          this.keychainEntry(mod, key).setPassword(password)
+          this.fileDelete(key) // drop any stale plaintext copy from a prior fallback
           return { backend: 'keychain' }
         } catch (err) {
           this.warn(
@@ -211,8 +234,8 @@ export class SecretStore {
     // keychain answers again (#257). Strict where this store reads the keychain:
     // a copy that cannot be deleted refuses the write, nothing changed.
     // `--insecure-storage` never reads it, so its delete stays best-effort.
-    await this.keychainDelete(name, !this.insecure)
-    this.fileWrite(name, password)
+    await this.keychainDelete(key, !this.insecure, name)
+    this.fileWrite(key, password)
     return { backend: 'file' }
   }
 
@@ -223,18 +246,20 @@ export class SecretStore {
    * keychain unless `strict`: then a keychain this store reads that fails to
    * delete (an error, not "no such entry") throws, as a password left there
    * would be read again once the keychain answers. `--insecure-storage` never
-   * reads the keychain, so its delete stays best-effort even then.
+   * reads the keychain, so its delete stays best-effort even then. `conn` as
+   * for {@link read}: it names the key removed.
    */
-  async remove(name: string, opts: { strict?: boolean } = {}): Promise<void> {
-    await this.keychainDelete(name, opts.strict === true && !this.insecure)
-    this.fileDelete(name)
+  async remove(name: string, opts: { strict?: boolean } = {}, conn?: SecretOwner): Promise<void> {
+    const key = secretKey(name, conn)
+    await this.keychainDelete(key, opts.strict === true && !this.insecure, name)
+    this.fileDelete(key)
   }
 
-  private async keychainRead(name: string): Promise<string | null> {
+  private async keychainRead(key: string): Promise<string | null> {
     const mod = await this.keyringModule()
     if (mod === null) return null
     try {
-      const pwd = this.keychainEntry(mod, name).getPassword()
+      const pwd = this.keychainEntry(mod, key).getPassword()
       return pwd !== null && pwd !== '' ? pwd : null
     } catch {
       // NoEntry or keychain unreachable — treat as "not found"
@@ -243,15 +268,16 @@ export class SecretStore {
   }
 
   /**
-   * Delete `name`'s keychain entry. "No such entry" is not an error (the
-   * backend answers `false`); a keychain that fails otherwise is ignored —
-   * nothing reachable to delete — unless `strict`, when it throws.
+   * Delete the keychain entry under `key`, connection `name`'s. "No such entry"
+   * is not an error (the backend answers `false`); a keychain that fails
+   * otherwise is ignored — nothing reachable to delete — unless `strict`, when
+   * it throws.
    */
-  private async keychainDelete(name: string, strict = false): Promise<void> {
+  private async keychainDelete(key: string, strict: boolean, name: string): Promise<void> {
     const mod = await this.keyringModule()
     if (mod === null) return
     try {
-      this.keychainEntry(mod, name).deletePassword()
+      this.keychainEntry(mod, key).deletePassword()
     } catch (err) {
       if (strict) {
         throw new Error(
@@ -263,20 +289,20 @@ export class SecretStore {
 
   // ── plaintext-file backend (0600, modelled on ~/.pgpass) ──
 
-  private fileRead(name: string): string | null {
-    const pwd = this.readFileSecrets(true)[name]
+  private fileRead(key: string): string | null {
+    const pwd = this.readFileSecrets(true)[key]
     return typeof pwd === 'string' && pwd !== '' ? pwd : null
   }
 
-  private fileWrite(name: string, password: string): void {
+  private fileWrite(key: string, password: string): void {
     // Read existing secrets (tolerates too-open perms; throws on malformed JSON so a
     // write never clobbers unparseable siblings), add ours, then rewrite at 0600.
     const secrets = this.readFileSecrets(false)
-    secrets[name] = password
+    secrets[key] = password
     this.writeFileSecrets(secrets)
   }
 
-  private fileDelete(name: string): void {
+  private fileDelete(key: string): void {
     let secrets: FileSecrets
     try {
       secrets = this.readFileSecrets(false)
@@ -287,13 +313,13 @@ export class SecretStore {
       this.fileUnlink()
       return
     }
-    if (!(name in secrets)) {
+    if (!(key in secrets)) {
       // An empty `{}` file that exists is harmless to drop; a file still holding
       // other connections' secrets is left untouched.
       if (Object.keys(secrets).length === 0 && existsSync(this.credentialsPath)) this.fileUnlink()
       return
     }
-    delete secrets[name]
+    delete secrets[key]
     if (Object.keys(secrets).length === 0) {
       this.fileUnlink()
       return

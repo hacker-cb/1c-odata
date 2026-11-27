@@ -8,10 +8,10 @@ import {
 } from '@1c-odata/client'
 import { request } from '@1c-odata/client/internal'
 import { fetchMetadataXml } from '@1c-odata/metadata'
-import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfig } from './config.js'
+import { assertValidConnectionName, loadConfig, type StoredConnection, saveConfig, targetBaseUrl } from './config.js'
 import { DEFAULT_METADATA_TIMEOUT_MS, DEFAULT_REACHABILITY_TIMEOUT_MS } from './constants.js'
 import { stripUrlUserinfo } from './redact.js'
-import { connectionEnvPassword, envPassword, passwordEnvVar, SecretStore } from './secret-store.js'
+import { connectionEnvPassword, envPassword, passwordEnvVar, SecretStore, secretKey } from './secret-store.js'
 
 /**
  * Throw if `name`'s password env-var slug collides with a DIFFERENT existing
@@ -32,7 +32,7 @@ function assertNoPasswordEnvCollision(connections: Record<string, StoredConnecti
 
 /** A connection's auth target as stored: the base URL without userinfo, normalized, and the trimmed login. */
 function authTarget(baseUrl: string, login: string): { baseUrl: string; login: string } {
-  return { baseUrl: normalizeBaseUrl(stripUrlUserinfo(baseUrl.trim())), login: login.trim() }
+  return { baseUrl: targetBaseUrl(baseUrl), login: login.trim() }
 }
 
 /** Whether `existing` — normalized as {@link authTarget} normalizes a new one — already points at `next`. */
@@ -224,23 +224,31 @@ export interface UpsertConnectionResult {
 }
 
 /**
- * Apply the secret-store side of an upsert: write the new password, or — on a
- * passwordless overwrite that changes the auth target (baseUrl/login) — drop the
- * stale secret so the old credential is never sent to the new endpoint.
+ * Apply the secret-store side of an upsert, for the connection as `written`:
+ * write the new password under its key; or — on a passwordless overwrite that
+ * changes the auth target (baseUrl/login), or the key its password lives under
+ * (a person's add over an agent's connection, {@link secretKey}) — drop the
+ * stale secret, so a password stored for another target or another hand is
+ * never sent to this one.
  */
 async function applyUpsertSecret(
   store: SecretStore,
   name: string,
   password: string | undefined,
   existing: StoredConnection | undefined,
-  next: { baseUrl: string; login: string },
+  written: StoredConnection,
 ): Promise<{ passwordBackend?: 'keychain' | 'file'; passwordCleared: boolean }> {
+  const rekeyed = existing !== undefined && secretKey(name, existing) !== secretKey(name, written)
   if (password !== undefined && password !== '') {
-    return { passwordBackend: (await store.write(name, password)).backend, passwordCleared: false }
+    const { backend } = await store.write(name, password, written)
+    // Best-effort: the old key is never read for this connection again.
+    if (rekeyed) await store.remove(name, {}, existing)
+    return { passwordBackend: backend, passwordCleared: false }
   }
-  if (existing !== undefined && !sameAuthTarget(existing, next)) {
+  if (existing !== undefined && (rekeyed || !sameAuthTarget(existing, written))) {
     // Fail closed: a password left behind would go to the new target once read again.
-    await store.remove(name, { strict: true })
+    await store.remove(name, { strict: true }, existing)
+    if (rekeyed) await store.remove(name, { strict: true }, written)
     return { passwordCleared: true }
   }
   return { passwordCleared: false }
@@ -318,10 +326,11 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
     // Mutate the secret store BEFORE persisting config: if a secret write/remove
     // throws, config.json is left untouched, so it can never end up pointing at a
     // new auth target (baseUrl/login) while a stale password still resolves.
+    const written = buildStoredConnection({ baseUrl, login, serverTimezone }, input, existing, byAgent)
     const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
-    const secret = await applyUpsertSecret(store, input.name, password, existing, { baseUrl, login })
+    const secret = await applyUpsertSecret(store, input.name, password, existing, written)
 
-    config.connections[input.name] = buildStoredConnection({ baseUrl, login, serverTimezone }, input, existing, byAgent)
+    config.connections[input.name] = written
     saveConfig(input.dataDir, config)
 
     return {
@@ -332,14 +341,23 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
   })
 }
 
-/** Remove a connection from `config.json` and delete its stored password. Returns false if absent. */
+/**
+ * Remove a connection from `config.json` and delete its stored password — under
+ * the name and, for an agent's connection, under its target's key
+ * ({@link secretKey}). Best-effort on the keychain: a password left there is
+ * keyed to what it was stored for, and an agent re-creating the connection
+ * never reads a person's. Returns false if absent.
+ */
 export async function removeConnection(input: { dataDir: string; name: string; insecure?: boolean }): Promise<boolean> {
   return withConfigLock(async () => {
     const config = loadConfig(input.dataDir)
-    if (config.connections[input.name] === undefined) return false
+    const existing = config.connections[input.name]
+    if (existing === undefined) return false
     delete config.connections[input.name]
     saveConfig(input.dataDir, config)
-    await new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false }).remove(input.name)
+    const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
+    await store.remove(input.name)
+    if (existing.addedBy === 'agent') await store.remove(input.name, {}, existing)
     return true
   })
 }
@@ -517,7 +535,7 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
     const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
     let passwordBackend: 'keychain' | 'file' | undefined
     if (input.password !== undefined) {
-      passwordBackend = (await store.write(input.name, input.password)).backend
+      passwordBackend = (await store.write(input.name, input.password, existing)).backend
     }
     const loginUpdated = login !== undefined && login !== existing.login
     if (loginUpdated) existing.login = login

@@ -89,6 +89,10 @@ target that a process holding it would send the password to. So, whatever its ow
   `"addedBy": "agent"` in `config.json`, and **never takes its password from `ONEC_<NAME>_PASSWORD`**, in any
   process: give it a password through `add_connection` / `set_credentials`, or have a person re-add it with the
   CLI `add --force`, which drops the mark. `list` and `list_connections` show the mark.
+- Such a connection also **reads only a password stored for its own server**: it is stored under
+  `<name>@<16 hex of sha256(base URL)>` (keychain account and `credentials.json` key), never under `<name>`,
+  where a person's connection keeps it. A password a person stored — even one a `remove_connection` could not
+  delete from the keychain — is never read for it, nor one stored for another server.
 - Mixed versions: an MCP process older than this rule neither writes nor keeps the mark — update every process
   that shares the data directory.
 
