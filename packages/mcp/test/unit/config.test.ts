@@ -139,8 +139,13 @@ describe('loadConfig / saveConfig', () => {
       connections: [{ baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'Europe/Moscow' }],
     })
     writeFileSync(configPath(dir), written)
-    expect(() => loadConfig(dir)).toThrow(/"connections" in .*config\.json is an array; .*fix the file/)
+    expect(() => loadConfig(dir)).toThrow(/"connections" of .*config\.json is an array; .*fix the file/)
     expect(readFileSync(configPath(dir), 'utf8')).toBe(written)
+  })
+
+  it('refuses a config.json that is an array at the top level', () => {
+    writeFileSync(configPath(dir), JSON.stringify([{ baseUrl: 'http://h/odata', login: 'u', serverTimezone: 'UTC' }]))
+    expect(() => loadConfig(dir)).toThrow(/The top level of .*config\.json is an array/)
   })
 
   it('drops connections whose name key is invalid (non-ASCII / leading separator)', () => {

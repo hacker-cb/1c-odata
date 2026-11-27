@@ -28,18 +28,25 @@ describe('why @napi-rs/keyring is unavailable', () => {
     })
   })
 
-  it('the loader’s wrapped error: its first line and its first cause, on one line', () => {
-    const err = Object.assign(
-      new Error(
-        'Cannot find native binding. npm has a bug related to optional dependencies.\nPlease try reinstalling.',
-      ),
-      { cause: [new Error('/app/node_modules/@napi-rs/keyring/keyring.darwin-arm64.node: wrong architecture\nmore')] },
-    )
+  it('the loader’s wrapped error: its first line and every cause’s, on one line', () => {
+    const err = Object.assign(new Error('Cannot find native binding.\nPlease try reinstalling.'), {
+      cause: [
+        new Error("Cannot find module './keyring.darwin-universal.node'\nRequire stack: …"),
+        new Error('/app/node_modules/@napi-rs/keyring-darwin-arm64/keyring.node: wrong architecture'),
+      ],
+    })
     const { reason } = keyringLoadFailure(err)
     expect(reason).toBe(
-      '@napi-rs/keyring could not be loaded (Cannot find native binding. npm has a bug related to optional dependencies.: /app/node_modules/@napi-rs/keyring/keyring.darwin-arm64.node: wrong architecture)',
+      "@napi-rs/keyring could not be loaded (Cannot find native binding.; Cannot find module './keyring.darwin-universal.node'; /app/node_modules/@napi-rs/keyring-darwin-arm64/keyring.node: wrong architecture)",
     )
     expect(reason).not.toContain('\n')
+  })
+
+  it('a cause that cannot even be turned into text does not throw', () => {
+    const err = Object.assign(new Error('Cannot find native binding'), { cause: [Object.create(null)] })
+    expect(keyringLoadFailure(err).reason).toBe(
+      '@napi-rs/keyring could not be loaded (Cannot find native binding; an error that cannot be shown)',
+    )
   })
 
   it('a platform package of it missing: named, not "not installed"', () => {

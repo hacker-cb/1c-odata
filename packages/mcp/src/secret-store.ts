@@ -513,9 +513,10 @@ export function keyringLoadFailure(err: unknown): KeyringUnavailable {
     (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') &&
     /['"]@napi-rs\/keyring['"]/.test(errMessage(err))
   if (missing) return { reason: '@napi-rs/keyring not installed', fix: 'install the keychain backend' }
+  // Every cause the loader collected: the first is often an optional binary it tried before the one that failed.
   const cause = (err as { cause?: unknown } | undefined)?.cause
-  const first = Array.isArray(cause) ? cause[0] : cause
-  const detail = [firstLine(errMessage(err)), ...(first !== undefined ? [firstLine(errMessage(first))] : [])].join(': ')
+  const causes = Array.isArray(cause) ? cause : cause !== undefined ? [cause] : []
+  const detail = [err, ...causes].map((e) => firstLine(errMessage(e))).join('; ')
   return {
     reason: `@napi-rs/keyring could not be loaded (${detail})`,
     fix: 'reinstall @napi-rs/keyring for this platform and Node version',
@@ -526,6 +527,12 @@ function firstLine(text: string): string {
   return text.split('\n', 1)[0] ?? text
 }
 
+/** `err`'s message — never throwing, for an error handler: an object without a prototype has no `toString`. */
 function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+  if (err instanceof Error) return err.message
+  try {
+    return String(err)
+  } catch {
+    return 'an error that cannot be shown'
+  }
 }

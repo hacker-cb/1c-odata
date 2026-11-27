@@ -87,10 +87,11 @@ async function addConnection(
     byAgent: true,
     signal,
   })
-  // A password stored or cleared: a pooled client built with the old one must go, also where the
-  // new one cannot be read back — the pool keeps an entry whose password reads as none (#274). An
+  // The pool keeps an entry whose password reads as none (#274): a client built with another password —
+  // one stored or cleared here, or a connection of this name another process removed — must go. Only an
   // overwrite that keeps the password (a label, a timezone) leaves it: the pool sees the rest itself.
-  if (result.passwordBackend !== undefined || result.passwordCleared === true) pool.refresh(connection)
+  const keepsPassword = result.overwritten && result.passwordBackend === undefined && result.passwordCleared !== true
+  if (!keepsPassword) pool.refresh(connection)
   return {
     summary: `Connection "${connection}" ${result.overwritten ? 'updated' : 'added'}${passwordNote(result)}.`,
     data: {
@@ -200,7 +201,7 @@ async function applyCredentialChange(
     signal,
   })
   // The client built with the old credentials goes, also where the new password cannot be read back.
-  pool.refresh(connection)
+  if (result.loginUpdated || result.passwordUpdated) pool.refresh(connection)
   return summarizeCredentialChange(connection, result, verified)
 }
 

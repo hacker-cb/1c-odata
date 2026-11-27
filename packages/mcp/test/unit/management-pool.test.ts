@@ -6,7 +6,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConnectionPool } from '../../src/connection-pool.js'
-import { upsertConnection } from '../../src/connections.js'
+import { removeConnection, upsertConnection } from '../../src/connections.js'
 import { FileConnectionSource } from '../../src/file-connection-source.js'
 import { registerManagementTools } from '../../src/tools/management.js'
 
@@ -106,6 +106,26 @@ describe('the management tools and the pool (#274)', () => {
     })
     expect(res.isError).toBeFalsy()
     await expect(pool.get('c')).rejects.toThrow(/No password for "c"/)
+    await mcp.close()
+  })
+
+  it('another process removed it, then add_connection without a password: the old password is not used again', async () => {
+    const { pool, mcp } = await connect()
+    await pool.get('c')
+    await removeConnection({ dataDir: dir, name: 'c', insecure: true }) // the CLI, unseen by this pool
+    await mcp.callTool({
+      name: 'add_connection',
+      arguments: { connection: 'c', baseUrl: BASE, login: 'u', serverTimezone: 'UTC' },
+    })
+    await expect(pool.get('c')).rejects.toThrow(/No password for "c"/)
+    await mcp.close()
+  })
+
+  it('set_credentials that changes nothing leaves the built client', async () => {
+    const { pool, mcp } = await connect()
+    const before = await pool.get('c')
+    await mcp.callTool({ name: 'set_credentials', arguments: { connection: 'c', login: 'u' } })
+    expect(await pool.get('c')).toBe(before)
     await mcp.close()
   })
 
