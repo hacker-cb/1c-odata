@@ -164,6 +164,8 @@ export class SecretStore {
   private readonly env: NodeJS.ProcessEnv
   private readonly warn: (message: string) => void
   private keyring: KeyringModule | null | undefined
+  /** Why the keychain backend did not load, where it did not: what the downgrade warning names. */
+  private keyringUnavailable = ''
 
   constructor(opts: SecretStoreOptions) {
     this.dataDir = opts.dataDir
@@ -185,8 +187,9 @@ export class SecretStore {
     if (this.keyring === undefined) {
       try {
         this.keyring = (await import('@napi-rs/keyring')) as unknown as KeyringModule
-      } catch {
+      } catch (err) {
         this.keyring = null
+        this.keyringUnavailable = keyringLoadFailure(err)
       }
     }
     return this.keyring
@@ -257,7 +260,7 @@ export class SecretStore {
     const mod = await this.keyringModule()
     if (mod === null) {
       this.warn(
-        `⚠ @napi-rs/keyring not installed; falling back to plaintext ${this.credentialsPath} (0600). ` +
+        `⚠ ${this.keyringUnavailable}; falling back to plaintext ${this.credentialsPath} (0600). ` +
           avoid('install the keychain backend'),
       )
       return false
@@ -488,6 +491,21 @@ export class SecretStore {
     mkdirSync(this.dataDir, { recursive: true })
     writeFileAtomic(this.credentialsPath, `${JSON.stringify(secrets, null, 2)}\n`)
   }
+}
+
+/**
+ * What stopped `@napi-rs/keyring` from loading: not installed (an optional
+ * dependency the install skipped), or installed and failing — a native binary
+ * built for another platform or Node ABI, say — which reinstalling fixes and
+ * "not installed" would hide.
+ */
+export function keyringLoadFailure(err: unknown): string {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code
+  // The package itself, quoted as Node names it — not a platform package of it (`@napi-rs/keyring-linux-x64-gnu`).
+  const missing =
+    (code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') &&
+    /['"]@napi-rs\/keyring['"]/.test(errMessage(err))
+  return missing ? '@napi-rs/keyring not installed' : `@napi-rs/keyring could not be loaded (${errMessage(err)})`
 }
 
 function errMessage(err: unknown): string {
