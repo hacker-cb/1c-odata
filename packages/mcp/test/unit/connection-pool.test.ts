@@ -16,6 +16,18 @@ vi.mock('@1c-odata/metadata', () => ({
   parseEdmx: vi.fn(),
   buildMetadataIndex: vi.fn(),
 }))
+// Isolate from the real OS keychain: upsertConnection / removeConnection delete best-effort there.
+vi.mock('@napi-rs/keyring', () => ({
+  Entry: class {
+    getPassword(): string | null {
+      return null
+    }
+    setPassword(): void {}
+    deletePassword(): boolean {
+      return false
+    }
+  },
+}))
 vi.mock('@1c-odata/client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@1c-odata/client')>()),
   ODataV3Client: vi.fn(),
@@ -25,6 +37,8 @@ let dir: string
 const write = (file: string, body: unknown) => writeFileSync(join(dir, file), JSON.stringify(body), { mode: 0o600 })
 
 beforeEach(() => {
+  // A password the developer's shell sets for `trade` would outrank the stored ones.
+  vi.stubEnv('ONEC_TRADE_PASSWORD', '')
   dir = mkdtempSync(join(tmpdir(), 'mcp-pool-'))
   vi.mocked(fetchMetadataXml).mockReset().mockResolvedValue('<edmx/>')
   vi.mocked(parseEdmx)
@@ -42,7 +56,10 @@ beforeEach(() => {
   })
   write('credentials.json', { trade: 'pw' })
 })
-afterEach(() => rmSync(dir, { recursive: true, force: true }))
+afterEach(() => {
+  vi.unstubAllEnvs()
+  rmSync(dir, { recursive: true, force: true })
+})
 
 const pool = () => new ConnectionPool(new FileConnectionSource({ dataDir: dir, insecure: true }))
 
@@ -102,7 +119,7 @@ describe('ConnectionPool.get — a connection another process changed (#274)', (
   // Two pools on one data dir stand for two processes: `serve` holding a cached
   // client, and the CLI (or another MCP server) changing config.json and the
   // password store behind it — nothing calls refresh() on the first pool.
-  const trade = { dataDir: '', name: 'trade', baseUrl: 'http://h/odata/standard.odata', login: 'u' }
+  const trade = { name: 'trade', baseUrl: 'http://h/odata/standard.odata', login: 'u' }
   const change = (input: Partial<Parameters<typeof upsertConnection>[0]>) =>
     upsertConnection({
       ...trade,
@@ -169,14 +186,80 @@ describe('ConnectionPool.get — a connection another process changed (#274)', (
     expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2)
   })
 
-  it('fails as password-less once another process drops the password, and builds anew when it is back', async () => {
+  it('keeps an entry whose password no longer reads — a locked keychain reads the same — while its descriptor stands', async () => {
     const serve = pool()
     const built = await serve.get('trade')
+    write('credentials.json', {})
+    await expect(serve.get('trade')).resolves.toBe(built)
+    expect((await serve.list()).find((c) => c.name === 'trade')?.loaded).toBe(true)
+    // A descriptor changed too: nothing to build with, so it fails as password-less.
+    await change({ serverTimezone: 'Asia/Novosibirsk', password: undefined })
     write('credentials.json', {})
     await expect(serve.get('trade')).rejects.toThrow(/No password for "trade"/)
     write('credentials.json', { trade: 'pw' })
     await expect(serve.get('trade')).resolves.not.toBe(built)
     expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports an entry built with an older password as not loaded', async () => {
+    const serve = pool()
+    await serve.get('trade')
+    await change({ password: 'pw2' })
+    expect((await serve.list()).find((c) => c.name === 'trade')?.loaded).toBe(false)
+  })
+
+  it('drops the entry of a connection another process removed once it is listed, without a get by its name', async () => {
+    const serve = pool()
+    const built = await serve.get('trade')
+    await removeConnection({ dataDir: dir, name: 'trade', insecure: true })
+    await serve.list()
+    // Re-added unchanged: the old entry is gone, so it builds anew.
+    await change({})
+    await expect(serve.get('trade')).resolves.not.toBe(built)
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads a shape with its keys reordered as unchanged', async () => {
+    write('config.json', {
+      connections: {
+        trade: { ...trade, serverTimezone: 'Europe/Moscow', shape: { int64Mode: 'bigint', dateMode: 'string' } },
+      },
+    })
+    const serve = pool()
+    const built = await serve.get('trade')
+    write('config.json', {
+      connections: {
+        trade: { ...trade, serverTimezone: 'Europe/Moscow', shape: { dateMode: 'string', int64Mode: 'bigint' } },
+      },
+    })
+    await expect(serve.get('trade')).resolves.toBe(built)
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(1)
+  })
+
+  it('a call that read the source earlier never replaces an entry built from a later read', async () => {
+    const source = new FileConnectionSource({ dataDir: dir, insecure: true })
+    const getSecret = source.getSecret.bind(source)
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    // The first read of the password waits; every later one answers at once.
+    vi.spyOn(source, 'getSecret')
+      .mockImplementationOnce(async (name, base) => {
+        await gate
+        return getSecret(name, base)
+      })
+      .mockImplementation(getSecret)
+    const serve = new ConnectionPool(source)
+    const early = serve.get('trade') // reads Europe/Moscow, then waits on its password
+    await vi.waitFor(() => expect(source.getSecret).toHaveBeenCalledTimes(1))
+    await change({ serverTimezone: 'Asia/Novosibirsk' })
+    const late = await serve.get('trade') // reads Asia/Novosibirsk and builds
+    release()
+    await expect(early).resolves.toBe(late)
+    await expect(serve.get('trade')).resolves.toBe(late)
+    expect(late.connection.serverTimezone).toBe('Asia/Novosibirsk')
+    expect(vi.mocked(fetchMetadataXml)).toHaveBeenCalledTimes(1)
   })
 
   it('reports an entry built from an older descriptor as not loaded', async () => {
