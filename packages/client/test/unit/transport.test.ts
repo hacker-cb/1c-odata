@@ -1340,3 +1340,589 @@ describe('transport — a timeout past what a timer keeps (#232)', () => {
     }
   })
 })
+
+describe('transport — the request is read once, right after beforeRequest (#259)', () => {
+  const target = { method: 'GET' as const, url: `${base}/X`, headers: { Authorization: auth.header } }
+
+  /** `req` with a `url` getter returning it once and throwing on every read after. */
+  function urlReadOnce(req: RequestEvent, err: Error): RequestEvent & { reads: number } {
+    const url = req.url
+    const event = { ...req, reads: 0 }
+    return Object.defineProperty(event, 'url', {
+      enumerable: true,
+      get() {
+        event.reads++
+        if (event.reads > 1) throw err
+        return url
+      },
+    })
+  }
+
+  it('a url getter is read once: the fetch goes to the snapshot', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
+    const getterErr = new Error('read twice')
+    let event: (RequestEvent & { reads: number }) | undefined
+    const res = await request(target, {
+      hooks: {
+        beforeRequest: (req) => {
+          event = urlReadOnce(req, getterErr)
+          return event
+        },
+      },
+    })
+    expect(res.status).toBe(200)
+    expect(event?.reads).toBe(1)
+  })
+
+  it('a network failure reports the snapshot’s request; onError is called with the NetworkError', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.error()))
+    const getterErr = new Error('read twice')
+    const onError = vi.fn()
+    const trace: AttemptTrace = { threw: false }
+    const err = await request(
+      target,
+      { hooks: { beforeRequest: (req) => urlReadOnce(req, getterErr), onError } },
+      trace,
+    ).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(NetworkError)
+    expect((err as NetworkError).request).toEqual({ method: 'GET', url: `${base}/X` })
+    expect(onError).toHaveBeenCalledOnce()
+    expect(trace.threw).toBe(false)
+  })
+
+  it('a timeout stays a TimeoutError with the snapshot’s request, onError called', async () => {
+    server.use(
+      http.get(`${base}/X`, async () => {
+        await new Promise((r) => setTimeout(r, 200))
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    const getterErr = new Error('read twice')
+    const onError = vi.fn()
+    const err = await request(target, {
+      timeout: 30,
+      hooks: { beforeRequest: (req) => urlReadOnce(req, getterErr), onError },
+    }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TimeoutError)
+    expect((err as TimeoutError).request).toEqual({ method: 'GET', url: `${base}/X` })
+    expect(onError).toHaveBeenCalledOnce()
+    expect(onError.mock.calls[0]?.[1]).toBe(err)
+  })
+
+  for (const name of ['request', 'requestStream'] as const) {
+    const call = name === 'request' ? request : requestStream
+
+    it(`${name}: an HTTP error reports the snapshot’s request`, async () => {
+      server.use(http.get(`${base}/X`, () => new HttpResponse('down', { status: 503 })))
+      const getterErr = new Error('read twice')
+      const onError = vi.fn()
+      const err = await call(target, {
+        hooks: { beforeRequest: (req) => urlReadOnce(req, getterErr), onError },
+      }).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(HTTPError)
+      expect((err as HTTPError).request).toEqual({ method: 'GET', url: `${base}/X` })
+      expect(onError).toHaveBeenCalledOnce()
+    })
+  }
+
+  it('a frozen event whose fields are prototype getters: the request carries its headers, later hooks a copy', async () => {
+    let captured: Record<string, string> = {}
+    server.use(
+      http.get(`${base}/X`, ({ request }) => {
+        captured = Object.fromEntries(request.headers.entries())
+        return new HttpResponse('down', { status: 503 })
+      }),
+    )
+    class Event {
+      readonly #req: RequestEvent
+      constructor(req: RequestEvent) {
+        this.#req = req
+        Object.freeze(this)
+      }
+      get method() {
+        return this.#req.method
+      }
+      get url() {
+        return this.#req.url
+      }
+      get headers() {
+        return { ...this.#req.headers, 'X-Trace': 't1' }
+      }
+    }
+    let sent: AbortSignal | undefined
+    let after: RequestEvent | undefined
+    let onErrorReq: RequestEvent | undefined
+    const err = await request(target, {
+      hooks: {
+        beforeRequest: (req) => {
+          sent = req.signal
+          return new Event(req) as unknown as RequestEvent
+        },
+        afterResponse: (req) => {
+          after = req
+        },
+        onError: (req) => {
+          onErrorReq = req
+        },
+      },
+    }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(HTTPError)
+    expect(captured.authorization).toBe(auth.header)
+    expect(captured['x-trace']).toBe('t1')
+    expect(after).toMatchObject({ method: 'GET', url: `${base}/X`, headers: { 'X-Trace': 't1' } })
+    expect(after?.signal).toBe(sent)
+    expect(onErrorReq?.signal).toBe(sent)
+    expect(onErrorReq?.url).toBe(`${base}/X`)
+  })
+
+  it('a frozen plain event keeps its own fields in the copy later hooks get', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
+    let after: (RequestEvent & { traceId?: string }) | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: ({ signal: _, ...req }) => Object.freeze({ ...req, traceId: 't1' }),
+        afterResponse: (req) => {
+          after = req
+        },
+      },
+    })
+    expect(after?.traceId).toBe('t1')
+    expect(after?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('a signal setter that ignores the write: later hooks get the request signal, not the event’s own', async () => {
+    server.use(http.get(`${base}/X`, () => new HttpResponse('down', { status: 503 })))
+    const foreign = new AbortController().signal
+    let sent: AbortSignal | undefined
+    let after: RequestEvent | undefined
+    let onErrorReq: RequestEvent | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: (req) => {
+          sent = req.signal
+          return {
+            method: req.method,
+            url: req.url,
+            headers: req.headers,
+            get signal() {
+              return foreign
+            },
+            set signal(_: AbortSignal) {},
+          }
+        },
+        afterResponse: (req) => {
+          after = req
+        },
+        onError: (req) => {
+          onErrorReq = req
+        },
+      },
+    }).catch(() => {})
+    expect(sent).toBeInstanceOf(AbortSignal)
+    expect(after?.signal).toBe(sent)
+    expect(after?.url).toBe(`${base}/X`)
+    expect(onErrorReq?.signal).toBe(sent)
+  })
+
+  it('a header getter is read once, before the fetch', async () => {
+    let captured: Record<string, string> = {}
+    server.use(
+      http.get(`${base}/X`, ({ request }) => {
+        captured = Object.fromEntries(request.headers.entries())
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    let reads = 0
+    await request(target, {
+      hooks: {
+        beforeRequest: (req) => {
+          Object.defineProperty(req.headers, 'X-Token', {
+            enumerable: true,
+            get() {
+              reads++
+              if (reads > 1) throw new Error('read twice')
+              return 'tok'
+            },
+          })
+        },
+      },
+    })
+    expect(captured['x-token']).toBe('tok')
+    expect(reads).toBe(1)
+  })
+
+  it('headers returned as a Headers instance still go out', async () => {
+    let captured: Record<string, string> = {}
+    server.use(
+      http.get(`${base}/X`, ({ request }) => {
+        captured = Object.fromEntries(request.headers.entries())
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    await request(target, {
+      hooks: {
+        beforeRequest: (req) => ({
+          ...req,
+          headers: new Headers({ ...req.headers, 'X-Trace': 't1' }) as unknown as Record<string, string>,
+        }),
+      },
+    })
+    expect(captured.authorization).toBe(auth.header)
+    expect(captured['x-trace']).toBe('t1')
+  })
+
+  it('an afterResponse leaving a throwing signal getter on the event: onError still runs, with the request', async () => {
+    server.use(http.get(`${base}/X`, () => new HttpResponse('down', { status: 503 })))
+    let onErrorReq: RequestEvent | undefined
+    let sent: AbortSignal | undefined
+    const err = await request(target, {
+      hooks: {
+        beforeRequest: (req) => {
+          sent = req.signal
+        },
+        afterResponse: (req) => {
+          Object.defineProperty(req, 'signal', {
+            get() {
+              throw new Error('signal getter')
+            },
+          })
+        },
+        onError: (req) => {
+          onErrorReq = req
+        },
+      },
+    }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(HTTPError)
+    expect(onErrorReq?.signal).toBe(sent)
+    expect(onErrorReq).toMatchObject({ method: 'GET', url: `${base}/X` })
+    expect(onErrorReq?.headers.Authorization).toBe(auth.header)
+  })
+
+  it('an afterResponse freezing the event without its signal: onError gets a copy with the signal and its own fields', async () => {
+    server.use(http.get(`${base}/X`, () => new HttpResponse('down', { status: 503 })))
+    let onErrorReq: (RequestEvent & { traceId?: string }) | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: (req) => ({ ...req, traceId: 't1' }),
+        afterResponse: (req) => {
+          delete req.signal
+          Object.freeze(req)
+        },
+        onError: (req) => {
+          onErrorReq = req
+        },
+      },
+    }).catch(() => {})
+    expect(onErrorReq?.signal).toBeInstanceOf(AbortSignal)
+    expect(onErrorReq?.url).toBe(`${base}/X`)
+    expect(onErrorReq?.traceId).toBe('t1')
+  })
+
+  it('a frozen event with an own url getter: the getter is read once, the copy takes the snapshot’s url', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
+    let reads = 0
+    let event: RequestEvent | undefined
+    let after: RequestEvent | undefined
+    const res = await request(target, {
+      hooks: {
+        beforeRequest: ({ signal: _, ...req }) => {
+          const url = req.url
+          event = Object.freeze(
+            Object.defineProperty({ ...req }, 'url', {
+              enumerable: true,
+              get() {
+                reads++
+                if (reads > 1) throw new Error('read twice')
+                return url
+              },
+            }),
+          )
+          return event
+        },
+        afterResponse: (req) => {
+          after = req
+        },
+      },
+    })
+    expect(res.status).toBe(200)
+    expect(reads).toBe(1)
+    expect(after === event).toBe(false)
+    expect(after?.url).toBe(`${base}/X`)
+    expect(after?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('a signal setter that changes the event: what it changed is sent', async () => {
+    let captured: Record<string, string> = {}
+    server.use(
+      http.get(`${base}/X`, ({ request }) => {
+        captured = Object.fromEntries(request.headers.entries())
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    await request(target, {
+      hooks: {
+        beforeRequest: ({ signal: _, ...req }) => {
+          let signal: AbortSignal | undefined
+          return {
+            ...req,
+            get signal(): AbortSignal {
+              return signal as AbortSignal
+            },
+            set signal(s: AbortSignal) {
+              signal = s
+              req.headers = { ...req.headers, 'X-Bound': 'yes' }
+            },
+            get headers() {
+              return req.headers
+            },
+          }
+        },
+      },
+    })
+    expect(captured['x-bound']).toBe('yes')
+  })
+
+  it('a copy’s headers are its own: afterResponse changing them changes neither what onError gets nor the request', async () => {
+    server.use(http.get(`${base}/X`, () => new HttpResponse('down', { status: 503 })))
+    let onErrorReq: RequestEvent | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: ({ signal: _, ...req }) => Object.freeze(req),
+        afterResponse: (req) => {
+          req.headers.Authorization = 'changed'
+          delete req.signal
+          Object.freeze(req)
+        },
+        onError: (req) => {
+          onErrorReq = req
+        },
+      },
+    }).catch(() => {})
+    expect(onErrorReq?.headers.Authorization).toBe(auth.header)
+  })
+
+  it('a header value whose conversion throws is the hook’s own error, never a NetworkError', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
+    const convErr = new Error('token unavailable')
+    const onError = vi.fn()
+    const trace: AttemptTrace = { threw: false }
+    const err = await request(
+      target,
+      {
+        hooks: {
+          beforeRequest: (req) => {
+            req.headers['X-Token'] = {
+              toString() {
+                throw convErr
+              },
+            } as unknown as string
+          },
+          onError,
+        },
+      },
+      trace,
+    ).catch((e: unknown) => e)
+    expect(err).toBe(convErr)
+    expect(trace.threw).toBe(true)
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('headers given as pairs are read pair by pair before the fetch: a throwing value is the hook’s own error', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
+    const getterErr = new Error('token unavailable')
+    const trace: AttemptTrace = { threw: false }
+    const pair = ['X-Token', '']
+    Object.defineProperty(pair, 1, {
+      get() {
+        throw getterErr
+      },
+    })
+    const err = await request(
+      target,
+      {
+        hooks: {
+          beforeRequest: (req) => ({ ...req, headers: [pair] as unknown as Record<string, string> }),
+        },
+      },
+      trace,
+    ).catch((e: unknown) => e)
+    expect(err).toBe(getterErr)
+    expect(trace.threw).toBe(true)
+  })
+
+  it('a copy of an event with Headers gets Headers of its own: afterResponse changing them leaves onError’s', async () => {
+    server.use(http.get(`${base}/X`, () => new HttpResponse('down', { status: 503 })))
+    let after: RequestEvent | undefined
+    let onErrorReq: RequestEvent | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: ({ signal: _, ...req }) =>
+          Object.freeze({ ...req, headers: new Headers(req.headers) as unknown as Record<string, string> }),
+        afterResponse: (req) => {
+          after = req
+          ;(req.headers as unknown as Headers).set('Authorization', 'changed')
+          delete req.signal
+          Object.freeze(req)
+        },
+        onError: (req) => {
+          onErrorReq = req
+        },
+      },
+    }).catch(() => {})
+    expect(after?.headers).toBeInstanceOf(Headers)
+    expect((onErrorReq?.headers as unknown as Headers | undefined)?.get('Authorization')).toBe(auth.header)
+  })
+
+  it('a header value of a Symbol is the hook’s own error, as fetch would refuse it', async () => {
+    const trace: AttemptTrace = { threw: false }
+    const err = await request(
+      target,
+      {
+        hooks: {
+          beforeRequest: (req) => {
+            req.headers['X-Bad'] = Symbol('bad') as unknown as string
+          },
+        },
+      },
+      trace,
+    ).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TypeError)
+    expect(trace.threw).toBe(true)
+  })
+
+  it('the body is read before the headers: a body getter setting a header gets it sent', async () => {
+    let captured: Record<string, string> = {}
+    server.use(
+      http.post(`${base}/X`, ({ request }) => {
+        captured = Object.fromEntries(request.headers.entries())
+        return HttpResponse.json({})
+      }),
+    )
+    await request(
+      { ...target, method: 'POST', body: '{}' },
+      {
+        hooks: {
+          beforeRequest: ({ signal: _, ...req }) => {
+            const headers = { ...req.headers }
+            return {
+              ...req,
+              headers,
+              get body() {
+                headers['X-Digest'] = 'd1'
+                return '{"a":1}'
+              },
+            }
+          },
+        },
+      },
+    )
+    expect(captured['x-digest']).toBe('d1')
+  })
+
+  it('a getter copied onto a frozen event’s copy still runs on the event itself', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
+    class Traced {
+      readonly #id = 't1'
+      constructor(req: RequestEvent) {
+        Object.assign(this, { method: req.method, url: req.url, headers: req.headers })
+        Object.defineProperty(this, 'traceId', {
+          enumerable: true,
+          get(this: Traced) {
+            return this.#id
+          },
+        })
+        Object.freeze(this)
+      }
+    }
+    let after: (RequestEvent & { traceId?: string }) | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: (req) => new Traced(req) as unknown as RequestEvent,
+        afterResponse: (req) => {
+          after = req
+        },
+      },
+    })
+    expect(after?.traceId).toBe('t1')
+    expect(after?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('a timeout during beforeRequest leaves the headers as asked unread: the TimeoutError stands, onError called', async () => {
+    const onError = vi.fn()
+    let reads = 0
+    const headers = { Authorization: auth.header }
+    Object.defineProperty(headers, 'X-Lazy', {
+      enumerable: true,
+      get() {
+        reads++
+        if (reads > 1) throw new Error('read twice')
+        return 'v'
+      },
+    })
+    const err = await request(
+      { ...target, headers },
+      {
+        timeout: 30,
+        hooks: {
+          beforeRequest: (req) => {
+            Object.defineProperty(req, 'url', {
+              get() {
+                throw new Error('url getter')
+              },
+            })
+            return new Promise<void>(() => {})
+          },
+          onError,
+        },
+      },
+    ).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TimeoutError)
+    expect(onError).toHaveBeenCalledOnce()
+    expect(reads).toBe(1)
+  })
+
+  it('a caller’s abort during beforeRequest leaves the event’s headers unread', async () => {
+    const ctrl = new AbortController()
+    let reads = 0
+    const pending = request(target, {
+      signal: ctrl.signal,
+      hooks: {
+        beforeRequest: (req) => {
+          Object.defineProperty(req.headers, 'X-Signature', {
+            enumerable: true,
+            get() {
+              reads++
+              return 'sig'
+            },
+          })
+          return new Promise<void>(() => {})
+        },
+      },
+    }).catch((e: unknown) => e)
+    ctrl.abort()
+    const err = await pending
+    expect((err as Error).name).toBe('AbortError')
+    expect(reads).toBe(0)
+  })
+
+  it('a timeout during beforeRequest whose event getter throws still yields the TimeoutError', async () => {
+    const onError = vi.fn()
+    const err = await request(target, {
+      timeout: 30,
+      hooks: {
+        beforeRequest: (req) => {
+          Object.defineProperty(req, 'url', {
+            get() {
+              throw new Error('url getter')
+            },
+          })
+          return new Promise<void>(() => {})
+        },
+        onError,
+      },
+    }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TimeoutError)
+    expect((err as TimeoutError).request).toEqual({ method: 'GET', url: `${base}/X` })
+    expect(onError).toHaveBeenCalledOnce()
+  })
+})
