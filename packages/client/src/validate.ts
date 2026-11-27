@@ -114,7 +114,8 @@ export interface ValidateEntityOptions {
    * requirement — `validateOnWrite` checks `create()` / `patch()` with
    * `'ignore'`, and `put()`, which 1С requires to carry every property (docs
    * 17.4: «Для PUT-запроса необходимо указывать значения всех свойств»), with
-   * `'required'`.
+   * `'required'`. The payload's own fields are what is checked, in either
+   * mode — a `toJSON` it may have is not called, as it was not before.
    */
   missing?: 'required' | 'ignore'
   /**
