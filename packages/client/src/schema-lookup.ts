@@ -84,3 +84,20 @@ export function typeNameOfNavigation(
   const typeName = navigation[name]?.type
   return schemaOfType(index, typeName) !== undefined ? typeName : undefined
 }
+
+/**
+ * The schema a path segment leads to from `schema` — in a `$select` such as
+ * `Владелец/Файл` or `Товары/Файл`: a navigation's target, else a tabular
+ * part's row type (a property typed `Collection(<a type the index holds>)`).
+ * `undefined` where it is neither. Own keys only, as everywhere here.
+ */
+export function schemaOfSegment(
+  index: MetadataIndex | undefined,
+  schema: EntitySchema | undefined,
+  segment: string,
+): EntitySchema | undefined {
+  const target = schemaOfType(index, typeNameOfNavigation(index, schema, segment))
+  if (target !== undefined || schema === undefined || !Object.hasOwn(schema.properties, segment)) return target
+  const type = schema.properties[segment]?.type
+  return type?.startsWith('Collection(') === true ? schemaOfRef(index, type) : undefined
+}

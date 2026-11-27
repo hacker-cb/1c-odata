@@ -191,9 +191,9 @@ export function transformDatesToWire(
   }
 
   // Split each grouped ValueStorage back into its two wire halves — symmetric
-  // with the read-side grouping in parser.ts `mapEntity`. Only EntityTypes carry
-  // `valueStorages`; a string/undefined value (the user passed wire halves
-  // directly, or cleared the field) is left untouched.
+  // with the read-side grouping in parser.ts `mapEntity`. EntityTypes and tabular row types (ComplexTypes, #290)
+  // carry `valueStorages`; a string/undefined value (the user passed wire halves directly, or cleared the field)
+  // is left untouched.
   for (const base of schema.valueStorages ?? []) {
     // Own only: a base named `__proto__` the payload does not carry would read the accessor.
     const grouped = Object.hasOwn(out, base) ? out[base] : undefined

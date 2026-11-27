@@ -15,7 +15,8 @@ const CASES = [
   {
     file: 'trade_v11.5.xml',
     storage: { set: 'Catalog_ВариантыАнализаЦелевыхПоказателей', base: 'ЗначениеАнализа' },
-    tabular: { set: 'Document_ПланПродаж', part: 'Товары', base: 'ДополнительныеПараметры' },
+    // A document whose header has no storage — the whole-row read turns on its tabular part alone.
+    tabular: { set: 'Document_ВходящаяТранспортнаяОперацияВЕТИС', part: 'Маршрут', base: 'ДанныеАдреса' },
     none: [
       'Document_РеализацияТоваровУслуг',
       'InformationRegister_КурсыВалют',
@@ -54,7 +55,9 @@ describe('integration: readFormat over the snapshot indexes (#289)', () => {
         if (!('tabular' in c) || c.tabular === undefined) return
         const { set, part, base } = c.tabular
         const type = typeOf(set)
+        expect(index.schemas[type ?? '']?.valueStorages).toBeUndefined()
         expect(readFormat(index, type)).toBe(MINIMALMETADATA_JSON)
+        expect(readFormat(index, type, { select: ['**'] })).toBe(NOMETADATA_JSON)
         expect(readFormat(index, type, { select: ['Ref_Key', `${part}/${base}`] })).toBe(MINIMALMETADATA_JSON)
         expect(readFormat(index, type, { select: ['Ref_Key', 'Date'] })).toBe(NOMETADATA_JSON)
       })

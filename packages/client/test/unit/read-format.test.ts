@@ -151,11 +151,31 @@ describe('tabular parts (#290)', () => {
     [['Товары/*'], MINIMALMETADATA_JSON],
     [['Товары/Файл'], MINIMALMETADATA_JSON],
     [['Товары/Файл_Base64Data'], MINIMALMETADATA_JSON],
+    [['Товары/**'], MINIMALMETADATA_JSON],
     [['**'], NOMETADATA_JSON],
     [['Ref_Key', 'Услуги'], NOMETADATA_JSON],
     [['Товары/LineNumber'], NOMETADATA_JSON],
   ])('a document whose tabular rows carry a storage, $select %j → %s', (select, format) => {
     expect(readFormat(doc, 'Document_X', { select })).toBe(format)
+  })
+
+  it("follows an expanded entity's tabular parts: `<Nav>/**` leaves them out, `<Nav>/*` and `<Nav>` keep them", () => {
+    const withNav: MetadataIndex = {
+      ...doc,
+      schemas: {
+        ...doc.schemas,
+        Catalog_Y: {
+          properties: { Ref_Key: { type: 'Edm.Guid', nullable: false } },
+          navigation: { Документ: { type: 'Document_X' } },
+        },
+      },
+    }
+    const read = (select: string[]) => readFormat(withNav, 'Catalog_Y', { select, expand: ['Документ'] })
+    expect(read(['Документ/**'])).toBe(NOMETADATA_JSON)
+    expect(read(['Документ/*'])).toBe(MINIMALMETADATA_JSON)
+    expect(read(['Документ'])).toBe(MINIMALMETADATA_JSON)
+    expect(read(['Документ/Товары'])).toBe(MINIMALMETADATA_JSON)
+    expect(read(['Документ/Ref_Key'])).toBe(NOMETADATA_JSON)
   })
 
   it('writes a tabular row storage selected by its path as its halves', () => {
