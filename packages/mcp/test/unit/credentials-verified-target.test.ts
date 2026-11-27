@@ -152,9 +152,36 @@ describe('a credential change verified on one target is not stored for another (
         name: 'prod',
         password: 'new-secret',
         insecure: true,
-        verifiedTarget: { baseUrl: `${S}/`, login: ' u ' },
+        expected: { baseUrl: `${S}/`, login: ' u ' },
       }),
     ).resolves.toMatchObject({ passwordUpdated: true })
     expect(await secret()).toBe('new-secret')
+  })
+
+  it('a login-only change verified with the stored password is refused where that password changed meanwhile', async () => {
+    const oneC = heldOneC()
+    const run = runSetCredentials({ dataDir: dir, name: 'prod', login: 'u2', insecure: true })
+    await oneC.arrived
+    // Another process stores a new password for the same target: the new login was never checked with it.
+    await updateConnectionCredentials({
+      dataDir: dir,
+      name: 'prod',
+      password: 'rotated',
+      insecure: true,
+      expected: { baseUrl: S, login: 'u' },
+    })
+    oneC.release()
+    await expect(run).rejects.toThrow(/changed while its credentials were being verified — its stored password/)
+    expect(loadConfig(dir).connections.prod?.login).toBe('u')
+  })
+
+  it('a login-only change keeps the stored password it was verified with', async () => {
+    const oneC = heldOneC()
+    const run = runSetCredentials({ dataDir: dir, name: 'prod', login: 'u2', insecure: true })
+    await oneC.arrived
+    oneC.release()
+    await run
+    expect(loadConfig(dir).connections.prod?.login).toBe('u2')
+    expect(await secret()).toBe('old-secret')
   })
 })

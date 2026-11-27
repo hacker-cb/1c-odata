@@ -48,25 +48,29 @@ async function resolveNewPassword(
 
 /**
  * Verify the effective credentials against `$metadata` before persisting. Skipped
- * by `--no-verify` or when no password resolves. Returns false to abort the
+ * by `--no-verify` or when no password resolves. `proceed: false` aborts the
  * change: a flag-driven failure aborts hard, while an interactively-typed
  * password may be kept after an explicit confirmation (mirrors `add`).
+ * `storedPassword` is the stored password a login-only change was verified
+ * with, which the write checks is still the one stored.
  */
 async function verifyBeforeSave(
   opts: SetCredentialsOptions,
   existing: StoredConnection,
   effectiveLogin: string,
   pw: { value: string; prompted: boolean } | undefined,
-): Promise<boolean> {
-  if (opts.noVerify === true) return true
+): Promise<{ proceed: boolean; storedPassword?: string }> {
+  if (opts.noVerify === true) return { proceed: true }
   const store = new SecretStore({ dataDir: opts.dataDir, insecure: opts.insecure ?? false })
-  const effectivePassword = pw?.value ?? (await store.read(opts.name, existing))?.password
-  if (effectivePassword === undefined) return true
+  const storedPassword = pw === undefined ? (await store.read(opts.name, existing))?.password : undefined
+  const effectivePassword = pw?.value ?? storedPassword
+  if (effectivePassword === undefined) return { proceed: true }
+  const verified = { proceed: true, ...(storedPassword !== undefined ? { storedPassword } : {}) }
   process.stdout.write('Verifying connection… ')
   try {
     await verifyConnectivity({ baseUrl: existing.baseUrl, login: effectiveLogin, password: effectivePassword })
     process.stdout.write('OK\n')
-    return true
+    return verified
   } catch (err) {
     process.stdout.write('FAILED\n')
     // A flag-driven (non-interactive) failure aborts HARD — rethrow so automation
@@ -74,9 +78,9 @@ async function verifyBeforeSave(
     // may be saved past a failed verify, after an explicit confirmation.
     if (pw?.prompted !== true) throw err
     process.stderr.write(`  ${errorText(err)}\n`)
-    if (await promptConfirm('Save the change anyway?')) return true
+    if (await promptConfirm('Save the change anyway?')) return verified
     process.stdout.write('Aborted — nothing changed.\n')
-    return false
+    return { proceed: false }
   }
 }
 
@@ -121,7 +125,8 @@ export async function runSetCredentials(opts: SetCredentialsOptions): Promise<vo
   }
 
   const effectiveLogin = hasLogin ? (newLogin as string) : existing.login
-  if (!(await verifyBeforeSave(opts, existing, effectiveLogin, pw))) return
+  const check = await verifyBeforeSave(opts, existing, effectiveLogin, pw)
+  if (!check.proceed) return
 
   const result = await updateConnectionCredentials({
     dataDir: opts.dataDir,
@@ -129,8 +134,8 @@ export async function runSetCredentials(opts: SetCredentialsOptions): Promise<vo
     ...(hasLogin ? { login: newLogin } : {}),
     ...(pw !== undefined ? { password: pw.value } : {}),
     insecure: opts.insecure ?? false,
-    // Verified (or decided) against `existing`: refused where another process re-pointed it since (#273).
-    verifiedTarget: { baseUrl: existing.baseUrl, login: existing.login },
+    // Verified (or decided) against `existing`: refused where another process changed it since (#273).
+    expected: { baseUrl: existing.baseUrl, login: existing.login, password: check.storedPassword },
   })
   reportCredentialChange(opts, result)
 }

@@ -586,13 +586,15 @@ export interface UpdateCredentialsInput {
   password?: string
   insecure?: boolean
   /**
-   * The connection as the caller read it to verify the change — its base URL and
-   * login. Given, the change is refused unless the connection still points
-   * there under the lock: another process may have re-pointed it while the
-   * caller verified, and the verified password must not be stored for a target
-   * it was never checked on (#273).
+   * The connection as the caller read it to decide and verify the change: its
+   * base URL and login, and — for a login-only change verified with the stored
+   * password — that password. The change is refused unless the connection
+   * still stands so under the lock: another process may have re-pointed it, or
+   * changed its password, while the caller verified, and a pair checked on one
+   * server must not be stored for another, nor a new login paired with a
+   * password it was never checked with (#273).
    */
-  verifiedTarget?: { baseUrl: string; login: string }
+  expected: { baseUrl: string; login: string; password?: string | undefined }
   /**
    * Aborted by the time the write's turn comes, nothing is written (#236). A
    * write once begun completes: the secret and the config are never left to
@@ -608,6 +610,31 @@ export interface UpdateCredentialsResult {
   passwordUpdated: boolean
   /** Backend the new password landed in, when one was written. */
   passwordBackend?: 'keychain' | 'file'
+}
+
+/**
+ * Throw where connection `input.name`, as it stands under the lock
+ * (`existing`), is no longer what the caller verified the change against —
+ * {@link UpdateCredentialsInput.expected}.
+ */
+async function assertAsExpected(
+  store: SecretStore,
+  input: Pick<UpdateCredentialsInput, 'name' | 'password' | 'expected'>,
+  existing: StoredConnection,
+): Promise<void> {
+  const { expected } = input
+  const changed = (what: string) =>
+    new InvalidArgumentError(
+      `Connection "${input.name}" changed while its credentials were being verified — ${what}. Nothing was changed: check the connection and retry.`,
+      { argument: 'connection' },
+    )
+  if (!sameAuthTarget(existing, authTarget(expected.baseUrl, expected.login))) {
+    throw changed(`it now points at ${targetBaseUrl(existing.baseUrl)} as "${existing.login}"`)
+  }
+  if (input.password === undefined && expected.password !== undefined) {
+    const stored = (await store.read(input.name, existing))?.password
+    if (stored !== expected.password) throw changed('its stored password was changed')
+  }
 }
 
 /**
@@ -638,17 +665,11 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
       if (existing === undefined) {
         throw new InvalidArgumentError(`No connection named "${input.name}"`, { argument: 'connection' })
       }
-      const verified = input.verifiedTarget
-      if (verified !== undefined && !sameAuthTarget(existing, authTarget(verified.baseUrl, verified.login))) {
-        throw new InvalidArgumentError(
-          `Connection "${input.name}" changed while its credentials were being verified — it now points at ${targetBaseUrl(existing.baseUrl)} as "${existing.login}". Nothing was changed: check the connection and retry.`,
-          { argument: 'connection' },
-        )
-      }
+      const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
+      await assertAsExpected(store, input, existing)
       assertNoEnvPassword(input.name, existing)
       // Write the secret BEFORE the config so a login change is never persisted
       // while its matching password write is still pending or has failed.
-      const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
       let passwordBackend: 'keychain' | 'file' | undefined
       if (input.password !== undefined) {
         passwordBackend = (await store.write(input.name, input.password, existing)).backend

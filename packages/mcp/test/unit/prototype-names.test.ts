@@ -92,7 +92,13 @@ describe.each(configs)('a name the object prototype answers for, with config.jso
 
   it('updateConnectionCredentials says there is no such connection', async () => {
     await expect(
-      updateConnectionCredentials({ dataDir: dir, name: 'constructor', login: 'u', insecure: true }),
+      updateConnectionCredentials({
+        expected: { baseUrl: 'http://h/odata', login: 'u' },
+        dataDir: dir,
+        name: 'constructor',
+        login: 'u',
+        insecure: true,
+      }),
     ).rejects.toThrow('No connection named "constructor"')
   })
 

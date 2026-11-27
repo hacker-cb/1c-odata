@@ -262,7 +262,13 @@ describe('setConnectionLabel', () => {
 describe('updateConnectionCredentials', () => {
   it('updates the login only, keeping the stored password', async () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'pw' })
-    const result = await updateConnectionCredentials({ dataDir: dir, name: 'trade', login: 'newuser', insecure: true })
+    const result = await updateConnectionCredentials({
+      expected: { baseUrl: base.baseUrl, login: 'u' },
+      dataDir: dir,
+      name: 'trade',
+      login: 'newuser',
+      insecure: true,
+    })
     expect(result).toEqual({ loginUpdated: true, passwordUpdated: false })
     expect(loadConfig(dir).connections.trade?.login).toBe('newuser')
     expect(await fileStore().read('trade')).toEqual({ password: 'pw', source: 'file' })
@@ -270,7 +276,13 @@ describe('updateConnectionCredentials', () => {
 
   it('updates the password only, keeping the login', async () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'old' })
-    const result = await updateConnectionCredentials({ dataDir: dir, name: 'trade', password: 'new', insecure: true })
+    const result = await updateConnectionCredentials({
+      expected: { baseUrl: base.baseUrl, login: 'u' },
+      dataDir: dir,
+      name: 'trade',
+      password: 'new',
+      insecure: true,
+    })
     expect(result).toEqual({ loginUpdated: false, passwordUpdated: true, passwordBackend: 'file' })
     expect(loadConfig(dir).connections.trade?.login).toBe('u')
     expect(await fileStore().read('trade')).toEqual({ password: 'new', source: 'file' })
@@ -279,6 +291,7 @@ describe('updateConnectionCredentials', () => {
   it('updates both together and preserves the label', async () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'trade', password: 'old', label: 'Торговля' })
     const result = await updateConnectionCredentials({
+      expected: { baseUrl: base.baseUrl, login: 'u' },
       dataDir: dir,
       name: 'trade',
       login: 'newuser',
@@ -294,26 +307,49 @@ describe('updateConnectionCredentials', () => {
 
   it('trims the login and reports loginUpdated false when it matches the current one', async () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'trade', login: 'u' })
-    const result = await updateConnectionCredentials({ dataDir: dir, name: 'trade', login: '  u  ', insecure: true })
+    const result = await updateConnectionCredentials({
+      expected: { baseUrl: base.baseUrl, login: 'u' },
+      dataDir: dir,
+      name: 'trade',
+      login: '  u  ',
+      insecure: true,
+    })
     expect(result.loginUpdated).toBe(false)
     expect(loadConfig(dir).connections.trade?.login).toBe('u')
   })
 
   it('rejects an empty login / empty password / neither field', async () => {
     await upsertConnection({ ...base, dataDir: dir, name: 'trade' })
-    await expect(updateConnectionCredentials({ dataDir: dir, name: 'trade', login: '   ' })).rejects.toThrow(
-      /login must not be empty/,
-    )
-    await expect(updateConnectionCredentials({ dataDir: dir, name: 'trade', password: '' })).rejects.toThrow(
-      /password must not be empty/,
-    )
-    await expect(updateConnectionCredentials({ dataDir: dir, name: 'trade' })).rejects.toThrow(/Provide a new login/)
+    await expect(
+      updateConnectionCredentials({
+        expected: { baseUrl: base.baseUrl, login: 'u' },
+        dataDir: dir,
+        name: 'trade',
+        login: '   ',
+      }),
+    ).rejects.toThrow(/login must not be empty/)
+    await expect(
+      updateConnectionCredentials({
+        expected: { baseUrl: base.baseUrl, login: 'u' },
+        dataDir: dir,
+        name: 'trade',
+        password: '',
+      }),
+    ).rejects.toThrow(/password must not be empty/)
+    await expect(
+      updateConnectionCredentials({ expected: { baseUrl: base.baseUrl, login: 'u' }, dataDir: dir, name: 'trade' }),
+    ).rejects.toThrow(/Provide a new login/)
   })
 
   it('throws for an unknown connection', async () => {
-    await expect(updateConnectionCredentials({ dataDir: dir, name: 'nope', password: 'x' })).rejects.toThrow(
-      /No connection named/,
-    )
+    await expect(
+      updateConnectionCredentials({
+        expected: { baseUrl: base.baseUrl, login: 'u' },
+        dataDir: dir,
+        name: 'nope',
+        password: 'x',
+      }),
+    ).rejects.toThrow(/No connection named/)
   })
 })
 
@@ -334,7 +370,13 @@ describe('a write cancelled while it waits for the config lock writes nothing (#
     await upsertConnection({ dataDir: dir, name: 'a', ...conn, password: 'pa' })
     const first = upsertConnection({ dataDir: dir, name: 'b', ...conn })
     const controller = new AbortController()
-    const queued = updateConnectionCredentials({ dataDir: dir, name: 'a', login: 'u2', signal: controller.signal })
+    const queued = updateConnectionCredentials({
+      expected: { baseUrl: conn.baseUrl, login: 'u' },
+      dataDir: dir,
+      name: 'a',
+      login: 'u2',
+      signal: controller.signal,
+    })
     controller.abort()
     await first
     await expect(queued).rejects.toThrow()

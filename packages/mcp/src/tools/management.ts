@@ -118,7 +118,8 @@ function parseCredentialChange(login: string | undefined, password: string | und
 /**
  * Verify the change before it is persisted, when a full credential pair can be
  * assembled — the new password, or the stored one when only the login changes.
- * Returns whether a verification actually ran (false when no password resolves).
+ * Returns whether a verification actually ran (false when no password resolves),
+ * and the stored password it used, which the write checks is still the one stored.
  */
 async function verifyCredentialChange(
   opts: ManagementToolsOptions,
@@ -126,17 +127,18 @@ async function verifyCredentialChange(
   connection: string,
   change: CredentialChange,
   signal: AbortSignal,
-): Promise<boolean> {
+): Promise<{ verified: boolean; storedPassword?: string }> {
   const store = new SecretStore({ dataDir: opts.dataDir, insecure: opts.insecure ?? false })
-  const effectivePassword = change.password ?? (await store.read(connection, existing))?.password
-  if (effectivePassword === undefined) return false
+  const storedPassword = change.password === undefined ? (await store.read(connection, existing))?.password : undefined
+  const effectivePassword = change.password ?? storedPassword
+  if (effectivePassword === undefined) return { verified: false }
   await verifyConnectivity({
     baseUrl: existing.baseUrl,
     login: change.login ?? existing.login,
     password: effectivePassword,
     signal,
   })
-  return true
+  return { verified: true, ...(storedPassword !== undefined ? { storedPassword } : {}) }
 }
 
 function summarizeCredentialChange(
@@ -181,15 +183,15 @@ async function applyCredentialChange(
   }
   // Before verifying: the new pair must not be checked, and reported verified, when reads would not use it.
   assertNoEnvPassword(connection, existing)
-  const verified = await verifyCredentialChange(opts, existing, connection, change, signal)
+  const { verified, storedPassword } = await verifyCredentialChange(opts, existing, connection, change, signal)
   const result = await updateConnectionCredentials({
     dataDir: opts.dataDir,
     name: connection,
     ...(change.login !== undefined ? { login: change.login } : {}),
     ...(change.password !== undefined ? { password: change.password } : {}),
     insecure: opts.insecure ?? false,
-    // Verified (or decided) against `existing`: refused where another process re-pointed it since (#273).
-    verifiedTarget: { baseUrl: existing.baseUrl, login: existing.login },
+    // Verified (or decided) against `existing`: refused where another process changed it since (#273).
+    expected: { baseUrl: existing.baseUrl, login: existing.login, password: storedPassword },
     signal,
   })
   // Rebuild the cached client (it was wired with the old credentials).

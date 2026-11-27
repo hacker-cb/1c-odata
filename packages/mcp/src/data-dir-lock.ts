@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { linkSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, unlinkSync, utimesSync, writeSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 
@@ -11,13 +11,17 @@ import { join } from 'node:path'
  * The lock is the file `<dataDir>/.lock`, created exclusively (`wx`) and holding
  * its owner — `{ pid, hostname, token, since }`. The owner refreshes its mtime
  * every {@link DataDirLockTimings.heartbeatMs} while it holds it, and deletes it
- * on release — only while the token in it is still its own. A lock is stale, and
- * taken over, where its owner is gone: on this host, a pid that no longer runs
- * (or an mtime older than {@link DataDirLockTimings.reusedPidMs}, a pid since
- * reused); elsewhere or unreadable, an mtime older than
- * {@link DataDirLockTimings.staleMs}. A takeover renames the stale file aside
- * and checks it moved the one it judged — so two waiters never both take one
- * lock, and a fresh lock moved by mistake is put back.
+ * on release — only while the token in it is still its own.
+ *
+ * A lock is stale where its owner is gone: on this host, a pid that no longer
+ * runs; elsewhere, or where the file names no owner, an mtime older than
+ * {@link DataDirLockTimings.staleMs}. A live owner on this host is never judged
+ * stale — a pid since reused by another process leaves the lock for a person to
+ * delete, which the wait's error names. A stale lock is deleted only under a
+ * second, short-lived lock — `<dataDir>/.lock.takeover` — and only after it is
+ * read again and still judged stale there: a lock is never replaced while its
+ * file is absent, so what is read under the takeover lock is what is deleted,
+ * and two waiters never both take one lock.
  */
 
 /** How long a lock is waited for, and when it counts as abandoned. Overridable for tests only. */
@@ -26,8 +30,6 @@ export interface DataDirLockTimings {
   timeoutMs: number
   /** A lock whose owner cannot be checked (another host, unreadable) is stale once its mtime is this old. */
   staleMs: number
-  /** A lock whose owner pid still runs on this host is stale once its mtime is this old — the pid was reused. */
-  reusedPidMs: number
   /** The owner refreshes the lock's mtime this often. */
   heartbeatMs: number
 }
@@ -35,7 +37,6 @@ export interface DataDirLockTimings {
 export const DEFAULT_DATA_DIR_LOCK_TIMINGS: DataDirLockTimings = {
   timeoutMs: 10_000,
   staleMs: 60_000,
-  reusedPidMs: 10 * 60_000,
   heartbeatMs: 5_000,
 }
 
@@ -43,9 +44,20 @@ export const DEFAULT_DATA_DIR_LOCK_TIMINGS: DataDirLockTimings = {
 const FIRST_POLL_MS = 10
 const MAX_POLL_MS = 250
 
-const LOCK_FILE = '.lock'
+/**
+ * A takeover lock is held for a read and an unlink; one older than this was
+ * left by a process that died in between, and is deleted.
+ */
+const TAKEOVER_STALE_MS = 5_000
 
-/** Tokens of the locks this process holds right now: a lock naming this pid with any other token is abandoned. */
+/** Release retries a Windows sharing violation this many times, this far apart. */
+const RELEASE_ATTEMPTS = 5
+const RELEASE_RETRY_MS = 20
+
+const LOCK_FILE = '.lock'
+const TAKEOVER_SUFFIX = '.takeover'
+
+/** Tokens of the locks this process holds or is taking: a lock naming this pid with any other token is abandoned. */
 const heldHere = new Set<string>()
 
 /** The owner a lock file names. */
@@ -85,10 +97,17 @@ export async function withDataDirLock<T>(
   task: () => Promise<T>,
   opts: { signal?: AbortSignal | undefined; timings?: Partial<DataDirLockTimings> } = {},
 ): Promise<T> {
+  opts.signal?.throwIfAborted()
   const timings = { ...DEFAULT_DATA_DIR_LOCK_TIMINGS, ...opts.timings }
   const lockPath = dataDirLockPath(dataDir)
-  const token = await acquire(dataDir, lockPath, timings, opts.signal)
+  const token = randomBytes(16).toString('hex')
   heldHere.add(token)
+  try {
+    await acquire(dataDir, lockPath, token, timings, opts.signal)
+  } catch (err) {
+    heldHere.delete(token)
+    throw err
+  }
   const heartbeat = setInterval(() => touch(lockPath), timings.heartbeatMs)
   heartbeat.unref()
   try {
@@ -103,11 +122,11 @@ export async function withDataDirLock<T>(
 async function acquire(
   dataDir: string,
   lockPath: string,
+  token: string,
   timings: DataDirLockTimings,
   signal: AbortSignal | undefined,
-): Promise<string> {
+): Promise<void> {
   mkdirSync(dataDir, { recursive: true })
-  const token = randomBytes(16).toString('hex')
   const content = JSON.stringify({
     pid: process.pid,
     hostname: hostname(),
@@ -118,49 +137,76 @@ async function acquire(
   let poll = FIRST_POLL_MS
   for (;;) {
     signal?.throwIfAborted()
-    if (tryCreate(lockPath, content)) return token
+    if (tryCreate(lockPath, content)) return
     const held = readLock(lockPath)
-    if (held === undefined) continue // released meanwhile: try again at once
-    if (isStale(held, timings) && takeOver(lockPath, held.raw)) continue
+    if (held !== undefined && isStale(held, timings) && takeOver(lockPath, timings)) continue
+    // Gone between the create and the read — or not a file one can open (a dangling link): waited on like a held one.
     const left = deadline - Date.now()
-    if (left <= 0) throw new DataDirLockedError(lockPath, held.owner)
+    if (left <= 0) throw new DataDirLockedError(lockPath, held?.owner)
     await sleep(Math.min(poll, left), signal)
     poll = Math.min(poll * 2, MAX_POLL_MS)
   }
 }
 
-/** Create the lock file holding `content`; `false` where one already exists. */
-function tryCreate(lockPath: string, content: string): boolean {
+/**
+ * Create `path` exclusively holding `content`; `false` where it already exists
+ * (or, on Windows, is still being deleted). A create whose write fails removes
+ * what it created: a lock never stands without its owner in it.
+ */
+function tryCreate(path: string, content: string): boolean {
+  let fd: number
   try {
-    writeFileSync(lockPath, content, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
-    return true
+    fd = openSync(path, 'wx', 0o600)
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST' || isBusy(err)) return false
     throw err
   }
+  try {
+    writeSync(fd, content)
+  } catch (err) {
+    closeSync(fd)
+    bestEffortUnlink(path)
+    throw err
+  }
+  closeSync(fd)
+  return true
 }
 
-/** A lock file as read: its raw text, its owner where it parses, and its mtime. */
+/** A lock file as read: its owner where it parses, and its mtime — both from one open file. */
 interface HeldLock {
-  raw: string
   owner: LockOwner | undefined
   mtimeMs: number
 }
 
-/** The lock at `lockPath`, or `undefined` where there is none (anymore). */
-function readLock(lockPath: string): HeldLock | undefined {
-  let mtimeMs: number
-  let raw: string
+/**
+ * The lock at `path`, or `undefined` where there is none (anymore). Its mtime
+ * and text come from one descriptor, so they belong to the same file.
+ */
+function readLock(path: string): HeldLock | undefined {
+  let fd: number
   try {
-    mtimeMs = statSync(lockPath).mtimeMs
-    raw = readFileSync(lockPath, 'utf8')
+    fd = openSync(path, 'r')
   } catch (err) {
-    if (isGone(err)) return undefined
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     // Open elsewhere for a moment (Windows): held, owner unknown — waited on, never judged stale.
-    if (isBusy(err)) return { raw: '', owner: undefined, mtimeMs: Date.now() }
-    throw err
+    if (isBusy(err)) return { owner: undefined, mtimeMs: Date.now() }
+    throw unreadable(path, err)
   }
-  return { raw, owner: parseOwner(raw), mtimeMs }
+  try {
+    const mtimeMs = fstatSync(fd).mtimeMs
+    return { owner: parseOwner(readFileSync(fd, 'utf8')), mtimeMs }
+  } catch (err) {
+    throw unreadable(path, err)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+function unreadable(path: string, err: unknown): Error {
+  const reason = err instanceof Error ? err.message : String(err)
+  return new Error(
+    `Cannot read the 1c-odata data-dir lock ${path} (${reason}). If no 1c-odata-mcp is changing connections, delete it.`,
+  )
 }
 
 /** The owner `raw` names, or `undefined` where it is not one (a lock still being written, a damaged file). */
@@ -184,14 +230,13 @@ function parseOwner(raw: string): LockOwner | undefined {
 }
 
 function isStale(held: HeldLock, timings: DataDirLockTimings): boolean {
-  const age = Date.now() - held.mtimeMs
   const { owner } = held
   if (owner !== undefined && owner.hostname === hostname()) {
     // This process's own, under a token it no longer holds: a release that could not delete it.
     if (owner.pid === process.pid) return !heldHere.has(owner.token)
-    return !isRunning(owner.pid) || age > timings.reusedPidMs
+    return !isRunning(owner.pid)
   }
-  return age > timings.staleMs
+  return Date.now() - held.mtimeMs > timings.staleMs
 }
 
 /** Whether process `pid` runs on this host — signal 0 tests it, on Windows too. */
@@ -207,60 +252,49 @@ function isRunning(pid: number): boolean {
 }
 
 /**
- * Take over the stale lock whose text is `staleRaw`: move it aside, and keep it
- * removed only where it is the one judged stale. Another waiter may have taken
- * it over first and created its own lock in between; that one is put back
- * (a hard link never replaces a lock created since). `true` where the slot may
- * now be free — the caller tries to create its lock again.
+ * Delete the lock at `lockPath` where it is still stale, holding the takeover
+ * lock while it reads and deletes it. `true` where the caller should try to
+ * create its lock again at once; `false` — another process is taking over, wait.
  */
-function takeOver(lockPath: string, staleRaw: string): boolean {
-  const aside = `${lockPath}.${process.pid}.${randomBytes(6).toString('hex')}.stale`
+function takeOver(lockPath: string, timings: DataDirLockTimings): boolean {
+  const guard = `${lockPath}${TAKEOVER_SUFFIX}`
+  if (!tryCreate(guard, String(process.pid))) {
+    const held = readLock(guard)
+    if (held !== undefined && Date.now() - held.mtimeMs > TAKEOVER_STALE_MS) bestEffortUnlink(guard)
+    return false
+  }
   try {
-    renameSync(lockPath, aside)
+    // Read again under the guard: only a takeover deletes another's lock, so what is read here is what is deleted.
+    const held = readLock(lockPath)
+    if (held !== undefined && isStale(held, timings)) unlinkSync(lockPath)
+    return true
   } catch (err) {
-    if (isGone(err)) return true
-    if (isBusy(err)) return false
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT' || isBusy(err)) return false
     throw err
+  } finally {
+    bestEffortUnlink(guard)
   }
-  let moved: string | undefined
-  try {
-    moved = readFileSync(aside, 'utf8')
-  } catch {
-    moved = undefined
-  }
-  if (moved !== staleRaw) {
-    try {
-      linkSync(aside, lockPath)
-    } catch {
-      // A newer lock stands there already — the moved one's owner finds it lost on release.
-    }
-  }
-  bestEffortUnlink(aside)
-  return moved === staleRaw
 }
 
 /** Delete the lock where it is still this holder's; never throws — it runs in a `finally`. */
 function release(lockPath: string, token: string): void {
-  try {
-    // Taken over meanwhile (this process stalled past staleness): the lock is another's now.
-    if (readLock(lockPath)?.owner?.token !== token) return
-  } catch {
-    return // unreadable: left for staleness to clear
-  }
-  // A Windows sharing violation passes in moments; retried briefly so waiters need not judge it stale.
   for (let attempt = 0; attempt < RELEASE_ATTEMPTS; attempt++) {
     try {
-      unlinkSync(lockPath)
-      return
+      const held = readLock(lockPath)
+      // Gone, or another's now (this process stalled past staleness): nothing of this holder's to delete.
+      if (held === undefined || (held.owner !== undefined && held.owner.token !== token)) return
+      if (held.owner !== undefined) {
+        unlinkSync(lockPath)
+        return
+      }
+      // Busy for a moment (Windows): read again.
     } catch (err) {
-      if (isGone(err) || !isBusy(err)) return
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RELEASE_RETRY_MS)
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+      if (!isBusy(err)) return // unreadable: this process's next lock takes it over as its own
     }
+    pause(RELEASE_RETRY_MS)
   }
 }
-
-const RELEASE_ATTEMPTS = 5
-const RELEASE_RETRY_MS = 20
 
 function touch(lockPath: string): void {
   try {
@@ -275,18 +309,20 @@ function bestEffortUnlink(path: string): void {
   try {
     unlinkSync(path)
   } catch {
-    // already gone, or busy for a moment on Windows — a stale lock is taken over by the next waiter
+    // already gone, or busy for a moment on Windows
   }
 }
 
-function isGone(err: unknown): boolean {
-  return (err as NodeJS.ErrnoException).code === 'ENOENT'
-}
-
-/** A Windows sharing violation: the file is open in another process for a moment. */
+/** A Windows sharing violation: the file is open in another process, or being deleted, for a moment. */
 function isBusy(err: unknown): boolean {
+  if (process.platform !== 'win32') return false
   const code = (err as NodeJS.ErrnoException).code
   return code === 'EPERM' || code === 'EBUSY' || code === 'EACCES'
+}
+
+/** Block for `ms` — release runs in a `finally` and stays synchronous. */
+function pause(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
 function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {

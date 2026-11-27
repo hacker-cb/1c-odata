@@ -299,7 +299,12 @@ export function connectionLabel(name: string, conn: Pick<StoredConnection, 'labe
   return label !== undefined && label !== '' ? label : name
 }
 
-/** Persist `config.json` atomically (tmp + rename), creating `dataDir` if needed. */
+/**
+ * Persist `config.json` atomically (tmp + rename), creating `dataDir` if needed.
+ * It takes no lock: the commands and MCP tools change connections under the
+ * data-dir lock (`.lock`, #269), and a caller writing the config itself while
+ * they may run loses its write or theirs.
+ */
 export function saveConfig(dataDir: string, config: McpConfig): void {
   mkdirSync(dataDir, { recursive: true })
   writeFileAtomic(configPath(dataDir), `${JSON.stringify(config, null, 2)}\n`)

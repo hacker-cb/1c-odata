@@ -1,5 +1,15 @@
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,7 +46,7 @@ function deadPid(): number {
   return pid
 }
 
-const fast = { timeoutMs: 150, staleMs: 60_000, reusedPidMs: 600_000, heartbeatMs: 5_000 }
+const fast = { timeoutMs: 150, staleMs: 60_000, heartbeatMs: 5_000 }
 
 describe('withDataDirLock', () => {
   it('holds the lock file while the task runs and deletes it after', async () => {
@@ -103,11 +113,46 @@ describe('withDataDirLock', () => {
     expect(existsSync(lockPath)).toBe(false)
   })
 
-  it('takes over a lock of a running pid on this host once its mtime is past the reused-pid bound', async () => {
-    plantLock({ pid: process.ppid, hostname: hostname() }, 2_000)
-    await expect(withDataDirLock(dir, async () => 'ran', { timings: { ...fast, reusedPidMs: 1_000 } })).resolves.toBe(
-      'ran',
-    )
+  it('never takes over a lock of a running process on this host, however old its mtime', async () => {
+    plantLock({ pid: process.ppid, hostname: hostname() }, 3_600_000)
+    await expect(withDataDirLock(dir, async () => 'ran', { timings: fast })).rejects.toBeInstanceOf(DataDirLockedError)
+  })
+
+  it('waits while another process is taking a stale lock over, and clears a takeover left by a dead one', async () => {
+    plantLock({ pid: deadPid(), hostname: hostname() })
+    const guard = `${lockPath}.takeover`
+    writeFileSync(guard, '1')
+    await expect(withDataDirLock(dir, async () => 'ran', { timings: fast })).rejects.toBeInstanceOf(DataDirLockedError)
+    const past = new Date(Date.now() - 60_000)
+    utimesSync(guard, past, past)
+    await expect(withDataDirLock(dir, async () => 'ran', { timings: fast })).resolves.toBe('ran')
+    expect(existsSync(guard)).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('waits on a dangling link at the lock path, without spinning', async () => {
+    symlinkSync(join(dir, 'nowhere'), lockPath)
+    const started = Date.now()
+    await expect(withDataDirLock(dir, async () => 'ran', { timings: fast })).rejects.toBeInstanceOf(DataDirLockedError)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(140)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'names a lock it cannot read, rather than waiting on it for ever',
+    async () => {
+      plantLock({ pid: process.ppid, hostname: hostname() })
+      chmodSync(lockPath, 0o000)
+      await expect(withDataDirLock(dir, async () => 'ran', { timings: fast })).rejects.toThrow(
+        /Cannot read the 1c-odata data-dir lock .*\.lock.*delete it/,
+      )
+    },
+  )
+
+  it('an aborted signal stops it before anything is created', async () => {
+    const nested = join(dir, 'never')
+    await expect(
+      withDataDirLock(nested, async () => 'ran', { signal: AbortSignal.abort(new Error('cancelled')) }),
+    ).rejects.toThrow('cancelled')
+    expect(existsSync(nested)).toBe(false)
   })
 
   it('waits on another host’s lock while it is fresh, and takes it over once stale', async () => {
