@@ -13,6 +13,8 @@ const keychain = vi.hoisted(() => ({
   setFails: false,
   /** Runs as a password is set — under the data-dir lock, so a test can break the dir after the lock is taken. */
   onSet: undefined as (() => void) | undefined,
+  /** A key whose delete fails, every other one deleting. */
+  failDeleteOf: undefined as string | undefined,
   entries: new Map<string, string>(),
 }))
 
@@ -31,7 +33,9 @@ vi.mock('@napi-rs/keyring', () => ({
       keychain.entries.set(this.key, password)
     }
     deletePassword(): boolean {
-      if (keychain.deleteFails) throw new Error('Platform secure storage failure: keychain locked')
+      if (keychain.deleteFails || keychain.failDeleteOf === this.key) {
+        throw new Error('Platform secure storage failure: keychain locked')
+      }
       // As measured on macOS: no entry answers false, it does not throw.
       return keychain.entries.delete(this.key)
     }
@@ -48,6 +52,7 @@ beforeEach(() => {
   keychain.deleteFails = false
   keychain.setFails = false
   keychain.onSet = undefined
+  keychain.failDeleteOf = undefined
   keychain.entries.clear()
   vi.stubEnv('ONEC_C_PASSWORD', '')
   saveConfig(dir, { connections: { c: { baseUrl: OLD, login: 'u', serverTimezone: 'Europe/Moscow' } } })
@@ -87,13 +92,27 @@ describe('re-pointing a connection without a password (#270, #272)', () => {
     })
   })
 
-  it('a connection keyed to its target re-points even where the keychain cannot delete: the old copy stays its own', async () => {
+  it('a connection keyed to its target refuses a re-point where the keychain cannot delete — nothing changed', async () => {
+    keychain.entries.clear()
+    await upsertConnection({ dataDir: dir, name: 'c', baseUrl: OLD, login: 'u', password: 'old', overwrite: true })
+    keychain.deleteFails = true
+    // The new target's key cannot be checked empty: a copy left there would be read for the re-pointed connection.
+    await expect(retarget(false)).rejects.toThrow(/Could not delete the stored password of "c"/)
+    keychain.deleteFails = false
+    expect(loadConfig(dir).connections.c?.baseUrl).toBe(OLD)
+    expect(await new SecretStore({ dataDir: dir }).read('c', loadConfig(dir).connections.c)).toMatchObject({
+      password: 'old',
+    })
+  })
+
+  it('a re-point leaves the old target’s copy under its own key where only its tidy-up fails', async () => {
     keychain.entries.clear()
     await upsertConnection({ dataDir: dir, name: 'c', baseUrl: OLD, login: 'u', password: 'old', overwrite: true })
     const oldKey = `${keychainServiceName(dir)}/${secretKey('c', { baseUrl: OLD, passwordKey: 'target' })}`
-    expect(keychain.entries.get(oldKey)).toBe('old')
-    keychain.deleteFails = true
+    // Only deletes of the old key fail — the tidy-up after the save.
+    keychain.failDeleteOf = oldKey
     await expect(retarget(false)).resolves.toMatchObject({ passwordCleared: true })
+    keychain.failDeleteOf = undefined
     const conn = loadConfig(dir).connections.c
     expect(conn).toMatchObject({ baseUrl: NEW, passwordKey: 'target' })
     expect(await new SecretStore({ dataDir: dir }).read('c', conn)).toBeNull()

@@ -279,7 +279,7 @@ async function planUpsertSecret(
   }
   if (existing === undefined) {
     // A copy a remove could not delete is the same server's, but no password was given for this one.
-    await store.remove(name, written)
+    await bestEffort(() => store.remove(name, written))
     return { written, passwordCleared: false }
   }
   const sameTarget = sameAuthTarget(existing, written)
@@ -292,7 +292,8 @@ async function planUpsertSecret(
     if (await store.carry(name, existing, written)) return { written, passwordCleared: false }
     return { written: unmarked(written), passwordCleared: false }
   }
-  await store.remove(name, written)
+  // A copy already under the new key — a save that failed earlier — must not be what the re-point reads.
+  await store.remove(name, written, { strict: true })
   return {
     written,
     passwordCleared: true,
@@ -329,6 +330,20 @@ async function saveUpsert(
   }
 }
 
+/** Whether `existing` — the connection the config still holds — reads the key `written`'s password lives under. */
+function readsKey(name: string, existing: StoredConnection | undefined, written: StoredConnection): boolean {
+  return existing !== undefined && secretKey(name, existing) === secretKey(name, written)
+}
+
+/** Run `task`, ignoring a failure — for a tidy-up whose failure leaves nothing a connection reads. */
+async function bestEffort(task: () => Promise<void>): Promise<void> {
+  try {
+    await task()
+  } catch {
+    // left behind, under a key nothing reads for this connection
+  }
+}
+
 /** Whether `conn` is a person's connection whose password still lives under `<name>` (before #272). */
 function isNameKeyed(conn: StoredConnection): boolean {
   return conn.addedBy !== 'agent' && conn.passwordKey !== 'target'
@@ -352,11 +367,7 @@ async function dropOldKey(
   written: StoredConnection,
 ): Promise<void> {
   if (existing === undefined || secretKey(name, existing) === secretKey(name, written)) return
-  try {
-    await store.remove(name, existing)
-  } catch {
-    // Left behind under its own key, where nothing reads it for this connection.
-  }
+  await bestEffort(() => store.remove(name, existing))
 }
 
 /**
@@ -512,8 +523,16 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
       const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
       lock.assertHeld()
       const plan = await planUpsertSecret(store, input.name, password, existing, written)
-      await saveUpsert(lock, store, input.dataDir, config, input.name, existing, plan)
-      await dropOldKey(store, input.name, existing, plan.written)
+      try {
+        await saveUpsert(lock, store, input.dataDir, config, input.name, existing, plan)
+      } catch (err) {
+        // A password written for a key the saved config does not read stays behind otherwise.
+        if (plan.passwordBackend !== undefined && !readsKey(input.name, existing, plan.written)) {
+          await bestEffort(() => store.remove(input.name, plan.written))
+        }
+        throw err
+      }
+      if (plan.clearAfterSave === undefined) await dropOldKey(store, input.name, existing, plan.written)
 
       return {
         overwritten: existed,

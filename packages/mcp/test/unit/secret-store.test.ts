@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -126,13 +126,33 @@ describe('SecretStore', () => {
     expect(await store.read('a', PERSON)).toEqual({ password: 'pw', source: 'file' })
   })
 
-  it('removes a malformed credentials file on delete, leaving no stale plaintext', async () => {
+  it('leaves a malformed credentials file as it is on delete, and says so (#271)', async () => {
     const store = fileStore()
-    // A hand-broken file our parser can't read must still be cleared on remove,
-    // not left on disk (it may hold plaintext we couldn't parse).
-    writeFileSync(join(dir, 'credentials.json'), "{ broken: 'not json", { mode: 0o600 })
+    // It may hold the newest password of every other connection (#257): dropped whole, older keychain
+    // copies would come out in their place. A person fixes or deletes it.
+    const broken = "{ broken: 'not json"
+    writeFileSync(join(dir, 'credentials.json'), broken, { mode: 0o600 })
+    await expect(store.remove('trade', PERSON)).rejects.toThrow(
+      /Could not remove a password from .*credentials\.json: Malformed JSON.*Nothing was deleted from it/,
+    )
+    expect(readFileSync(join(dir, 'credentials.json'), 'utf8')).toBe(broken)
+  })
+
+  it('a keychain write over a malformed credentials file fails rather than drop it (#271)', async () => {
+    const broken = "{ broken: 'not json"
+    writeFileSync(join(dir, 'credentials.json'), broken, { mode: 0o600 })
+    await expect(new SecretStore({ dataDir: dir, warn: () => {} }).write('trade', 'pw', PERSON)).rejects.toThrow(
+      /Nothing was deleted from it/,
+    )
+    expect(readFileSync(join(dir, 'credentials.json'), 'utf8')).toBe(broken)
+  })
+
+  it('a delete of a key the file does not hold leaves it untouched', async () => {
+    const store = fileStore()
+    await store.write('other', 'pw', PERSON)
+    const before = readFileSync(join(dir, 'credentials.json'), 'utf8')
     await store.remove('trade', PERSON)
-    expect(existsSync(join(dir, 'credentials.json'))).toBe(false)
+    expect(readFileSync(join(dir, 'credentials.json'), 'utf8')).toBe(before)
   })
 
   it('refuses to write over a malformed credentials file (no silent loss of siblings)', async () => {

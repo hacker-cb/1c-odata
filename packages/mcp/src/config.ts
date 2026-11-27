@@ -66,7 +66,8 @@ export function targetBaseUrl(baseUrl: string): string {
  * never another server.
  */
 function canonicalOrigin(url: string): string {
-  const match = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)(.*)$/s.exec(url)
+  // The authority ends at `\\` too: a URL parser reads it as `/` in an http(s) URL.
+  const match = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/\\?#]*)(.*)$/s.exec(url)
   if (match === null) return url
   const scheme = (match[1] ?? '').toLowerCase()
   const authority = match[2] ?? ''

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -299,6 +299,25 @@ describe('a carry that cannot read the password keeps it where it is', () => {
     expect(await resolved()).toBe('legacy')
   })
 
+  it('a keychain password carried drops a stale file copy under the new key, which would outrank it', async () => {
+    legacyProd('current')
+    await new SecretStore({ dataDir: dir, insecure: true }).write('prod', 'stale', {
+      baseUrl: OLD,
+      passwordKey: 'target',
+    })
+    await relabel()
+    expect(loadConfig(dir).connections.prod?.passwordKey).toBe('target')
+    expect(await resolved()).toBe('current')
+  })
+
+  it('a credentials file it cannot read: still keyed <name>, the overwrite saved', async () => {
+    legacyProd()
+    writeFileSync(join(dir, 'credentials.json'), '{ broken', { mode: 0o600 })
+    await expect(relabel()).resolves.toEqual({ overwritten: true })
+    expect(loadConfig(dir).connections.prod).toMatchObject({ label: 'x' })
+    expect(loadConfig(dir).connections.prod?.passwordKey).toBeUndefined()
+  })
+
   it('a password in credentials.json is carried within the file, where an --insecure-storage reader finds it', async () => {
     saveConfig(dir, { connections: { prod: { baseUrl: OLD, login: 'u', serverTimezone: 'Europe/Moscow' } } })
     await new SecretStore({ dataDir: dir, insecure: true }).write('prod', 'in-file', NAME_KEY_OWNER)
@@ -369,6 +388,22 @@ describe('a failed config save deletes no password (#270)', () => {
     expect(await resolved()).toBe('kept')
   })
 
+  it('a new connection’s password does not outlive a save that failed', async () => {
+    state.configSaveFails = true
+    await expect(add(OLD, { password: 'never-saved' })).rejects.toThrow(/ENOSPC/)
+    state.configSaveFails = false
+    expect(state.entries.size).toBe(0)
+  })
+
+  it('a re-point’s new password does not outlive a save that failed', async () => {
+    await add(OLD, { password: 'kept' })
+    state.configSaveFails = true
+    await expect(add(NEW, { password: 'never-saved', overwrite: true })).rejects.toThrow(/ENOSPC/)
+    state.configSaveFails = false
+    expect(entry({ baseUrl: NEW, passwordKey: 'target' })).toBeUndefined()
+    expect(await resolved()).toBe('kept')
+  })
+
   it('a carried password stays under <name> where the save fails', async () => {
     legacyProd('kept')
     state.configSaveFails = true
@@ -392,6 +427,8 @@ describe('a base URL as a target (#272)', () => {
     ['http://user:pw@Host/odata', 'http://host/odata'],
     ['http://host/ODATA/Path', 'http://host/ODATA/Path'],
     ['https://host:0443/odata', 'https://host/odata'],
+    // `\\` ends the host, as a URL parser reads an http(s) URL: the path after it is not folded.
+    ['http://Host\\Base/odata', 'http://host\\Base/odata'],
     ['http://host:08080/odata', 'http://host:8080/odata'],
     // Only ASCII is folded: a Unicode host stays as written (lower-casing Σ may pick another DNS name).
     ['https://ΑΒΓΣ.Example/odata', 'https://ΑΒΓΣ.example/odata'],

@@ -311,19 +311,21 @@ export class SecretStore {
    * read), or the keychain refused the copy.
    */
   async carry(name: string, from: SecretOwner, to: SecretOwner): Promise<boolean> {
-    const found = await this.storedUnder(secretKey(name, from))
-    if (found === null) return false
-    const key = secretKey(name, to)
-    if (found.source === 'file') {
-      this.fileWrite(key, found.password)
-      return true
-    }
-    const mod = await this.keyringModule()
-    if (mod === null) return false
     try {
+      const found = await this.storedUnder(secretKey(name, from))
+      if (found === null) return false
+      const key = secretKey(name, to)
+      if (found.source === 'file') {
+        this.fileWrite(key, found.password)
+        return true
+      }
+      const mod = await this.keyringModule()
+      if (mod === null) return false
       this.keychainEntry(mod, key).setPassword(found.password)
+      this.fileDelete(key) // a file copy under the new key would outrank the one carried
       return true
     } catch {
+      // A credentials file that cannot be read or written, a keychain that refuses: nothing carried.
       return false
     }
   }
@@ -375,48 +377,35 @@ export class SecretStore {
     this.writeFileSecrets(secrets)
   }
 
-  /** Delete each of `keys` from the file in one pass — {@link fileDelete} per key, but read and written once. */
+  private fileDelete(key: string): void {
+    this.fileDeleteKeys([key])
+  }
+
+  /**
+   * Delete each of `keys` from the file, read and written once. A file that
+   * cannot be read or parsed is left as it is and the delete throws: it may
+   * hold the newest password of every other connection (#257), and dropping it
+   * whole would bring older copies out of the keychain in their place (#271).
+   * An empty `{}` file is dropped; one still holding other connections'
+   * secrets is rewritten without these.
+   */
   private fileDeleteKeys(keys: string[]): void {
     let secrets: FileSecrets
     try {
       secrets = this.readFileSecrets(false)
-    } catch {
-      for (const key of keys) this.fileDelete(key)
-      return
+    } catch (err) {
+      throw new Error(
+        `Could not remove a password from ${this.credentialsPath}: ${errMessage(err)} Nothing was deleted from it — fix the file, or delete it by hand to drop every password it holds.`,
+      )
     }
     const present = keys.filter((key) => key in secrets)
-    if (present.length === 0) return
     for (const key of present) delete secrets[key]
     if (Object.keys(secrets).length === 0) {
-      this.fileUnlink()
+      if (existsSync(this.credentialsPath)) this.fileUnlink()
       return
     }
-    this.writeFileSecrets(secrets)
-  }
-
-  private fileDelete(key: string): void {
-    let secrets: FileSecrets
-    try {
-      secrets = this.readFileSecrets(false)
-    } catch {
-      // Malformed/unreadable file: we can't surgically drop one entry and it may
-      // hold stale plaintext we couldn't parse — remove it whole (it held no
-      // recoverable secrets) so a keychain migration / removal leaves nothing.
-      this.fileUnlink()
-      return
-    }
-    if (!(key in secrets)) {
-      // An empty `{}` file that exists is harmless to drop; a file still holding
-      // other connections' secrets is left untouched.
-      if (Object.keys(secrets).length === 0 && existsSync(this.credentialsPath)) this.fileUnlink()
-      return
-    }
-    delete secrets[key]
-    if (Object.keys(secrets).length === 0) {
-      this.fileUnlink()
-      return
-    }
-    this.writeFileSecrets(secrets)
+    // Untouched where none of the keys was in it.
+    if (present.length > 0) this.writeFileSecrets(secrets)
   }
 
   private fileUnlink(): void {
@@ -431,8 +420,8 @@ export class SecretStore {
    * Load the credentials file. With `enforcePermissions` it checks the 0600 rule
    * BEFORE reading (a too-open file's plaintext is never loaded) — use it for
    * reads. Write/delete pass `false`: they overwrite with 0600, so they tolerate
-   * a too-open existing file. Malformed JSON ALWAYS throws (a write must not
-   * clobber unparseable siblings; fileDelete catches it and unlinks). Only string
+   * a too-open existing file. Malformed JSON ALWAYS throws: neither a write nor
+   * a delete may clobber unparseable siblings (#271). Only string
    * values are kept (a hand-edited file may contain other types).
    */
   private readFileSecrets(enforcePermissions: boolean): FileSecrets {
@@ -461,8 +450,8 @@ export class SecretStore {
     try {
       parsed = JSON.parse(raw)
     } catch {
-      // Malformed JSON always throws (both read and write paths) — a write must
-      // not silently clobber unparseable siblings; fileDelete catches & unlinks.
+      // Malformed JSON always throws (read, write and delete alike): nothing may
+      // silently clobber unparseable siblings.
       throw new Error(`Malformed JSON in ${this.credentialsPath} — fix or delete the file.`)
     }
     if (parsed === null || typeof parsed !== 'object') return {}
