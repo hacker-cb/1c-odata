@@ -240,6 +240,12 @@ interface UpsertSecretPlan {
   passwordBackend?: 'keychain' | 'file'
   passwordCleared: boolean
   /**
+   * A password to write only once the config is saved: the same key as
+   * `existing`'s with another login — written first, a failed save would leave
+   * the old login paired with it. Where the write fails, the config goes back.
+   */
+  writeAfterSave?: string
+  /**
    * A key a connection may still read after the save — `existing`'s own: the
    * same key on a login change, `<name>` (which older versions read whatever
    * the target). Deleted strictly once the config is saved; where it cannot
@@ -275,6 +281,9 @@ async function planUpsertSecret(
   written: StoredConnection,
 ): Promise<UpsertSecretPlan> {
   if (password !== undefined && password !== '') {
+    if (existing !== undefined && readsKey(name, existing, written) && !sameAuthTarget(existing, written)) {
+      return { written, passwordCleared: false, writeAfterSave: password }
+    }
     return { written, passwordBackend: (await store.write(name, password, written)).backend, passwordCleared: false }
   }
   if (existing === undefined) {
@@ -303,9 +312,10 @@ async function planUpsertSecret(
 }
 
 /**
- * Save `config` with `written` as connection `name`, then clear strictly what
- * `plan` says a connection would still read. Where that clear fails, the config
- * goes back to `existing` and the error is thrown — nothing changed.
+ * Save `config` with `written` as connection `name`, then write the password
+ * `plan` holds back and clear strictly what it says a connection would still
+ * read. Where either fails, the config goes back to `existing` and the error
+ * is thrown — nothing changed.
  */
 async function saveUpsert(
   lock: DataDirLock,
@@ -319,9 +329,12 @@ async function saveUpsert(
   config.connections[name] = plan.written
   lock.assertHeld()
   saveConfig(dataDir, config)
-  if (plan.clearAfterSave === undefined || existing === undefined) return
+  if (existing === undefined) return
   try {
-    await store.remove(name, plan.clearAfterSave, { strict: true })
+    if (plan.writeAfterSave !== undefined) {
+      plan.passwordBackend = (await store.write(name, plan.writeAfterSave, plan.written)).backend
+    }
+    if (plan.clearAfterSave !== undefined) await store.remove(name, plan.clearAfterSave, { strict: true })
   } catch (err) {
     config.connections[name] = existing
     lock.assertHeld()
@@ -566,10 +579,12 @@ export async function removeConnection(input: {
       const config = loadConfig(input.dataDir)
       const existing = config.connections[input.name]
       if (existing === undefined) return false
+      const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
+      // Before the connection goes: a password file the delete below could not edit would outlive it, past a retry.
+      store.checkFile()
       delete config.connections[input.name]
       lock.assertHeld()
       saveConfig(input.dataDir, config)
-      const store = new SecretStore({ dataDir: input.dataDir, insecure: input.insecure ?? false })
       await store.removeEveryKey(input.name, existing)
       return true
     },
@@ -801,8 +816,11 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
       // while its matching password write is still pending or has failed. Under
       // a new key it is read by nobody until the config is saved.
       let passwordBackend: 'keychain' | 'file' | undefined
+      // The same key with another login: the password goes in once the login is saved (below), or a failed
+      // save would leave the old login paired with it.
+      const afterSave = input.password !== undefined && loginUpdated && !rekeyed
       lock.assertHeld()
-      if (input.password !== undefined) {
+      if (input.password !== undefined && !afterSave) {
         passwordBackend = (await store.write(input.name, input.password, written)).backend
       } else if (rekeyed && !(await store.carry(input.name, existing, written))) {
         // None readable here to carry (the keychain refusing, --insecure-storage): it stays keyed `<name>`.
@@ -813,6 +831,16 @@ export async function updateConnectionCredentials(input: UpdateCredentialsInput)
         config.connections[input.name] = written
         lock.assertHeld()
         saveConfig(input.dataDir, config)
+        if (afterSave && input.password !== undefined) {
+          try {
+            passwordBackend = (await store.write(input.name, input.password, written)).backend
+          } catch (err) {
+            config.connections[input.name] = existing
+            lock.assertHeld()
+            saveConfig(input.dataDir, config)
+            throw err
+          }
+        }
         await dropOldKey(store, input.name, existing, written)
       }
       return {

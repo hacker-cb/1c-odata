@@ -235,6 +235,8 @@ export class SecretStore {
    * best-effort.
    */
   async write(name: string, password: string, conn: SecretOwner): Promise<{ backend: 'keychain' | 'file' }> {
+    // Before the keychain changes: a file it cannot tidy afterwards would leave the write half done.
+    this.checkFile()
     const key = secretKey(name, conn)
     if (!this.insecure && (await this.keychainWrite(name, key, password, conn))) {
       this.fileDelete(key) // a copy left here would outrank the password just stored
@@ -284,22 +286,37 @@ export class SecretStore {
    * best-effort even then.
    */
   async remove(name: string, conn: SecretOwner, opts: { strict?: boolean } = {}): Promise<void> {
+    this.checkFile()
     const key = secretKey(name, conn)
     await this.keychainDelete(key, opts.strict === true && !this.insecure ? name : undefined)
     this.fileDelete(key)
   }
 
   /**
-   * Remove every copy connection `name`, stored as `conn`, may have left — its
-   * own key and, for a person's connection, both forms a password of that
-   * name lives under (`<name>` before #272, `<name>+<hash>` after), whichever
-   * a move cut short left behind. Best-effort on the keychain.
+   * Remove every copy a password of `name` on `conn`'s server may have left,
+   * whoever stored it — `<name>` (a person's before #272), `<name>+<hash>` (a
+   * person's), `<name>@<hash>` (an agent's): a copy a cut-short move or a
+   * locked keychain left under any of them must not outlive the connection,
+   * to be read when the name is added again. Best-effort on the keychain.
    */
   async removeEveryKey(name: string, conn: SecretOwner): Promise<void> {
-    const keys = new Set([secretKey(name, conn), name])
-    if (conn.addedBy !== 'agent') keys.add(secretKey(name, { ...conn, passwordKey: 'target' }))
+    this.checkFile()
+    const keys = new Set([
+      name,
+      secretKey(name, { baseUrl: conn.baseUrl, passwordKey: 'target' }),
+      secretKey(name, { baseUrl: conn.baseUrl, addedBy: 'agent' }),
+    ])
     for (const key of keys) await this.keychainDelete(key)
     this.fileDeleteKeys([...keys])
+  }
+
+  /**
+   * Throw where `credentials.json` exists but cannot be read or parsed — the
+   * error a delete from it would give — so a change checks it before it alters
+   * anything else, rather than fail halfway.
+   */
+  checkFile(): void {
+    this.readFileSecretsForChange()
   }
 
   /**
@@ -312,6 +329,7 @@ export class SecretStore {
    */
   async carry(name: string, from: SecretOwner, to: SecretOwner): Promise<boolean> {
     try {
+      this.checkFile()
       const found = await this.storedUnder(secretKey(name, from))
       if (found === null) return false
       const key = secretKey(name, to)
@@ -364,6 +382,17 @@ export class SecretStore {
 
   // ── plaintext-file backend (0600, modelled on ~/.pgpass) ──
 
+  /** The file's secrets for a change, or the error naming a file that cannot be read or parsed. */
+  private readFileSecretsForChange(): FileSecrets {
+    try {
+      return this.readFileSecrets(false)
+    } catch (err) {
+      throw new Error(
+        `Could not remove a password from ${this.credentialsPath}: ${errMessage(err)} Nothing was deleted from it — fix the file, or delete it by hand to drop every password it holds.`,
+      )
+    }
+  }
+
   private fileRead(key: string): string | null {
     const pwd = this.readFileSecrets(true)[key]
     return typeof pwd === 'string' && pwd !== '' ? pwd : null
@@ -390,14 +419,7 @@ export class SecretStore {
    * secrets is rewritten without these.
    */
   private fileDeleteKeys(keys: string[]): void {
-    let secrets: FileSecrets
-    try {
-      secrets = this.readFileSecrets(false)
-    } catch (err) {
-      throw new Error(
-        `Could not remove a password from ${this.credentialsPath}: ${errMessage(err)} Nothing was deleted from it — fix the file, or delete it by hand to drop every password it holds.`,
-      )
-    }
+    const secrets = this.readFileSecretsForChange()
     const present = keys.filter((key) => key in secrets)
     for (const key of present) delete secrets[key]
     if (Object.keys(secrets).length === 0) {

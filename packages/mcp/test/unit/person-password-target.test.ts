@@ -416,6 +416,83 @@ describe('a failed config save deletes no password (#270)', () => {
   })
 })
 
+describe('a change that cannot finish leaves nothing half done', () => {
+  it('a login and password change on the same server whose save fails keeps the old pair', async () => {
+    await add(OLD, { password: 'alice-pw' })
+    state.configSaveFails = true
+    await expect(
+      upsertConnection({
+        dataDir: dir,
+        name: 'prod',
+        baseUrl: OLD,
+        login: 'bob',
+        password: 'bob-pw',
+        overwrite: true,
+      }),
+    ).rejects.toThrow(/ENOSPC/)
+    state.configSaveFails = false
+    expect(loadConfig(dir).connections.prod?.login).toBe('u')
+    expect(await resolved()).toBe('alice-pw')
+  })
+
+  it('the same through set_credentials', async () => {
+    await add(OLD, { password: 'alice-pw' })
+    state.configSaveFails = true
+    await expect(
+      updateConnectionCredentials({
+        dataDir: dir,
+        name: 'prod',
+        login: 'bob',
+        password: 'bob-pw',
+        expected: { baseUrl: OLD, login: 'u' },
+      }),
+    ).rejects.toThrow(/ENOSPC/)
+    state.configSaveFails = false
+    expect(loadConfig(dir).connections.prod?.login).toBe('u')
+    expect(await resolved()).toBe('alice-pw')
+  })
+
+  it('a login and password change on the same server, saved: the new pair', async () => {
+    await add(OLD, { password: 'alice-pw' })
+    await upsertConnection({
+      dataDir: dir,
+      name: 'prod',
+      baseUrl: OLD,
+      login: 'bob',
+      password: 'bob-pw',
+      overwrite: true,
+    })
+    expect(loadConfig(dir).connections.prod?.login).toBe('bob')
+    expect(await resolved()).toBe('bob-pw')
+  })
+
+  it('remove over a damaged credentials.json refuses before the connection goes — a retry can finish it', async () => {
+    await add(OLD, { password: 'p' })
+    writeFileSync(join(dir, 'credentials.json'), '{ broken', { mode: 0o600 })
+    await expect(removeConnection({ dataDir: dir, name: 'prod' })).rejects.toThrow(/Nothing was deleted from it/)
+    expect(loadConfig(dir).connections.prod).toBeDefined()
+    expect(entry({ baseUrl: OLD, passwordKey: 'target' })).toBe('p')
+    rmSync(join(dir, 'credentials.json'))
+    await expect(removeConnection({ dataDir: dir, name: 'prod' })).resolves.toBe(true)
+    expect(state.entries.size).toBe(0)
+  })
+
+  it('a keychain write over a damaged credentials.json changes nothing in the keychain', async () => {
+    await add(OLD, { password: 'old' })
+    writeFileSync(join(dir, 'credentials.json'), '{ broken', { mode: 0o600 })
+    await expect(add(OLD, { password: 'new', overwrite: true })).rejects.toThrow(/Nothing was deleted from it/)
+    expect(entry({ baseUrl: OLD, passwordKey: 'target' })).toBe('old')
+  })
+
+  it('remove deletes every key form on its server — a person’s, an agent’s, <name>', async () => {
+    await add(OLD, { password: 'p' })
+    await new SecretStore({ dataDir: dir }).write('prod', 'agent-copy', { baseUrl: OLD, addedBy: 'agent' })
+    state.entries.set(`${keychainServiceName(dir)}/prod`, 'name-copy')
+    await removeConnection({ dataDir: dir, name: 'prod' })
+    expect(state.entries.size).toBe(0)
+  })
+})
+
 describe('a base URL as a target (#272)', () => {
   it.each([
     ['HTTPS://Host.Example:443/База/odata/standard.odata/', 'https://host.example/База/odata/standard.odata'],
