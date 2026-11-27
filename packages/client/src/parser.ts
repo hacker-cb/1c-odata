@@ -289,22 +289,32 @@ function mapValue(
  */
 function int64Value(v: unknown, fieldName: string, mode: 'bigint' | 'number'): unknown {
   if (v === null) return null
-  // Up to 18 characters every decimal integer is within range; past that, BigInt says.
-  if (typeof v !== 'string' || !INT64_WIRE.test(v) || (v.length > 18 && !inInt64Range(BigInt(v)))) {
+  const n = typeof v === 'string' ? int64OfWire(v) : undefined
+  if (n === undefined) {
     throw new ParseError(
       `Edm.Int64 field ${fieldName}: expected a 64-bit integer string or null, got ${describeJson(v)}`,
     )
   }
-  if (mode === 'bigint') return BigInt(v)
-  const n = Number(v)
-  return n === 0 ? 0 : n // `-0` reads as 0, as it reads as 0n
+  if (mode === 'bigint') return n
+  const num = Number(n)
+  return num === 0 ? 0 : num // `-0` reads as 0, as it reads as 0n
 }
 
 const INT64_MIN = -(2n ** 63n)
 const INT64_MAX = 2n ** 63n - 1n
 
-function inInt64Range(n: bigint): boolean {
-  return n >= INT64_MIN && n <= INT64_MAX
+/**
+ * `v` as a `bigint` where it is a decimal integer string within the signed
+ * 64-bit range, else `undefined`. Past 19 significant digits it is out of range
+ * without `BigInt` ever reading it — a long string costs no arbitrary-precision
+ * parse.
+ */
+function int64OfWire(v: string): bigint | undefined {
+  if (!INT64_WIRE.test(v)) return undefined
+  const significant = v.length - (v.match(/^-?0*/)?.[0].length ?? 0)
+  if (significant > 19) return undefined
+  const n = BigInt(v)
+  return n >= INT64_MIN && n <= INT64_MAX ? n : undefined
 }
 
 /** Convert a string wire value per its declared (or heuristically-detected) type. */

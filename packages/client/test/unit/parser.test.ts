@@ -236,6 +236,7 @@ describe('schema-aware parsing', () => {
       expect(single('-42', 'bigint').LineNumber).toBe(-42n)
       expect(single('007', 'number').LineNumber).toBe(7)
       expect(single('0000000000000000000000001', 'bigint').LineNumber).toBe(1n)
+      expect(single(`-${'0'.repeat(40)}9223372036854775808`, 'bigint').LineNumber).toBe(-9223372036854775808n)
     })
 
     it('`-0` reads as 0 in number mode, as it reads as 0n in bigint mode', () => {
@@ -252,7 +253,7 @@ describe('schema-aware parsing', () => {
       expect(single('9223372036854775807', 'bigint').LineNumber).toBe(9223372036854775807n)
       expect(single('-9223372036854775808', 'bigint').LineNumber).toBe(-9223372036854775808n)
       for (const mode of ['number', 'bigint'] as const) {
-        for (const v of ['9223372036854775808', '-9223372036854775809', '9'.repeat(309)]) {
+        for (const v of ['9223372036854775808', '-9223372036854775809', '9'.repeat(309), `1${'0'.repeat(19)}`]) {
           expect(() => single(v, mode)).toThrow(ParseError)
         }
       }
