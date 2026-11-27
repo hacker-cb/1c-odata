@@ -3,7 +3,7 @@
 import { type DataShape, DEFAULT_SHAPE } from './connection.js'
 import { InvalidArgumentError, ParseError } from './errors.js'
 import { setOwn } from './own-key.js'
-import { schemaOfType, typeNameOfRef, typeNameOfSet } from './schema-lookup.js'
+import { schemaOfType, typeNameOfNavigation, typeNameOfRef, typeNameOfSet } from './schema-lookup.js'
 import { parseInZone } from './timezone.js'
 import { ONEC_EMPTY_DATE } from './types/core.js'
 import type { EntitySchema, MetadataIndex } from './validate.js'
@@ -179,7 +179,10 @@ function inlineCount(raw: unknown): number | undefined {
  */
 export function parseV3Single<T>(body: string, opts: ParseOptions): T {
   const parsed = safeParse(body)
-  if (typeof parsed !== 'object' || parsed === null) throw new ParseError('Expected object at root')
+  // An array is no entity: spread into one it would read as `{}` (or `{"0": …}`) with every field missing.
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new ParseError('Expected object at root')
+  }
   const obj = parsed as Record<string, unknown>
   // Strip odata.metadata from the entity payload
   const { 'odata.metadata': _, ...rest } = obj
@@ -270,13 +273,13 @@ function mapValue(
       `Edm.DateTime field ${fieldName}: expected a date-time string or null, got ${typeof v} ${shown}`,
     )
   }
-  // Nested entities (tabular parts, ComplexTypes) are parsed with THEIR OWN
-  // schema, resolved from the field's declared type — not the parent's. Without
-  // this, a nested `Edm.Int64` / `Edm.DateTime` / ValueStorage field is looked
-  // up in the parent schema (absent → no conversion), diverging from the write
-  // path (write-transform.ts), which already recurses with the nested type.
+  // Nested entities (tabular parts, ComplexTypes, entities an `$expand` brought) are parsed with THEIR OWN
+  // schema, resolved from the field's declared type or, for a navigation property, its target — not the
+  // parent's. Without this, a nested `Edm.Int64` / `Edm.DateTime` / ValueStorage field is looked up in the
+  // parent schema (absent → no conversion), diverging from the write path (write-transform.ts), which
+  // already recurses with the nested type.
   if (Array.isArray(v)) {
-    const childOpts = withNestedTypeHint(opts, propType)
+    const childOpts = withNestedTypeHint(opts, schema, fieldName, propType)
     // An array inside the array (no OData V3 collection holds one) is read as an array again, never handed
     // to `mapEntity`, which would turn it into an object keyed `"0"`, `"1"`, …. The field's declared type
     // describes the items of this array, not those of one nested in it: that one is read schema-less.
@@ -289,7 +292,7 @@ function mapValue(
     )
   }
   if (typeof v === 'object' && v !== null) {
-    return mapEntity(v as Record<string, unknown>, withNestedTypeHint(opts, propType))
+    return mapEntity(v as Record<string, unknown>, withNestedTypeHint(opts, schema, fieldName, propType))
   }
   return v
 }
@@ -377,13 +380,23 @@ function parseDateTime(v: string, fieldName: string, typed: boolean, serverTimez
 
 /**
  * Build the `ParseOptions` for a nested value: adopt the nested type's own
- * `typeHint` when resolvable, otherwise drop the parent `typeHint` so the
- * nested value is parsed schema-less (an expanded navigation property is absent
- * from `schema.properties`, so its type can't be resolved here — schema-less is
- * safer than misapplying the parent schema).
+ * `typeHint` when resolvable — a declared property's type, else, for a
+ * navigation property an `$expand` brought, its target (`schema.navigation`) —
+ * otherwise drop the parent `typeHint` so the nested value is parsed
+ * schema-less: safer than misapplying the parent schema. An index without
+ * `navigation` (one built before it was recorded) reads an expanded entity
+ * schema-less, as it did.
  */
-function withNestedTypeHint(opts: ParseOptions, propType: string | undefined): ParseOptions {
-  const typeHint = typeNameOfRef(opts.metadataIndex, propType)
+function withNestedTypeHint(
+  opts: ParseOptions,
+  schema: EntitySchema | undefined,
+  fieldName: string,
+  propType: string | undefined,
+): ParseOptions {
+  const typeHint =
+    propType !== undefined
+      ? typeNameOfRef(opts.metadataIndex, propType)
+      : typeNameOfNavigation(opts.metadataIndex, schema, fieldName)
   const { typeHint: _parent, ...rest } = opts
   return typeHint !== undefined ? { ...rest, typeHint } : rest
 }

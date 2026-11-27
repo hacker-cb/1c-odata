@@ -83,3 +83,118 @@ describe('buildMetadataIndex — a set whose type has no schema is left out', ()
     expect(index.entitySetToType).toEqual({ Catalog_X: 'Catalog_X' })
   })
 })
+
+// Navigation properties (#283): the 1С shape (`0..1` target end), a `*` end 1С never declares, an Association
+// the EDMX lacks, and a target in another namespace — the last three not from 1С.
+const NAV_EDMX = `<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" Version="1.0">
+  <edmx:DataServices m:DataServiceVersion="3.0" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+    <Schema Namespace="StandardODATA" xmlns="http://schemas.microsoft.com/ado/2009/11/edm">
+      <EntityType Name="Document_X">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+        <Property Name="Файл" Type="Edm.Stream" Nullable="true"/>
+        <Property Name="Файл_Base64Data" Type="Edm.Binary" Nullable="true"/>
+        <Property Name="Файл_Type" Type="Edm.String" Nullable="true"/>
+        <Property Name="Контрагент_Key" Type="Edm.Guid" Nullable="true"/>
+        <NavigationProperty Name="Контрагент" Relationship="StandardODATA.Document_X_Контрагент" FromRole="Begin" ToRole="End"/>
+        <NavigationProperty Name="Строки" Relationship="StandardODATA.Document_X_Строки" FromRole="Begin" ToRole="End"/>
+        <NavigationProperty Name="Потерянная" Relationship="StandardODATA.Нет" FromRole="Begin" ToRole="End"/>
+        <NavigationProperty Name="Чужая" Relationship="StandardODATA.Document_X_Чужая" FromRole="Begin" ToRole="End"/>
+      </EntityType>
+      <EntityType Name="Catalog_Контрагенты">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+        <Property Name="Код" Type="Edm.Int64" Nullable="false"/>
+      </EntityType>
+      <EntityType Name="Catalog_Строки">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+      </EntityType>
+      <EntityType Name="Catalog_Y">
+        <Key><PropertyRef Name="Ref_Key"/></Key>
+        <Property Name="Ref_Key" Type="Edm.Guid" Nullable="false"/>
+      </EntityType>
+      <Association Name="Document_X_Контрагент">
+        <End Role="Begin" Type="StandardODATA.Document_X" Multiplicity="*"/>
+        <End Role="End" Type="StandardODATA.Catalog_Контрагенты" Multiplicity="0..1"/>
+      </Association>
+      <Association Name="Document_X_Строки">
+        <End Role="Begin" Type="StandardODATA.Document_X" Multiplicity="0..1"/>
+        <End Role="End" Type="StandardODATA.Catalog_Строки" Multiplicity="*"/>
+      </Association>
+      <Association Name="Document_X_Чужая">
+        <End Role="Begin" Type="StandardODATA.Document_X" Multiplicity="*"/>
+        <End Role="End" Type="Other.Catalog_Z" Multiplicity="0..1"/>
+      </Association>
+      <EntityContainer Name="StandardODATA" m:IsDefaultEntityContainer="true">
+        <EntitySet Name="Document_X" EntityType="StandardODATA.Document_X"/>
+        <EntitySet Name="Catalog_Контрагенты" EntityType="StandardODATA.Catalog_Контрагенты"/>
+        <EntitySet Name="Catalog_Строки" EntityType="StandardODATA.Catalog_Строки"/>
+        <EntitySet Name="Catalog_Y" EntityType="StandardODATA.Catalog_Y"/>
+      </EntityContainer>
+    </Schema>
+  </edmx:DataServices>
+</edmx:Edmx>`
+
+describe('buildMetadataIndex — navigation properties (#283)', () => {
+  const index = buildMetadataIndex(parseEdmx(NAV_EDMX))
+
+  it('records each resolvable navigation by its target local name; `collection: true` only for a `*` end', () => {
+    expect(index.schemas.Document_X?.navigation).toEqual({
+      Контрагент: { type: 'Catalog_Контрагенты' },
+      Строки: { type: 'Catalog_Строки', collection: true },
+    })
+    // `collection` is written only where it is true — a 1С navigation carries `type` alone.
+    expect(Object.keys(index.schemas.Document_X?.navigation?.Контрагент ?? {})).toEqual(['type'])
+  })
+
+  it('skips a navigation whose Association is missing or whose target lies in another namespace', () => {
+    expect(index.schemas.Document_X?.navigation).not.toHaveProperty('Потерянная')
+    expect(index.schemas.Document_X?.navigation).not.toHaveProperty('Чужая')
+  })
+
+  it('writes no `navigation` key for a type without navigations, and puts it after `valueStorages`', () => {
+    expect(index.schemas.Catalog_Y).not.toHaveProperty('navigation')
+    expect(Object.keys(index.schemas.Document_X ?? {})).toEqual(['properties', 'valueStorages', 'navigation'])
+  })
+
+  it('keeps only navigations whose target the filtered closure holds — the closure takes every target', () => {
+    const narrowed = buildMetadataIndex(parseEdmx(NAV_EDMX), { filter: (name) => name === 'Document_X' })
+    expect(Object.keys(narrowed.schemas).sort()).toEqual(['Catalog_Контрагенты', 'Catalog_Строки', 'Document_X'])
+    expect(narrowed.schemas.Document_X?.navigation).toEqual(index.schemas.Document_X?.navigation)
+  })
+
+  it('takes the target parseEdmx resolved — a model carrying `resolvedTargetType` without its Associations', () => {
+    const model = parseEdmx(NAV_EDMX)
+    const built = buildMetadataIndex({ ...model, associations: [] })
+    // No Association to read a multiplicity off: a single entity.
+    expect(built.schemas.Document_X?.navigation).toEqual({
+      Контрагент: { type: 'Catalog_Контрагенты' },
+      Строки: { type: 'Catalog_Строки' },
+    })
+  })
+
+  it('gives a type declared twice the navigations of its last declaration, as its schema', () => {
+    const model = parseEdmx(NAV_EDMX)
+    const doc = model.entityTypes.find((t) => t.name === 'Document_X')
+    if (doc === undefined) throw new Error('fixture lacks Document_X')
+    const lastWithout = buildMetadataIndex({
+      ...model,
+      entityTypes: [...model.entityTypes, { ...doc, navigationProperties: [] }],
+    })
+    expect(lastWithout.schemas.Document_X).not.toHaveProperty('navigation')
+    const lastWith = buildMetadataIndex({
+      ...model,
+      entityTypes: [{ ...doc, navigationProperties: [] }, ...model.entityTypes],
+    })
+    expect(lastWith.schemas.Document_X?.navigation).toEqual(index.schemas.Document_X?.navigation)
+  })
+
+  it('passes parseMetadataIndex, built and through a JSON round trip', () => {
+    expect(parseMetadataIndex(index)).toBe(index)
+    expect(parseMetadataIndex(JSON.parse(JSON.stringify(index))).schemas.Document_X?.navigation).toEqual(
+      index.schemas.Document_X?.navigation,
+    )
+  })
+})

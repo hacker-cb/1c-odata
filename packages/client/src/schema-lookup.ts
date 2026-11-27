@@ -65,3 +65,22 @@ export function typeNameOfRef(index: MetadataIndex | undefined, typeRef: string 
 export function schemaOfRef(index: MetadataIndex | undefined, typeRef: string | undefined): EntitySchema | undefined {
   return schemaOfType(index, typeNameOfRef(index, typeRef))
 }
+
+/**
+ * The local type name the navigation property `name` of `schema` brings on
+ * `$expand`, where the index holds a schema for it — own keys only, as
+ * everywhere here. `undefined` without one, for a name the schema does not
+ * list as a navigation (an index built before navigations were recorded
+ * among them), or for a target the index holds no schema for: the caller then
+ * reads the expanded value schema-less.
+ */
+export function typeNameOfNavigation(
+  index: MetadataIndex | undefined,
+  schema: EntitySchema | undefined,
+  name: string,
+): string | undefined {
+  const navigation = schema?.navigation
+  if (navigation === undefined || !Object.hasOwn(navigation, name)) return undefined
+  const typeName = navigation[name]?.type
+  return schemaOfType(index, typeName) !== undefined ? typeName : undefined
+}

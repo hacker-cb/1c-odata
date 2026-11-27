@@ -43,6 +43,22 @@ function readNavigationProperty(raw: Record<string, unknown>): EdmxNavigationPro
   }
 }
 
+/**
+ * The Association end a NavigationProperty leads to — its `ToRole` end, the
+ * Association named by `Relationship` (`<Schema>.<AssocName>`, the schema prefix
+ * stripped) — or `undefined` where either is missing. The one resolution of a
+ * navigation's target end: `parseEdmx` reads its type into `resolvedTargetType`,
+ * `buildMetadataIndex` its multiplicity.
+ */
+export function navigationTargetEnd(
+  np: EdmxNavigationProperty,
+  assocByName: ReadonlyMap<string, EdmxAssociation>,
+): EdmxAssociation['ends'][number] | undefined {
+  const lastDot = np.relationship.lastIndexOf('.')
+  const assocName = lastDot >= 0 ? np.relationship.slice(lastDot + 1) : np.relationship
+  return assocByName.get(assocName)?.ends.find((e) => e.role === np.toRole)
+}
+
 function readEntityType(raw: Record<string, unknown>): EdmxEntityType {
   const name = String(raw['@_Name'])
   const keyBlock = raw.Key as Record<string, unknown> | undefined
@@ -250,11 +266,7 @@ export function parseEdmx(xml: string): EdmxModel {
   const assocByName = new Map(associations.map((a) => [a.name, a]))
   for (const et of entityTypes) {
     for (const np of et.navigationProperties) {
-      // relationship attribute is `<Schema>.<AssocName>` — strip the schema prefix
-      const lastDot = np.relationship.lastIndexOf('.')
-      const assocName = lastDot >= 0 ? np.relationship.slice(lastDot + 1) : np.relationship
-      const assoc = assocByName.get(assocName)
-      const target = assoc?.ends.find((e) => e.role === np.toRole)
+      const target = navigationTargetEnd(np, assocByName)
       if (target) np.resolvedTargetType = target.type
     }
   }

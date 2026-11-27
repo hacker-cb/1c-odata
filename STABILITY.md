@@ -69,6 +69,8 @@ Guaranteed:
 
 `MetadataIndex` is a structural contract — the source is not specified: the codegen-emitted `__metadata.json` (`loadMetadataIndex`), an index built at runtime from `$metadata` (`buildMetadataIndex` / `fetchMetadataIndex` in `@1c-odata/metadata`), or a revived cache entry (`parseMetadataIndex`). All sources produce identical runtime behavior — pinned by the `metadata-parity` integration test.
 
+An entity an `$expand` brings is read with the schema of the navigation's target type — `EntitySchema.navigation`, recorded by `buildMetadataIndex` — exactly as the row itself is: `Edm.Int64` and `Edm.DateTime` converted and checked, ValueStorage grouped. An index without `navigation` — a `__metadata.json` generated before it was recorded, or a cache of such an index — still loads and reads expanded entities schema-less (the contract above) until it is regenerated or fetched again. A navigation whose target the index holds no schema for reads schema-less too, rather than failing the index.
+
 ## Codegen output
 
 `generated/` is a derived artifact in the consumer's repo. We promise:
