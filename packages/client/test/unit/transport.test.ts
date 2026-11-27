@@ -1598,11 +1598,12 @@ describe('transport — the request is read once, right after beforeRequest (#25
     expect(onErrorReq?.headers.Authorization).toBe(auth.header)
   })
 
-  it('an afterResponse freezing the event without its signal: onError gets the request with the signal', async () => {
+  it('an afterResponse freezing the event without its signal: onError gets a copy with the signal and its own fields', async () => {
     server.use(http.get(`${base}/X`, () => new HttpResponse('down', { status: 503 })))
-    let onErrorReq: RequestEvent | undefined
+    let onErrorReq: (RequestEvent & { traceId?: string }) | undefined
     await request(target, {
       hooks: {
+        beforeRequest: (req) => ({ ...req, traceId: 't1' }),
         afterResponse: (req) => {
           delete req.signal
           Object.freeze(req)
@@ -1614,6 +1615,140 @@ describe('transport — the request is read once, right after beforeRequest (#25
     }).catch(() => {})
     expect(onErrorReq?.signal).toBeInstanceOf(AbortSignal)
     expect(onErrorReq?.url).toBe(`${base}/X`)
+    expect(onErrorReq?.traceId).toBe('t1')
+  })
+
+  it('a frozen event with an own url getter: the getter is read once, the copy takes the snapshot’s url', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
+    let reads = 0
+    let event: RequestEvent | undefined
+    let after: RequestEvent | undefined
+    const res = await request(target, {
+      hooks: {
+        beforeRequest: ({ signal: _, ...req }) => {
+          const url = req.url
+          event = Object.freeze(
+            Object.defineProperty({ ...req }, 'url', {
+              enumerable: true,
+              get() {
+                reads++
+                if (reads > 1) throw new Error('read twice')
+                return url
+              },
+            }),
+          )
+          return event
+        },
+        afterResponse: (req) => {
+          after = req
+        },
+      },
+    })
+    expect(res.status).toBe(200)
+    expect(reads).toBe(1)
+    expect(after === event).toBe(false)
+    expect(after?.url).toBe(`${base}/X`)
+    expect(after?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('a signal setter that changes the event: what it changed is sent', async () => {
+    let captured: Record<string, string> = {}
+    server.use(
+      http.get(`${base}/X`, ({ request }) => {
+        captured = Object.fromEntries(request.headers.entries())
+        return HttpResponse.json({ value: [] })
+      }),
+    )
+    await request(target, {
+      hooks: {
+        beforeRequest: ({ signal: _, ...req }) => {
+          let signal: AbortSignal | undefined
+          return {
+            ...req,
+            get signal() {
+              return signal
+            },
+            set signal(s: AbortSignal | undefined) {
+              signal = s
+              req.headers = { ...req.headers, 'X-Bound': 'yes' }
+            },
+            get headers() {
+              return req.headers
+            },
+          }
+        },
+      },
+    })
+    expect(captured['x-bound']).toBe('yes')
+  })
+
+  it('a copy’s headers are its own: afterResponse changing them changes neither what onError gets nor the request', async () => {
+    server.use(http.get(`${base}/X`, () => new HttpResponse('down', { status: 503 })))
+    let onErrorReq: RequestEvent | undefined
+    await request(target, {
+      hooks: {
+        beforeRequest: ({ signal: _, ...req }) => Object.freeze(req),
+        afterResponse: (req) => {
+          req.headers.Authorization = 'changed'
+          delete req.signal
+          Object.freeze(req)
+        },
+        onError: (req) => {
+          onErrorReq = req
+        },
+      },
+    }).catch(() => {})
+    expect(onErrorReq?.headers.Authorization).toBe(auth.header)
+  })
+
+  it('a header value whose conversion throws is the hook’s own error, never a NetworkError', async () => {
+    server.use(http.get(`${base}/X`, () => HttpResponse.json({ value: [] })))
+    const convErr = new Error('token unavailable')
+    const onError = vi.fn()
+    const trace: AttemptTrace = { threw: false }
+    const err = await request(
+      target,
+      {
+        hooks: {
+          beforeRequest: (req) => {
+            req.headers['X-Token'] = {
+              toString() {
+                throw convErr
+              },
+            } as unknown as string
+          },
+          onError,
+        },
+      },
+      trace,
+    ).catch((e: unknown) => e)
+    expect(err).toBe(convErr)
+    expect(trace.threw).toBe(true)
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('a caller’s abort during beforeRequest leaves the event’s headers unread', async () => {
+    const ctrl = new AbortController()
+    let reads = 0
+    const pending = request(target, {
+      signal: ctrl.signal,
+      hooks: {
+        beforeRequest: (req) => {
+          Object.defineProperty(req.headers, 'X-Signature', {
+            enumerable: true,
+            get() {
+              reads++
+              return 'sig'
+            },
+          })
+          return new Promise<void>(() => {})
+        },
+      },
+    }).catch((e: unknown) => e)
+    ctrl.abort()
+    const err = await pending
+    expect((err as Error).name).toBe('AbortError')
+    expect(reads).toBe(0)
   })
 
   it('a timeout during beforeRequest whose event getter throws still yields the TimeoutError', async () => {

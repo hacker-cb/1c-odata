@@ -6,13 +6,13 @@ import type { ODataError } from '../errors.js'
  *
  * What is sent is read off the event `beforeRequest` leaves — the one it was
  * given, or the one it returned — once, right after the hook: `method`, `url`,
- * `headers` (each header too) and `body`. A getter there is read once, and one
- * that throws is the hook's own error. What the request is sent with, and what
- * an error reports in `request`, is that reading; nothing done to the event
- * later changes either. `afterResponse` and `onError` are handed that same
+ * `headers` (each header, as a string) and `body`. A getter there is read
+ * once, and one that throws is the hook's own error. What the request is sent
+ * with, and what an error reports in `request`, is that reading; nothing done
+ * to the event later changes either. `afterResponse` and `onError` are handed that same
  * event, carrying `signal` — or, where it will not take the signal (frozen, or
- * a setter that ignores the write), a copy with the request's fields as they
- * were read.
+ * a setter that ignores the write), a copy: its own fields kept, the request's
+ * fields as they were read.
  * @public
  */
 export interface RequestEvent {

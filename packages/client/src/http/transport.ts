@@ -140,6 +140,10 @@ async function prepareRequest(
       combined,
     )
     if (result) reqEvent = result
+    // The event keeps the call's signal — later hooks are promised it — whether
+    // the hook returned a replacement without one or dropped it from the event
+    // it was given. Set first, so what its setter does to the event is sent.
+    const tookSignal = takesSignal(reqEvent, combined)
     // The snapshot, read once and still inside: a throwing getter on the event
     // the hook returned is the hook's own error — the call ends below, its
     // timer cleared, never retried. Nothing after this reads the event's fields
@@ -147,10 +151,9 @@ async function prepareRequest(
     // request an error reports are the snapshot's.
     wire = readWire(reqEvent)
     if (trace) trace.method = wire.method
-    // The event keeps the call's signal — later hooks are promised it — whether
-    // the hook returned a replacement without one or dropped it from the event
-    // it was given.
-    reqEvent = withSignal(reqEvent, combined, wire)
+    // An event refusing the signal — frozen, or a setter ignoring the write —
+    // is replaced for the later hooks by a copy.
+    if (!tookSignal) reqEvent = copyEvent(reqEvent, wire, combined)
     fetchInit = {
       method: wire.method,
       headers: wire.headers,
@@ -164,18 +167,10 @@ async function prepareRequest(
     // abort — rather than with the hook: classified as on the wire (a
     // TimeoutError with onError, or the caller's own reason).
     if (combined.aborted && e === combined.reason) {
-      // What the request was when the wait ended — the event as the hook left
-      // it so far, or, where reading it throws, the request as asked.
-      let asked: WireRequest
-      try {
-        asked = readWire(reqEvent)
-      } catch {
-        asked = readWire(config)
-      }
       await translateAndFireError(
         e,
         reqEvent,
-        asked,
+        askedRequest(reqEvent, config),
         () => callOpts.hooks,
         timeoutSignal,
         timeoutMs,
@@ -196,63 +191,95 @@ async function prepareRequest(
 }
 
 /**
- * Read the request off `event` once: `method`, `url` (as a string), `headers`
- * and `body`. A plain headers object is copied, so a getter on a header is
- * read here rather than inside the fetch; one fetch would iterate (`Headers`,
- * pairs) is read into a `Headers` here for the same reason. What throws here
- * throws to the caller of this function.
+ * What the request was when the wait for `beforeRequest` ended — its method
+ * and url as the hook left them so far, or, where reading them throws, as
+ * asked. Its headers and body are left unread: nothing will be sent.
  */
-function readWire(event: RequestEvent | RequestConfig): WireRequest {
+function askedRequest(event: RequestEvent, config: RequestConfig): WireRequest {
+  try {
+    return { ...config, method: event.method, url: event.url }
+  } catch {
+    return config
+  }
+}
+
+/**
+ * Read the request off `event` once: `method`, `url`, `headers` and `body`. A
+ * plain headers object is copied, each value as the string fetch would make
+ * of it, so a getter on a header, or a value whose conversion throws, is read
+ * here rather than inside the fetch. Headers fetch would iterate (`Headers`,
+ * pairs) are kept as given. What throws here throws to the caller.
+ */
+function readWire(event: RequestEvent): WireRequest {
   const method = event.method
-  const url = String(event.url)
+  const url = event.url
   const headers = copyHeaders(event.headers)
   const body = event.body
   return body !== undefined ? { method, url, headers, body } : { method, url, headers }
 }
 
-type FetchHeaders = ConstructorParameters<typeof Headers>[0]
-
+/** A plain headers object copied, its values strings; anything else as given. */
 function copyHeaders(headers: RequestEvent['headers']): RequestEvent['headers'] {
-  if (typeof headers !== 'object' || headers === null) return headers
-  // Cast: a `Headers` (or pairs) is no `Record`, but fetch takes it, and so
-  // did the transport before the snapshot — kept working, not narrowed.
-  if (Symbol.iterator in headers) return new Headers(headers as FetchHeaders) as unknown as RequestEvent['headers']
-  return { ...headers }
+  if (typeof headers !== 'object' || headers === null || Symbol.iterator in headers) return headers
+  const copy: Record<string, string> = {}
+  for (const [name, value] of Object.entries(headers)) copy[name] = String(value)
+  return copy
 }
 
-/** The snapshot's request as an event carrying `signal` — what a hook gets where its own event will not do. */
-function wireEvent(wire: WireRequest, signal: AbortSignal): RequestEvent {
-  return { ...wire, signal }
+/** The request fields of the snapshot, as an event's — headers a copy of their own, so a hook changing them changes no other. */
+function wireFields(wire: WireRequest): WireRequest {
+  return { ...wire, headers: copyHeaders(wire.headers) }
+}
+
+/** The request fields every copy of an event takes from the snapshot. */
+const WIRE_KEYS: ReadonlySet<PropertyKey> = new Set(['method', 'url', 'headers', 'body', 'signal'])
+
+/**
+ * Whether `event` carries `signal` — set in place where it lacks it, so the
+ * event a hook returned stays the one later hooks see (its prototype and
+ * identity intact), and the write read back: a frozen event, or a setter that
+ * ignores the write, does not take it. What throws here throws to the caller.
+ */
+function takesSignal(event: RequestEvent, signal: AbortSignal): boolean {
+  if (event.signal === signal) return true
+  return Reflect.set(event, 'signal', signal) && event.signal === signal
 }
 
 /**
- * `event` carrying `signal`, for `beforeRequest`'s result, inside its error
- * handling — what throws here is the hook's own. Set in place where it lacks
- * it, so the event a hook returned stays the one later hooks see (its
- * prototype and identity intact), the write read back: an object refusing it —
- * frozen, or a setter that ignores the write — gets a copy instead, its own
- * fields kept and the request's fields and the signal the snapshot's.
+ * A copy of `event` for the later hooks, carrying `signal`: its own fields
+ * other than the request's kept as they are defined — a getter copied, not
+ * called — and the request's fields the snapshot's. What throws here throws to
+ * the caller.
  */
-function withSignal(event: RequestEvent, signal: AbortSignal, wire: WireRequest): RequestEvent {
-  if (event.signal === signal) return event
-  if (Reflect.set(event, 'signal', signal) && event.signal === signal) return event
-  return { ...event, ...wireEvent(wire, signal) }
+function copyEvent(event: RequestEvent, wire: WireRequest, signal: AbortSignal): RequestEvent {
+  const copy = {}
+  const own = Object.getOwnPropertyDescriptors(event)
+  for (const key of Reflect.ownKeys(own)) {
+    const d = own[key as keyof typeof own]
+    if (d === undefined || !d.enumerable || WIRE_KEYS.has(key)) continue
+    Object.defineProperty(copy, key, { ...d, configurable: true, ...('value' in d ? { writable: true } : {}) })
+  }
+  return Object.assign(copy, wireFields(wire), { signal })
 }
 
 /**
  * `event` carrying `signal` again before a later hook, outside any hook's
  * error handling: what an earlier hook did to the event — dropped the signal,
  * froze it, a getter or setter that throws — never fails the call. Where it
- * will not take the signal, the hook gets the snapshot's request instead.
+ * will not take the signal, the hook gets a copy of it ({@link copyEvent}), or,
+ * where even that throws, the snapshot's request alone.
  */
 function keepSignal(event: RequestEvent, signal: AbortSignal, wire: WireRequest): RequestEvent {
   try {
-    if (event.signal === signal) return event
-    if (Reflect.set(event, 'signal', signal) && event.signal === signal) return event
+    if (takesSignal(event, signal)) return event
   } catch {
-    // Read below from the snapshot.
+    // Copied below.
   }
-  return wireEvent(wire, signal)
+  try {
+    return copyEvent(event, wire, signal)
+  } catch {
+    return { ...wireFields(wire), signal }
+  }
 }
 
 /**
