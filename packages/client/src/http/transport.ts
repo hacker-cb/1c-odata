@@ -208,7 +208,13 @@ async function prepareRequest(
  * asked. Its headers and body are left unread: nothing will be sent.
  */
 function askedRequest(event: RequestEvent, config: RequestConfig): WireRequest {
-  const asked = { method: config.method, url: config.url, headers: readHeaders(config.headers) }
+  // The headers as asked, by reference: not read here — only a copy for a
+  // later hook, where one is needed, reads them.
+  const asked: WireRequest = {
+    method: config.method,
+    url: config.url,
+    headers: { kind: 'record', record: config.headers },
+  }
   try {
     return { ...asked, method: event.method, url: event.url }
   } catch {

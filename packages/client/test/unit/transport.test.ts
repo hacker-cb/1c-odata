@@ -1847,6 +1847,40 @@ describe('transport — the request is read once, right after beforeRequest (#25
     expect(after?.signal).toBeInstanceOf(AbortSignal)
   })
 
+  it('a timeout during beforeRequest leaves the headers as asked unread: the TimeoutError stands, onError called', async () => {
+    const onError = vi.fn()
+    let reads = 0
+    const headers = { Authorization: auth.header }
+    Object.defineProperty(headers, 'X-Lazy', {
+      enumerable: true,
+      get() {
+        reads++
+        if (reads > 1) throw new Error('read twice')
+        return 'v'
+      },
+    })
+    const err = await request(
+      { ...target, headers },
+      {
+        timeout: 30,
+        hooks: {
+          beforeRequest: (req) => {
+            Object.defineProperty(req, 'url', {
+              get() {
+                throw new Error('url getter')
+              },
+            })
+            return new Promise<void>(() => {})
+          },
+          onError,
+        },
+      },
+    ).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TimeoutError)
+    expect(onError).toHaveBeenCalledOnce()
+    expect(reads).toBe(1)
+  })
+
   it('a caller’s abort during beforeRequest leaves the event’s headers unread', async () => {
     const ctrl = new AbortController()
     let reads = 0
