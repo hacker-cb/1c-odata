@@ -4,6 +4,15 @@ import { classifyEntity, type EdmxModel, tailName } from '@1c-odata/metadata'
 
 /** Pure schema-query helpers shared by the schema tools — no I/O, easy to test. */
 
+/**
+ * An entity type's name without its kind prefix (`Catalog_Валюты` → `Валюты`);
+ * a type of no known kind keeps its whole name — `tailName` would cut it at
+ * its first underscore (`__proto__` → `_proto__`). Every 1С type has a kind.
+ */
+function shortName(entityType: string): string {
+  return classifyEntity(entityType) === null ? entityType : tailName(entityType)
+}
+
 export interface EntityListItem {
   entitySet: string
   entityType: string
@@ -22,7 +31,7 @@ export function selectEntities(
       entitySet,
       entityType,
       kind: classifyEntity(entityType),
-      name: tailName(entityType),
+      name: shortName(entityType),
     }))
     .filter((e) => (opts.kind === undefined ? true : e.kind === opts.kind))
     .filter((e) =>
@@ -94,7 +103,7 @@ export function describeEntity(index: MetadataIndex, edmx: EdmxModel, entity: st
     entitySet,
     entityType,
     kind: classifyEntity(entityType),
-    name: tailName(entityType),
+    name: shortName(entityType),
     keys: edmxType?.key ?? [],
     properties,
     navigationProperties,

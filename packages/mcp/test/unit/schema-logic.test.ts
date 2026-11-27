@@ -41,7 +41,8 @@ describe('describeEntity', () => {
       '{"schemaNamespace":"StandardODATA","schemas":{"__proto__":{"properties":{"Ref_Key":{"type":"Edm.Guid","nullable":false}}}},"entitySetToType":{"__proto__":"__proto__"}}',
     ) as MetadataIndex
     const d = describeEntity(idx, edmx, '__proto__')
-    expect(d).toMatchObject({ entitySet: '__proto__', entityType: '__proto__' })
+    expect(d).toMatchObject({ entitySet: '__proto__', entityType: '__proto__', name: '__proto__', kind: null })
+    expect(selectEntities(idx, { name: '__proto__' }).map((e) => e.name)).toEqual(['__proto__'])
     expect(d.properties).toEqual([{ name: 'Ref_Key', type: 'Edm.Guid', nullable: false }])
   })
 })
