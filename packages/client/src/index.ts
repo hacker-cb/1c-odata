@@ -69,6 +69,7 @@ export type {
   MetadataIndex,
   NavigationSchema,
   PropertySchema,
+  ValidateEntityOptions,
   ValidationErrorOptions,
   ValidationIssue,
   ValidationResult,

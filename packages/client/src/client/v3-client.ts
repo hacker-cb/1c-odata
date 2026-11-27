@@ -34,7 +34,13 @@ export interface ODataV3ClientOptions extends ClientOptions {
   /**
    * Opt-in: when `true`, every `.create()` / `.patch()` / `.put()` runs
    * `validateEntity` against the corresponding schema BEFORE issuing the
-   * HTTP request. Defaults to `false` (no behaviour change).
+   * HTTP request. For `.create()` and `.patch()` a field the body leaves out
+   * is no issue — 1С fills it, or keeps it (`Nullable="false"` in its EDMX is
+   * no write requirement); `.put()` carries the whole entity, as 1С requires of
+   * a PUT (17.4), so a missing non-nullable field is an issue there. A `null`
+   * in a non-nullable `Edm.DateTime` goes as the empty date unless
+   * `dateMode: 'string'`; a `null` in another non-nullable field, or a string
+   * past `maxLength`, is an issue. Defaults to `false`.
    */
   validateOnWrite?: boolean
   /**
@@ -181,11 +187,19 @@ export class ODataV3Client<TFunctions = ODataV3FunctionsBase> {
    *
    * @internal
    */
-  validateBeforeWrite(entitySet: string, body: unknown): void {
+  validateBeforeWrite(entitySet: string, body: unknown, method: 'POST' | 'PATCH' | 'PUT'): void {
     if (!this.v3Opts.validateOnWrite) return
     const schema = this.schemaForSet(entitySet)
     if (schema === undefined) return // no index / forward-compat unknown set — skip
-    const r = validateEntity(body as Record<string, unknown>, schema)
+    // `Nullable="false"` in 1С's EDMX is no write requirement: 1С fills a field a POST leaves out itself, and a
+    // PATCH keeps what it holds (17.4, «PATCH … можно указывать только те свойства, которые необходимо обновить»).
+    // A PUT carries the whole entity (17.4: «Для PUT-запроса необходимо указывать значения всех свойств
+    // обновляемой сущности») — there a missing field is an issue, as before (#295). A `null` date goes as the empty
+    // date of 1С unless dates pass as strings.
+    const r = validateEntity(body as Record<string, unknown>, schema, {
+      missing: method === 'PUT' ? 'required' : 'ignore',
+      dateMode: this.shape?.dateMode === 'string' ? 'string' : 'date',
+    })
     if (!r.ok) {
       throw new ValidationError(`Validation failed for ${entitySet}: ${r.errors.length} issue(s)`, { issues: r.errors })
     }
