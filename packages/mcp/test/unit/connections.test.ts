@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { request } from '@1c-odata/client/internal'
 import { fetchMetadataXml } from '@1c-odata/metadata'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { loadConfig } from '../../src/config.js'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { runAdd } from '../../src/commands/add.js'
+import { loadConfig, saveConfig } from '../../src/config.js'
 import {
   assertAddable,
   removeConnection,
@@ -158,6 +159,48 @@ describe('upsertConnection', () => {
     const r = await upsertConnection({ ...base, dataDir: dir, name: 'trade', serverTimezone: 'UTC', overwrite: true })
     expect(r.passwordCleared).toBeUndefined()
     expect(await fileStore().read('trade')).toEqual({ password: 'pw', source: 'file' })
+  })
+})
+
+describe('an overwrite keeps the stored shape (#256)', () => {
+  const shape = { int64Mode: 'string' } as const
+  beforeEach(() => {
+    // Neither `add` nor `add_connection` takes a shape: it is written into config.json by hand.
+    saveConfig(dir, {
+      connections: { trade: { baseUrl: base.baseUrl, login: 'u', serverTimezone: 'Europe/Moscow', shape } },
+    })
+  })
+
+  it.each([
+    ['a person', false],
+    ['an agent', true],
+  ])('by %s, keeping the target', async (_who, byAgent) => {
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', serverTimezone: 'UTC', overwrite: true, byAgent })
+    expect(loadConfig(dir).connections.trade).toMatchObject({ serverTimezone: 'UTC', shape })
+  })
+
+  it('re-pointed by a person (the CLI add --force)', async () => {
+    vi.stubEnv('ONEC_TRADE_PASSWORD', '') // a developer's own variable would refuse the re-point
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    onTestFinished(() => {
+      vi.restoreAllMocks()
+      vi.unstubAllEnvs()
+    })
+    await runAdd({
+      dataDir: dir,
+      insecure: true,
+      name: 'trade',
+      url: 'http://other/odata/standard.odata',
+      login: 'u',
+      force: true,
+    })
+    expect(loadConfig(dir).connections.trade).toMatchObject({ baseUrl: 'http://other/odata/standard.odata', shape })
+  })
+
+  it('a shape given replaces it', async () => {
+    const dateMode = { dateMode: 'string' } as const
+    await upsertConnection({ ...base, dataDir: dir, name: 'trade', overwrite: true, shape: dateMode })
+    expect(loadConfig(dir).connections.trade?.shape).toEqual(dateMode)
   })
 })
 
