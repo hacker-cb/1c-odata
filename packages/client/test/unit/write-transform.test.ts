@@ -143,6 +143,30 @@ describe('splitValueStorages — a storage read back is written by its halves (#
     expect(split({ Файл: '' })).toEqual({ Файл: '' })
   })
 
+  it('splits what JSON.stringify would send: a toJSON result, own enumerable fields, each read once', () => {
+    const cached = { contentType: 'image/png', base64Data: 'b2xk' }
+    // toJSON leaves the cached storage out: nothing to split, the body goes as it came.
+    const onlyComment = { Комментарий: 'x', Файл: cached, toJSON: () => ({ Комментарий: 'x' }) }
+    expect(split(onlyComment)).toBe(onlyComment)
+    // toJSON sends it: the split works on what toJSON returns.
+    const withFile = { toJSON: () => ({ Файл: cached }) }
+    expect(split(withFile)).toEqual({ Файл_Type: 'image/png', Файл_Base64Data: 'b2xk' })
+    // A non-enumerable storage is never sent, so never split.
+    const hidden = Object.defineProperty({ Комментарий: 'x' }, 'Файл', { value: cached, enumerable: false })
+    expect(split(hidden)).toBe(hidden)
+    // A getter is read once.
+    let reads = 0
+    const once = {
+      Файл: cached,
+      get Файл_Base64Data() {
+        reads++
+        return reads === 1 ? 'bmV3' : undefined
+      },
+    }
+    expect(split(once)).toEqual({ Файл_Type: 'image/png', Файл_Base64Data: 'bmV3' })
+    expect(reads).toBe(1)
+  })
+
   it('returns a body nothing changes in as it came — itself, its prototype included', () => {
     class Row {
       Ref_Key = 'g'

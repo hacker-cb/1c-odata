@@ -202,8 +202,10 @@ export function transformDatesToWire(
  *   other half taken from `<base>`: a row read back with new bytes written
  *   into `<base>_Base64Data` keeps them, not the stale `<base>` beside them;
  * - anything else under `<base>` is left as it came.
- * An object nothing changes in is returned as it came — itself, its
- * prototype (a `toJSON`) included; a changed one is a plain copy.
+ * What is split is what `JSON.stringify` would send — a `toJSON`'s result, or
+ * the own enumerable fields, each read once. An object nothing changes in is
+ * returned as it came — itself, its prototype (a `toJSON`) included; a changed
+ * one is a plain object.
  *
  * @internal
  */
@@ -212,51 +214,72 @@ export function splitValueStorages(
   schema: EntitySchema,
   metadataIndex: MetadataIndex,
 ): Record<string, unknown> {
-  let out: Record<string, unknown> | undefined
-  const write = (key: string, value: unknown): void => {
-    out ??= copyOwn(body)
-    setOwn(out, key, value)
-  }
-  for (const [name, v] of Object.entries(body)) {
+  if (!carriesStorage(schema, metadataIndex)) return body
+  // What `JSON.stringify` would send: a `toJSON`'s result where the body has one, else its own enumerable fields —
+  // each read once (a getter is not read twice, a non-enumerable field is not sent).
+  const json = typeof body.toJSON === 'function' ? (body.toJSON as () => unknown)() : body
+  if (typeof json !== 'object' || json === null || Array.isArray(json)) return body
+  const fields = new Map(Object.entries(json as Record<string, unknown>))
+  let changed = false
+  for (const [name, v] of fields) {
     const propType = Object.hasOwn(schema.properties, name) ? schema.properties[name]?.type : undefined
     if (propType === undefined || propType.startsWith('Edm.')) continue
     const inner = schemaOfRef(metadataIndex, propType)
-    if (inner === undefined) continue
+    if (inner === undefined || !carriesStorage(inner, metadataIndex)) continue
     if (Array.isArray(v) && propType.startsWith('Collection(')) {
-      let changed = false
+      let rowsChanged = false
       const rows = v.map((row) => {
         if (typeof row !== 'object' || row === null || Array.isArray(row)) return row
         const next = splitValueStorages(row as Record<string, unknown>, inner, metadataIndex)
-        if (next !== row) changed = true
+        if (next !== row) rowsChanged = true
         return next
       })
-      if (changed) write(name, rows)
+      if (rowsChanged) {
+        fields.set(name, rows)
+        changed = true
+      }
     } else if (typeof v === 'object' && v !== null && !Array.isArray(v) && !propType.startsWith('Collection(')) {
       const next = splitValueStorages(v as Record<string, unknown>, inner, metadataIndex)
-      if (next !== v) write(name, next)
+      if (next !== v) {
+        fields.set(name, next)
+        changed = true
+      }
     }
   }
   for (const base of schema.valueStorages ?? []) {
-    // Own only: a base named `__proto__` the payload does not carry would read the accessor.
-    if (!Object.hasOwn(body, base)) continue
-    const grouped = body[base]
+    if (!fields.has(base)) continue
+    const grouped = fields.get(base)
     if (grouped !== null && !isValueStorageObject(grouped)) continue
     const b64Key = `${base}_Base64Data`
     const typeKey = `${base}_Type`
-    const own = (key: string): unknown => (Object.hasOwn(body, key) ? body[key] : undefined)
-    const b64 = own(b64Key) !== undefined ? own(b64Key) : grouped === null ? null : grouped.base64Data
-    const type = own(typeKey) !== undefined ? own(typeKey) : grouped === null ? undefined : grouped.contentType
-    write(b64Key, b64)
-    if (type !== undefined) write(typeKey, type)
-    else if (out !== undefined && Object.hasOwn(out, typeKey)) delete out[typeKey]
-    if (out !== undefined) delete out[base]
+    const b64 = fields.get(b64Key) !== undefined ? fields.get(b64Key) : grouped === null ? null : grouped.base64Data
+    const type =
+      fields.get(typeKey) !== undefined ? fields.get(typeKey) : grouped === null ? undefined : grouped.contentType
+    fields.delete(base)
+    fields.set(b64Key, b64)
+    if (type !== undefined) fields.set(typeKey, type)
+    else fields.delete(typeKey)
+    changed = true
   }
-  return out ?? body
+  if (!changed) return body
+  // Fields are written as own keys (`setOwn`) — `__proto__` included.
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of fields) setOwn(out, k, v)
+  return out
 }
 
-/** A plain copy of `o`'s own enumerable fields — `__proto__` included as a field. */
-function copyOwn(o: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(o)) setOwn(out, k, v)
-  return out
+/**
+ * Whether an entity of `schema` can carry a ValueStorage — its own, or one of
+ * a tabular row or nested ComplexType it declares, at any depth.
+ */
+function carriesStorage(schema: EntitySchema, metadataIndex: MetadataIndex, seen = new Set<EntitySchema>()): boolean {
+  if ((schema.valueStorages ?? []).length > 0) return true
+  if (seen.has(schema)) return false
+  seen.add(schema)
+  for (const prop of Object.values(schema.properties)) {
+    if (prop.type.startsWith('Edm.')) continue
+    const inner = schemaOfRef(metadataIndex, prop.type)
+    if (inner !== undefined && carriesStorage(inner, metadataIndex, seen)) return true
+  }
+  return false
 }
