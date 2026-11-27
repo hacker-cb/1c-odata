@@ -179,7 +179,8 @@ are not expanded and stay a "not absolute" error.
 - **`config.json`** — connection descriptors *without* passwords (base URL, login, timezone, optional display
   label, optional shape, and `"addedBy": "agent"` on a connection an agent added). Safe to read / surface to an
   LLM.
-- **Passwords** — resolved in priority order **env → OS keychain → `credentials.json` (0600)**:
+- **Passwords** — stored in the OS keychain, or in `credentials.json` where it refuses; resolved in priority
+  order **env → `credentials.json` (0600) → OS keychain**:
   - **`ONEC_<NAME>_PASSWORD`** always wins — use it for CI / secret managers / agent configs — except on a
     connection an agent added (`"addedBy": "agent"`), which never takes it. The name is the
     connection name upper-cased with every run of non-`[A-Z0-9]` characters collapsed to a single `_`
@@ -187,7 +188,8 @@ are not expanded and stay a "not absolute" error.
     `ONEC_TVIP_TRADE_PASSWORD`, `bp_v3` → `ONEC_BP_V3_PASSWORD`.
   - **OS keychain** (`@napi-rs/keyring`, an optional dependency) — the entry is namespaced **per data
     directory**: service `1c-odata:<data-dir basename>:<first 8 hex of sha256(canonical data dir)>`, with the
-    connection name as the account (e.g. service `1c-odata:1c-odata:7149e725`, account `trade`). *Canonical* =
+    connection name as the account (e.g. service `1c-odata:1c-odata:7149e725`, account `trade`) — for a
+    connection an agent added, `<name>@<16 hex of sha256(base URL)>`, the same key `credentials.json` uses. *Canonical* =
     the absolute path resolved (`.`/`..` collapsed), lower-cased on Windows. The basename and account are
     human-readable hints in Keychain Access / Credential Manager; the hash isolates dirs. Two clients on the
     **same** data dir share the secret; a **different** `--data-dir` / `ONEC_MCP_DATA_DIR` is a separate
@@ -195,7 +197,11 @@ are not expanded and stay a "not absolute" error.
   - **`credentials.json` (0600)** — the fallback when the keychain is unavailable (headless Linux / CI) or
     `--insecure-storage` is passed; it lives inside the data dir and is loud about the downgrade. On non-Windows
     a credentials file with permissions looser than `0600` is **refused on read** (with a `chmod 600` hint) so
-    its plaintext is never loaded.
+    its plaintext is never loaded — and, the file being read before the keychain, that refusal stops every
+    stored password from resolving, keychain ones included. The file comes before the keychain because it holds
+    a password only where the keychain refused the newest write: a write the keychain takes deletes the file
+    copy (and fails where it cannot), so an older copy the keychain still keeps — one a locked keychain or
+    another process (`--insecure-storage`, no keychain backend) could not delete — never outranks it.
 
 **Connection names** are an ASCII alias — a letter or digit first, then letters, digits, `-`, `_`
 (`/^[A-Za-z0-9][A-Za-z0-9_-]*$/`); a Cyrillic 1С base name needs such an alias. Because the env-var slug

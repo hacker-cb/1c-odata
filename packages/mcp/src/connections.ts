@@ -3,7 +3,6 @@ import {
   type DataShape,
   InvalidArgumentError,
   MetadataError,
-  normalizeBaseUrl,
   validateConnection,
 } from '@1c-odata/client'
 import { request } from '@1c-odata/client/internal'
@@ -224,12 +223,14 @@ export interface UpsertConnectionResult {
 }
 
 /**
- * Apply the secret-store side of an upsert, for the connection as `written`:
- * write the new password under its key; or — on a passwordless overwrite that
- * changes the auth target (baseUrl/login), or the key its password lives under
- * (a person's add over an agent's connection, {@link secretKey}) — drop the
- * stale secret, so a password stored for another target or another hand is
- * never sent to this one.
+ * Apply the secret-store side of an upsert, for the connection as `written`,
+ * BEFORE the config is saved: write the new password under its key; or — on a
+ * passwordless overwrite that changes the auth target (baseUrl/login), or the
+ * key its password lives under (a person's add over an agent's connection,
+ * {@link secretKey}) — drop the stale secret `written` would read, so a password
+ * stored for another target or another hand is never sent to this one. Where
+ * the key changes, `existing`'s own key is left for {@link dropOldKey} once the
+ * config no longer reads it.
  */
 async function applyUpsertSecret(
   store: SecretStore,
@@ -238,20 +239,35 @@ async function applyUpsertSecret(
   existing: StoredConnection | undefined,
   written: StoredConnection,
 ): Promise<{ passwordBackend?: 'keychain' | 'file'; passwordCleared: boolean }> {
-  const rekeyed = existing !== undefined && secretKey(name, existing) !== secretKey(name, written)
   if (password !== undefined && password !== '') {
-    const { backend } = await store.write(name, password, written)
-    // Best-effort: the old key is never read for this connection again.
-    if (rekeyed) await store.remove(name, {}, existing)
-    return { passwordBackend: backend, passwordCleared: false }
+    return { passwordBackend: (await store.write(name, password, written)).backend, passwordCleared: false }
   }
-  if (existing !== undefined && (rekeyed || !sameAuthTarget(existing, written))) {
+  if (existing === undefined) return { passwordCleared: false }
+  if (secretKey(name, existing) !== secretKey(name, written) || !sameAuthTarget(existing, written)) {
     // Fail closed: a password left behind would go to the new target once read again.
-    await store.remove(name, { strict: true }, existing)
-    if (rekeyed) await store.remove(name, { strict: true }, written)
+    await store.remove(name, { strict: true }, written)
     return { passwordCleared: true }
   }
   return { passwordCleared: false }
+}
+
+/**
+ * After the config is saved: drop, best-effort, the password `existing` kept
+ * under a key the connection no longer reads ({@link secretKey}) — never read
+ * again for it, so a failure only leaves it behind.
+ */
+async function dropOldKey(
+  store: SecretStore,
+  name: string,
+  existing: StoredConnection | undefined,
+  written: StoredConnection,
+): Promise<void> {
+  if (existing === undefined || secretKey(name, existing) === secretKey(name, written)) return
+  try {
+    await store.remove(name, {}, existing)
+  } catch {
+    // Left behind under its own key, where nothing reads it for this connection.
+  }
 }
 
 /**
@@ -332,6 +348,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Up
 
     config.connections[input.name] = written
     saveConfig(input.dataDir, config)
+    await dropOldKey(store, input.name, existing, written)
 
     return {
       overwritten: existed,
@@ -404,9 +421,9 @@ export async function verifyReachability(input: {
   password: string
   timeout?: number
 }): Promise<void> {
-  // normalizeBaseUrl strips a trailing slash; the OData service document lives at
+  // targetBaseUrl strips a trailing slash; the OData service document lives at
   // the root WITH the slash, so re-append it.
-  const root = `${normalizeBaseUrl(stripUrlUserinfo(input.baseUrl.trim()))}/`
+  const root = `${targetBaseUrl(input.baseUrl)}/`
   const raw = await request(
     {
       method: 'GET',
@@ -507,8 +524,9 @@ export interface UpdateCredentialsResult {
 /**
  * Change a connection's login and/or password in place, preserving every other
  * descriptor field (baseUrl, timezone, label, shape). At least one of `login` /
- * `password` must be given. The password is keyed on the connection NAME, not
- * the login, so changing the login never orphans it. Pure config + secret I/O —
+ * `password` must be given. The password is keyed on the connection NAME (an
+ * agent's connection: the name and its base URL, {@link secretKey}), never the
+ * login, so changing the login never orphans it. Pure config + secret I/O —
  * callers verify connectivity separately (see {@link verifyConnectivity}).
  */
 export async function updateConnectionCredentials(input: UpdateCredentialsInput): Promise<UpdateCredentialsResult> {

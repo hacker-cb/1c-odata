@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -86,11 +86,16 @@ describe('re-pointing a connection fails closed on a keychain that cannot delete
 })
 
 describe('a password written while the keychain cannot store it (#257)', () => {
+  const keychainKey = () => `${keychainServiceName(dir)}/c`
   /** `c` holds an old password in the keychain; then the keychain stops taking writes and deletes. */
   const lockKeychainOverOldPassword = () => {
-    keychain.entries.set(`${keychainServiceName(dir)}/c`, 'old')
+    keychain.entries.set(keychainKey(), 'old')
     keychain.setFails = true
     keychain.deleteFails = true
+  }
+  const unlockKeychain = () => {
+    keychain.setFails = false
+    keychain.deleteFails = false
   }
 
   const writeNew = (insecure = false) =>
@@ -105,34 +110,69 @@ describe('a password written while the keychain cannot store it (#257)', () => {
       overwrite: true,
     })
 
-  it('is refused, nothing written, where the old keychain password cannot be deleted either', async () => {
+  it('falls back to the file, which outranks the old keychain copy once the keychain answers again', async () => {
     lockKeychainOverOldPassword()
-    await expect(writeNew()).rejects.toThrow(/Could not delete the stored password of "c".*nothing was changed/)
-    expect(loadConfig(dir).connections.c?.baseUrl).toBe(OLD)
-    keychain.setFails = false
-    keychain.deleteFails = false
-    // The keychain answers again: nothing new went to the file, and the old password stays with the old target.
-    expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'old', source: 'keychain' })
-    expect(await new SecretStore({ dataDir: dir, insecure: true }).read('c')).toBeNull()
+    await expect(writeNew()).resolves.toMatchObject({ passwordBackend: 'file' })
+    expect(loadConfig(dir).connections.c?.baseUrl).toBe(NEW)
+    unlockKeychain()
+    expect(keychain.entries.get(keychainKey())).toBe('old')
+    expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'new', source: 'file' })
+    expect(await new SecretStore({ dataDir: dir }).source('c')).toBe('file')
   })
 
-  it('falls back to the file where the old keychain password can be deleted', async () => {
-    keychain.entries.set(`${keychainServiceName(dir)}/c`, 'old')
+  it('on a host without a working keychain (set and delete fail alike, nothing stored) the password goes to the file', async () => {
+    keychain.setFails = true
+    keychain.deleteFails = true
+    await expect(writeNew()).resolves.toMatchObject({ passwordBackend: 'file' })
+    expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'new', source: 'file' })
+  })
+
+  it('a file written under --insecure-storage outranks the keychain copy for a process that reads the keychain', async () => {
+    keychain.entries.set(keychainKey(), 'old')
+    keychain.deleteFails = true
+    await expect(writeNew(true)).resolves.toMatchObject({ passwordBackend: 'file' })
+    expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'new', source: 'file' })
+  })
+
+  it('drops the old keychain copy where it can', async () => {
+    keychain.entries.set(keychainKey(), 'old')
     keychain.setFails = true
     await expect(writeNew()).resolves.toMatchObject({ passwordBackend: 'file' })
-    keychain.setFails = false
-    expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'new', source: 'file' })
-    expect(loadConfig(dir).connections.c?.baseUrl).toBe(NEW)
+    expect(keychain.entries.has(keychainKey())).toBe(false)
   })
 
-  it('stays best-effort on the keychain under --insecure-storage, which never reads it', async () => {
-    lockKeychainOverOldPassword()
-    await expect(writeNew(true)).resolves.toMatchObject({ passwordBackend: 'file' })
-    expect(await new SecretStore({ dataDir: dir, insecure: true }).read('c')).toEqual({
-      password: 'new',
-      source: 'file',
+  it('a keychain write takes the file copy away: the newest password is the keychain one', async () => {
+    keychain.setFails = true
+    await writeNew()
+    keychain.setFails = false
+    await upsertConnection({
+      dataDir: dir,
+      name: 'c',
+      baseUrl: NEW,
+      login: 'u',
+      serverTimezone: 'Europe/Moscow',
+      password: 'newer',
+      overwrite: true,
     })
+    expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'newer', source: 'keychain' })
   })
+
+  it.skipIf(process.platform === 'win32')(
+    'a file write that fails loses nothing: the keychain copy stays, the config keeps its target',
+    async () => {
+      keychain.entries.set(keychainKey(), 'old')
+      keychain.setFails = true
+      chmodSync(dir, 0o500)
+      try {
+        await expect(writeNew()).rejects.toThrow()
+      } finally {
+        chmodSync(dir, 0o700)
+      }
+      keychain.setFails = false
+      expect(loadConfig(dir).connections.c?.baseUrl).toBe(OLD)
+      expect(await new SecretStore({ dataDir: dir }).read('c')).toEqual({ password: 'old', source: 'keychain' })
+    },
+  )
 })
 
 describe('an agent’s connection reads only a password stored for its own target (#253)', () => {

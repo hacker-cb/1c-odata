@@ -131,8 +131,12 @@ interface FileSecrets {
 
 /**
  * Layered password store with the `gh` CLI model: read order is
- * **env → OS keychain → 0600 file**; writes prefer the keychain and fall back
- * to the file *loudly* when it is unavailable (headless Linux/CI). The keychain
+ * **env → 0600 file → OS keychain**; writes prefer the keychain and fall back
+ * to the file *loudly* when it refuses (headless Linux/CI, a locked keychain).
+ * The file is read first because it holds a password only where the keychain
+ * refused the newest write — a write the keychain takes deletes the file copy,
+ * and fails where it cannot — so a copy the keychain still keeps, which another
+ * process or a refusing keychain could not delete, never outranks it (#257). The keychain
  * backend (`@napi-rs/keyring`) is an optional dependency, loaded lazily — its
  * absence is not fatal, it just degrades to the file.
  *
@@ -174,7 +178,7 @@ export class SecretStore {
   }
 
   /**
-   * Read a password following env → keychain → file. `null` if none found.
+   * Read a password following env → file → keychain. `null` if none found.
    * Pass the stored connection: one an agent added skips the env var
    * ({@link connectionEnvPassword}) and reads only what was stored for its
    * target ({@link secretKey}).
@@ -183,12 +187,12 @@ export class SecretStore {
     const fromEnv = connectionEnvPassword(name, conn, this.env)
     if (fromEnv !== undefined) return { password: fromEnv, source: 'env' }
     const key = secretKey(name, conn)
+    const fromFile = this.fileRead(key)
+    if (fromFile !== null) return { password: fromFile, source: 'file' }
     if (!this.insecure) {
       const fromKeychain = await this.keychainRead(key)
       if (fromKeychain !== null) return { password: fromKeychain, source: 'keychain' }
     }
-    const fromFile = this.fileRead(key)
-    if (fromFile !== null) return { password: fromFile, source: 'file' }
     return null
   }
 
@@ -196,47 +200,55 @@ export class SecretStore {
   async source(name: string, conn?: SecretOwner): Promise<SecretSource> {
     if (connectionEnvPassword(name, conn, this.env) !== undefined) return 'env'
     const key = secretKey(name, conn)
-    if (!this.insecure && (await this.keychainRead(key)) !== null) return 'keychain'
     if (this.fileRead(key) !== null) return 'file'
+    if (!this.insecure && (await this.keychainRead(key)) !== null) return 'keychain'
     return 'none'
   }
 
   /**
    * Store a password for connection `name`, stored as `conn` once written —
-   * under its {@link secretKey}. Prefers the keychain; falls back to the 0600
-   * file loudly — and refuses, writing nothing, where the keychain holds an old
-   * copy it cannot delete, as that copy would be read instead of the new password.
+   * under its {@link secretKey}. Prefers the keychain, then deletes the file
+   * copy — which reads take first —, failing where it cannot. Where the keychain
+   * refuses the password it falls back to the 0600 file loudly; that copy
+   * outranks whatever the keychain still keeps, which is then deleted
+   * best-effort.
    */
   async write(name: string, password: string, conn?: SecretOwner): Promise<{ backend: 'keychain' | 'file' }> {
     const key = secretKey(name, conn)
-    if (!this.insecure) {
-      const mod = await this.keyringModule()
-      if (mod !== null) {
-        try {
-          this.keychainEntry(mod, key).setPassword(password)
-          this.fileDelete(key) // drop any stale plaintext copy from a prior fallback
-          return { backend: 'keychain' }
-        } catch (err) {
-          this.warn(
-            `⚠ OS keychain unavailable (${errMessage(err)}); falling back to plaintext ${this.credentialsPath} (0600). ` +
-              `Set ${passwordEnvVar(name)} or fix the keychain to avoid this.`,
-          )
-        }
-      } else {
-        this.warn(
-          `⚠ @napi-rs/keyring not installed; falling back to plaintext ${this.credentialsPath} (0600). ` +
-            `Set ${passwordEnvVar(name)} or install the keychain backend to avoid this.`,
-        )
-      }
+    if (!this.insecure && (await this.keychainWrite(name, key, password, conn))) {
+      this.fileDelete(key) // a copy left here would outrank the password just stored
+      return { backend: 'keychain' }
     }
-    // File backend — first drop any stale keychain copy, which reads take before
-    // the file: one left behind would outrank the password written here once the
-    // keychain answers again (#257). Strict where this store reads the keychain:
-    // a copy that cannot be deleted refuses the write, nothing changed.
-    // `--insecure-storage` never reads it, so its delete stays best-effort.
-    await this.keychainDelete(key, !this.insecure, name)
     this.fileWrite(key, password)
+    await this.keychainDelete(key, false, name) // tidy: the file copy already outranks it
     return { backend: 'file' }
+  }
+
+  /** Store `password` under `key` in the keychain; `false`, warned about, where it is refused or absent. */
+  private async keychainWrite(name: string, key: string, password: string, conn?: SecretOwner): Promise<boolean> {
+    // The env var is no way out for an agent's connection, which never reads it.
+    const avoid = (fix: string) =>
+      conn?.addedBy === 'agent'
+        ? `${fix[0]?.toUpperCase()}${fix.slice(1)} to avoid this.`
+        : `Set ${passwordEnvVar(name)} or ${fix} to avoid this.`
+    const mod = await this.keyringModule()
+    if (mod === null) {
+      this.warn(
+        `⚠ @napi-rs/keyring not installed; falling back to plaintext ${this.credentialsPath} (0600). ` +
+          avoid('install the keychain backend'),
+      )
+      return false
+    }
+    try {
+      this.keychainEntry(mod, key).setPassword(password)
+      return true
+    } catch (err) {
+      this.warn(
+        `⚠ OS keychain unavailable (${errMessage(err)}); falling back to plaintext ${this.credentialsPath} (0600). ` +
+          avoid('fix the keychain'),
+      )
+      return false
+    }
   }
 
   /**
