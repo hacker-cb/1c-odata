@@ -1,5 +1,42 @@
 # @1c-odata/metadata
 
+## 0.13.0
+
+### Minor Changes
+
+- [#288](https://github.com/hacker-cb/1c-odata/pull/288) [`7e7129d`](https://github.com/hacker-cb/1c-odata/commit/7e7129dde5374ec09c9c2c8fba490d6157507269) Thanks [@hacker-cb](https://github.com/hacker-cb)! - An entity an `$expand` brings is parsed with the schema of its own type, as the row is ([#283](https://github.com/hacker-cb/1c-odata/issues/283)). The index held no navigation properties, so the parser found no type for an expanded field and read the entity schema-less: under the default `int64Mode: 'number'` an `Edm.Int64` stayed the wire string (`"5"`, where codegen types the field `number`), a malformed one (`"12x"`) passed unchecked, `Edm.DateTime` went by the string heuristic alone, and a ValueStorage pair stayed flat.
+
+  `buildMetadataIndex` (so `fetchMetadataIndex`, `createDynamicClient` and codegen's `__metadata.json`) now records each EntityType's navigation properties in a new optional field, `EntitySchema.navigation` — `{ [name]: { type, collection? } }`, `type` being the target's local name and `collection: true` only for a to-many end, which 1С never declares. Only a navigation whose target the index holds is written; the key goes after `valueStorages`, the rest of `__metadata.json` stays byte-for-byte as it was (+7–11 % in size for a full base). `parseMetadataIndex` / `loadMetadataIndex` refuse a malformed `navigation` with `MetadataError`; one naming a type the index lacks reads that expanded value schema-less instead of failing the index. `NavigationSchema` is exported as a type.
+
+  The parser resolves an expanded field through it: an expanded entity, and each entity of an expanded collection, reads with its target's schema, exactly as a row does — `Edm.Int64` converted per `int64Mode` and, in `'number'` / `'bigint'`, refused when it is no 64-bit integer; `Edm.DateTime` converted by the schema and, in `dateMode: 'date'`, refused when it names no real date-time; an `Edm.String` that looks like a date left a string; ValueStorage grouped. The `'string'` modes pass values through untouched, as they do for the row.
+
+  **Migration:** regenerate `__metadata.json` (`1c-odata generate`) or refetch a cached index to get the new behaviour — an index without `navigation` still loads and reads expanded entities schema-less, as before. With a new index, code that read an expanded `Edm.Int64` as a string gets a `number` (or `bigint`) now, and a reply whose expanded entity breaks its schema is a `ParseError`.
+
+- [#294](https://github.com/hacker-cb/1c-odata/pull/294) [`f433f82`](https://github.com/hacker-cb/1c-odata/commit/f433f820d62bf16f5af7f3d43ded47e8ed21148f) Thanks [@hacker-cb](https://github.com/hacker-cb)! - A ValueStorage in a tabular part's row arrives as `{ contentType, base64Data }` (or `null`), as codegen types it ([#290](https://github.com/hacker-cb/1c-odata/issues/290)). `buildMetadataIndex` listed `valueStorages` for EntityTypes only, while 1С declares storages in tabular row types too (`<Doc>_<Part>_RowType`, a ComplexType — 86 of them in УТ 11.5, 314 tabular parts with one in БП 3.0); the parser reads a row by that type, so its halves stayed flat — and under `nometadata` the `_Type` never came ([#289](https://github.com/hacker-cb/1c-odata/issues/289)).
+
+  - `buildMetadataIndex` (so `fetchMetadataIndex`, `createDynamicClient` and codegen's `__metadata.json`) lists `valueStorages` for ComplexTypes too — `__metadata.json` gains the key on those row types, nothing else changes.
+  - A read asks for `minimalmetadata` ([#289](https://github.com/hacker-cb/1c-odata/issues/289)) where a tabular part with a storage comes back: an empty `$select`, `*` (not `**`, which leaves tabular parts out), the part named bare or with `/*` / `/**`, or `<Part>/<base or half>`.
+  - A `$select` of `<Part>/<base>` is written as its two halves ([#286](https://github.com/hacker-cb/1c-odata/issues/286)) — through an untyped query: a codegen-typed `select()` takes the entity's own keys, the part (`Товары`) among them, not a path.
+
+  Codegen's types do not change: a tabular row was already typed with the storage as `ValueStorage | null`.
+
+  **Migration:** regenerate `__metadata.json` (or refetch a cached index). A tabular row that carried `<X>_Base64Data` as a plain field carries `<X>` instead.
+
+### Patch Changes
+
+- [#281](https://github.com/hacker-cb/1c-odata/pull/281) [`5749192`](https://github.com/hacker-cb/1c-odata/commit/574919252281f4250df34e8f3711fd7f729250c7) Thanks [@hacker-cb](https://github.com/hacker-cb)! - A key named `__proto__` — in a response body, a write payload or an EDMX — is an own field of the object it belongs to, never its prototype ([#275](https://github.com/hacker-cb/1c-odata/issues/275)).
+
+  The parser copied each field of a row into `{}` by assignment, so a body like `{"value":[{"__proto__":{"x":1},"a":2}]}` gave a row with the keys `['a']` whose `row.x` was `1`; nested objects and tabular rows did the same, and so did the write transform on a payload carrying such a field. `buildMetadataIndex` wrote type, property and entity-set names the same way, so an EDMX type named `__proto__` replaced the prototype of `schemas` and left `entitySetToType` naming a type `parseMetadataIndex` then refused, failing the whole index.
+
+  Such a key is now defined as an ordinary own field. Rows, payloads, `schemas`, `entitySetToType` and each type's `properties` keep their plain `Object` prototype — `row.hasOwnProperty` works as before — and the field serializes back as it came (`enums` stays the null-prototype dictionary it was). Nothing changes for 1С, which sends no such names: `__metadata.json` of a real base is byte-for-byte the same.
+
+  `validateOnWrite` (`validateEntity`) counts a property whose name `Object.prototype` carries (`__proto__`, `constructor`, …) only as the payload's own field: a non-nullable one the payload lacked read `Object.prototype` / `Object` and passed its `required` check. Every other name reads as before.
+
+  `buildMetadataIndex` lists in `entitySetToType` only the sets whose type `schemas` holds. An EntitySet whose type lies in another namespace or is missing from the EDMX was listed under a type no schema stands for, and `parseMetadataIndex` refuses such an index whole — a `__metadata.json` codegen emitted for that EDMX would not load. Such a set reads and writes schema-less either way; 1С's EDMX has none, so the index of a real base does not change.
+
+- Updated dependencies [[`7e7129d`](https://github.com/hacker-cb/1c-odata/commit/7e7129dde5374ec09c9c2c8fba490d6157507269), [`6818921`](https://github.com/hacker-cb/1c-odata/commit/6818921ad2784f919841b6625822015309a4019b), [`6818921`](https://github.com/hacker-cb/1c-odata/commit/6818921ad2784f919841b6625822015309a4019b), [`60c8278`](https://github.com/hacker-cb/1c-odata/commit/60c82789df54ae352e6c58c4da9a772a52ee0270), [`5749192`](https://github.com/hacker-cb/1c-odata/commit/574919252281f4250df34e8f3711fd7f729250c7), [`829bfc5`](https://github.com/hacker-cb/1c-odata/commit/829bfc5f5dcb6596a7ba81a1d15d126ff3e8277e), [`7e7129d`](https://github.com/hacker-cb/1c-odata/commit/7e7129dde5374ec09c9c2c8fba490d6157507269), [`f433f82`](https://github.com/hacker-cb/1c-odata/commit/f433f820d62bf16f5af7f3d43ded47e8ed21148f), [`60c8278`](https://github.com/hacker-cb/1c-odata/commit/60c82789df54ae352e6c58c4da9a772a52ee0270), [`4f500c9`](https://github.com/hacker-cb/1c-odata/commit/4f500c90f226f96d103f0daf032b131fa4047e06)]:
+  - @1c-odata/client@0.13.0
+
 ## 0.12.0
 
 ### Patch Changes
