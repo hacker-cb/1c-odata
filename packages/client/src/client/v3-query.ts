@@ -1,6 +1,6 @@
 import { parseOptsFor, parseV3Collection, parseV3Count } from '../parser.js'
 import { assertPositiveInt, QueryBuilder } from '../query/builder.js'
-import { readFormat } from '../read-format.js'
+import { readFormat, selectWireNames } from '../read-format.js'
 import { schemaOfSet, typeNameOfSet } from '../schema-lookup.js'
 import { buildV3CollectionUrl, buildV3CountUrl } from '../url-builder.js'
 import type { EntitySchema, MetadataIndex } from '../validate.js'
@@ -35,14 +35,14 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
   /** Execute the query and return parsed `{ value, count?, odataMetadata }`. */
   async get(opts: RequestOptions = {}): Promise<{ odataMetadata: string; value: T[]; count?: number }> {
     const format = queryFormat(this.client, this)
-    const url = buildV3CollectionUrl(this.client.baseUrl, this, format, valueStoragesOf(this.client, this))
+    const url = buildV3CollectionUrl(this.client.baseUrl, this, format, wireNamesOf(this.client, this))
     const raw = await this.client.transportGet(url, opts, format)
     return parseV3Collection<T>(raw.body, parseOptsFor(this.client, this.entitySet))
   }
 
   /** Escape hatch — return native `Response` without parsing. */
   async raw(opts: RequestOptions = {}): Promise<Response> {
-    const url = buildV3CollectionUrl(this.client.baseUrl, this, undefined, valueStoragesOf(this.client, this))
+    const url = buildV3CollectionUrl(this.client.baseUrl, this, undefined, wireNamesOf(this.client, this))
     return this.client.transportFetch(url, opts)
   }
 
@@ -58,7 +58,7 @@ export class V3QueryBuilder<T> extends QueryBuilder<T> {
    * path in it needs its `expand()`.
    */
   async count(opts: RequestOptions = {}): Promise<number> {
-    const url = buildV3CountUrl(this.client.baseUrl, this, valueStoragesOf(this.client, this))
+    const url = buildV3CountUrl(this.client.baseUrl, this, wireNamesOf(this.client, this))
     const raw = await this.client.transportGet(url, opts)
     return parseV3Count(raw.body)
   }
@@ -137,9 +137,14 @@ function queryFormat(client: ODataV3Client<unknown>, q: V3QueryBuilder<unknown>)
 }
 
 /**
- * The set's ValueStorage bases, which a `$select` names by their halves
- * (#286) — none without an index or for a set it does not list.
+ * What each `$select` name of a query becomes on the wire — a ValueStorage's
+ * base as its two halves (#286), by the set's schema; none without an index or
+ * for a set it does not list.
  */
-function valueStoragesOf(client: ODataV3Client<unknown>, q: V3QueryBuilder<unknown>): readonly string[] | undefined {
-  return schemaOfSet(client.metadataIndex, q.entitySet)?.valueStorages
+function wireNamesOf(
+  client: ODataV3Client<unknown>,
+  q: V3QueryBuilder<unknown>,
+): ((name: string) => readonly string[]) | undefined {
+  const index = client.metadataIndex
+  return selectWireNames(index, typeNameOfSet(index, q.entitySet))
 }

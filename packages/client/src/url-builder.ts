@@ -128,10 +128,10 @@ export function buildV3CollectionUrl(
   base: string,
   q: QueryBuilder<unknown>,
   format = NOMETADATA_JSON,
-  valueStorages?: readonly string[],
+  wire?: SelectWireNames,
 ): string {
   const path = `${base}/${encodeSegment(q.entitySet)}`
-  const params = buildQueryParams(q, valueStorages)
+  const params = buildQueryParams(q, wire)
   // Always prepend $format — `readFormat`'s, which the request's `Accept` repeats.
   const allParams = [qp('$format', format), ...params]
   return `${path}?${allParams.join('&')}`
@@ -164,9 +164,9 @@ export function buildV3KeyUrl(
  * `$skip` / `$inlinecount` stay off; so does `$format`, `/$count` answering
  * text/plain.
  */
-export function buildV3CountUrl(base: string, q: QueryBuilder<unknown>, valueStorages?: readonly string[]): string {
+export function buildV3CountUrl(base: string, q: QueryBuilder<unknown>, wire?: SelectWireNames): string {
   const path = `${base}/${encodeSegment(q.entitySet)}/$count`
-  const params = buildQueryParams(q, valueStorages, { count: true })
+  const params = buildQueryParams(q, wire, { count: true })
   if (params.length === 0) return path
   return `${path}?${params.join('&')}`
 }
@@ -205,31 +205,26 @@ export function nonBlank(names: readonly string[] | undefined): readonly string[
 }
 
 /**
- * The `$select` names, a ValueStorage base of the set's schema (`ФайлХранилище`,
- * the one field codegen declares for it) written as its two halves
- * (`ФайлХранилище_Base64Data,ФайлХранилище_Type`): 1С returns a storage only as
- * those, so a `$select` of the base alone brought neither and the field read
- * `undefined` (#286). The parser groups the halves back into the field. An entry
- * holding several names (`'Ref_Key,Файл'`) is read as 1С reads it; a half
- * already named is not named twice.
+ * What a `$select` name becomes on the wire — the name itself, or, where it
+ * names a ValueStorage, the storage's two halves. Given by the caller that
+ * holds the schema (`V3QueryBuilder`); none sends every name as given.
  */
-function selectNames(names: readonly string[], valueStorages: readonly string[] | undefined): readonly string[] {
-  if (valueStorages === undefined || valueStorages.length === 0) return names
-  const bases = new Set(valueStorages)
+export type SelectWireNames = (name: string) => readonly string[]
+
+/**
+ * The `$select` names as 1С reads them — an entry holding several names
+ * (`'Ref_Key,Файл'`) is several — each through `wire`, a name not repeated.
+ */
+function selectNames(names: readonly string[], wire: SelectWireNames | undefined): readonly string[] {
+  if (wire === undefined) return names
   const out: string[] = []
   const seen = new Set<string>()
-  const add = (n: string): void => {
-    if (seen.has(n)) return
-    seen.add(n)
-    out.push(n)
-  }
-  for (const n of names.flatMap((entry) => entry.split(',').map((s) => s.trim()))) {
-    if (n === '') continue
-    if (bases.has(n)) {
-      add(`${n}_Base64Data`)
-      add(`${n}_Type`)
-    } else {
-      add(n)
+  for (const name of names.flatMap((entry) => entry.split(',').map((n) => n.trim()))) {
+    if (name === '') continue
+    for (const n of wire(name)) {
+      if (seen.has(n)) continue
+      seen.add(n)
+      out.push(n)
     }
   }
   return out
@@ -237,7 +232,7 @@ function selectNames(names: readonly string[], valueStorages: readonly string[] 
 
 function buildQueryParams(
   q: QueryBuilder<unknown>,
-  valueStorages: readonly string[] | undefined,
+  wire: SelectWireNames | undefined,
   opts: { count?: boolean } = {},
 ): string[] {
   const s = q.state
@@ -245,7 +240,7 @@ function buildQueryParams(
   if (s.filter) params.push(qp('$filter', s.filter._expr))
   // An empty list — or one of blank names only — sends no option: 1С reads
   // `$select=` / `$expand=` as their absence anyway (as `ReadFiOptions.select`).
-  const select = selectNames(nonBlank(s.select), valueStorages)
+  const select = selectNames(nonBlank(s.select), wire)
   const expand = nonBlank(s.expand)
   if (select.length > 0) params.push(qp('$select', select.join(',')))
   if (expand.length > 0) params.push(qp('$expand', expand.join(',')))

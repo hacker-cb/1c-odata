@@ -113,3 +113,29 @@ function names(list: readonly string[] | undefined): readonly string[] {
       .filter((s) => s !== ''),
   )
 }
+
+/**
+ * What a `$select` name of a query on `typeName` becomes on the wire (#286):
+ * a ValueStorage's base — of the row (`Файл`) or of an entity an `$expand`
+ * path reaches through `EntitySchema.navigation` (`Владелец/Файл`) — as its two
+ * halves (`Файл_Base64Data`, `Файл_Type`), since 1С returns a storage only as
+ * those; any other name as given. Codegen declares the base alone, so a typed
+ * `select` names it. `undefined` without an index or for a type it does not
+ * hold: every name goes as given.
+ */
+export function selectWireNames(
+  index: MetadataIndex | undefined,
+  typeName: string | undefined,
+): ((name: string) => readonly string[]) | undefined {
+  const root = schemaOfType(index, typeName)
+  if (index === undefined || root === undefined) return undefined
+  return (name) => {
+    const segments = name.split('/')
+    const last = segments.pop() as string
+    let schema: EntitySchema | undefined = root
+    for (const segment of segments) schema = schemaOfType(index, typeNameOfNavigation(index, schema, segment.trim()))
+    if (schema?.valueStorages?.includes(last.trim()) !== true) return [name]
+    const at = segments.length === 0 ? '' : `${segments.join('/')}/`
+    return [`${at}${last.trim()}_Base64Data`, `${at}${last.trim()}_Type`]
+  }
+}

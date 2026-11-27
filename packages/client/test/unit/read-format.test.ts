@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MINIMALMETADATA_JSON, NOMETADATA_JSON, readFormat } from '../../src/read-format.js'
+import { MINIMALMETADATA_JSON, NOMETADATA_JSON, readFormat, selectWireNames } from '../../src/read-format.js'
 import type { MetadataIndex } from '../../src/validate.js'
 
 // #289: 1С withholds a ValueStorage's `_Type` in `nometadata`; a read whose reply carries a storage asks for
@@ -92,5 +92,25 @@ describe('readFormat (#289)', () => {
   it('reads `*` only at the end of an $expand path — inside one it names nothing, however long the path', () => {
     const path = Array(40).fill('*').concat('Логотип').join('/')
     expect(readFormat(index, 'Catalog_Контрагенты', { select: ['Ref_Key'], expand: [path] })).toBe(NOMETADATA_JSON)
+  })
+})
+
+describe('selectWireNames (#286)', () => {
+  it('writes a storage base — of the row or through a navigation path — as its halves, any other name as given', () => {
+    const wire = selectWireNames(index, 'Catalog_Контрагенты')
+    expect(wire?.('Логотип/Файл')).toEqual(['Логотип/Файл_Base64Data', 'Логотип/Файл_Type'])
+    expect(wire?.('Логотип/Ref_Key')).toEqual(['Логотип/Ref_Key'])
+    expect(wire?.('Висячая/Файл')).toEqual(['Висячая/Файл'])
+    expect(wire?.('Файл')).toEqual(['Файл'])
+    expect(selectWireNames(index, 'Catalog_Файлы')?.('Файл')).toEqual(['Файл_Base64Data', 'Файл_Type'])
+    expect(selectWireNames(index, 'Catalog_Файлы')?.('Владелец/Логотип/Файл')).toEqual([
+      'Владелец/Логотип/Файл_Base64Data',
+      'Владелец/Логотип/Файл_Type',
+    ])
+  })
+
+  it('is undefined without an index or for a type it does not hold', () => {
+    expect(selectWireNames(undefined, 'Catalog_Файлы')).toBeUndefined()
+    expect(selectWireNames(index, 'Catalog_Нет')).toBeUndefined()
   })
 })
